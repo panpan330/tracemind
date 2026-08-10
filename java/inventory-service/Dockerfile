@@ -4,6 +4,7 @@ WORKDIR /src
 COPY pom.xml .
 COPY common ./common
 COPY inventory-service ./inventory-service
+COPY order-service ./order-service
 RUN mvn -q -pl inventory-service -am package -DskipTests
 
 FROM eclipse-temurin:21-jre

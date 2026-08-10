@@ -58,7 +58,11 @@ def main() -> None:
         fail(f"reset 失败: {r.status_code} {r.text[:200]}")
     print(f"[{time.time()-t0:5.1f}s] reset 完成")
 
-    # 2) 健康态创建 Incident(采集健康指标基线)
+    # 2) 健康态负载:让观测窗口有健康数据,基线采集才有值(设计文档:索引存在时固定负载提前采集)
+    run_load(seconds=8, qps=15)
+    print(f"[{time.time()-t0:5.1f}s] 健康态负载完成")
+
+    # 3) 健康态创建 Incident(采集健康指标基线)
     r = requests.post(f"{ai}/api/incidents", json={
         "title": "M5 验收:库存查询变慢",
         "description": "Docker Compose 部署闭环",

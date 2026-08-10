@@ -1,4 +1,5 @@
 import json
+import time
 
 from langgraph.types import interrupt
 
@@ -12,8 +13,11 @@ from app.tools.execute import execute_tool
 
 # 固定探测参数(INVENTORY_LOOKUP 白名单模板)
 PROBE_PARAMS = {"skuId": 42, "warehouseId": 7}
-DEFAULT_MAX_ROUNDS = 3
-DEFAULT_MAX_TOOL_CALLS = 12
+DEFAULT_MAX_ROUNDS = 5
+DEFAULT_MAX_TOOL_CALLS = 25
+
+# 证据未齐且预算未耗尽时,每轮等待时间(让故障负载在观测窗口产生数据)
+EVIDENCE_RETRY_SLEEP_SECONDS = 2
 
 # 基线缺失时的宽松判定阈值(ms):仅当健康基线采集失败时使用
 FALLBACK_E1_P95_MS = 100
@@ -117,6 +121,9 @@ def collect_evidence(state: IncidentState) -> dict:
     if (state.get("investigation_round", 0) >= state.get("max_investigation_rounds", DEFAULT_MAX_ROUNDS)
             or state.get("tool_call_count", 0) >= state.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)):
         state["termination_reason"] = "evidence_budget_exhausted"
+    elif not evaluate_evidence_gate(status):
+        # 证据未齐且预算充足:等待负载数据产生后重试(仅阻塞调查线程,不阻塞事件循环)
+        time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
     return state
 
 

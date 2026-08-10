@@ -35,7 +35,7 @@ services:
       BUSINESS_DB_USER: app_business
       BUSINESS_DB_PASSWORD: app_business_pwd
       INVENTORY_ROWS: "500000"
-    command: ["sh", "-c", "pip install -q pymysql && python /seed/seed_data.py"]
+    command: ["sh", "-c", "pip install -q -i https://mirrors.aliyun.com/pypi/simple/ pymysql && python /seed/seed_data.py"]
     volumes:
       - ./scripts/seed_data.py:/seed/seed_data.py:ro
     depends_on:
@@ -54,6 +54,7 @@ services:
       BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
       BUSINESS_DB_USER: app_business
       BUSINESS_DB_PASSWORD: app_business_pwd
+      INVENTORY_SERVICE_URL: "http://inventory-service:8082"
     ports:
       - "8081:8081"
     depends_on:

@@ -14,6 +14,8 @@ def capture_health_baseline(service_ref: str) -> dict | None:
     except Exception:
         return None
     p95 = data.get("p95_ms")
+    if p95 is None:  # Java 端点返回驼峰 p95Ms
+        p95 = data.get("p95Ms")
     if p95 is None:
         return None
     return {"p95_ms": int(p95), "qps": data.get("qps"), "error_rate": data.get("error_rate")}
