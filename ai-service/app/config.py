@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     demo_mode: bool = False
     demo_key: str = ""
     llm_mode: str = "fake"
+    demo_approver_id: str = "demo-approver"
+    checkpoint_path: str = "./data/checkpoints.sqlite"
 
 
 settings = Settings()

@@ -1,9 +1,12 @@
 import json
 
+from langgraph.types import interrupt
+
 from app.agent.llm import get_llm
 from app.agent.rules import EVIDENCE_TOOL_MAP, evaluate_evidence_gate
 from app.agent.state import IncidentState
-from app.repositories import postmortem_repo, proposal_repo
+from app.repositories import approval_repo, postmortem_repo, proposal_repo
+from app.services import fix_service
 from app.tools.execute import execute_tool
 
 # 固定探测参数(INVENTORY_LOOKUP 白名单模板)
@@ -134,7 +137,7 @@ def hypothesize(state: IncidentState) -> dict:
 
 
 def propose_fix(state: IncidentState) -> dict:
-    """根因确认后生成修复提案并落库,状态进入 awaiting_approval。"""
+    """根因确认后生成修复提案并落库,同时创建待审批记录,状态进入 awaiting_approval。"""
     llm = get_llm()
     fix = llm.propose_fix(state)
     proposal = proposal_repo.create_proposal(
@@ -145,6 +148,12 @@ def propose_fix(state: IncidentState) -> dict:
         parameters_hash=fix["parameters_hash"],
         reason=fix.get("reason"),
     )
+    approval = approval_repo.create_approval(
+        incident_id=state["incident_id"],
+        fix_proposal_id=proposal.id,
+        action_type=fix["action_type"],
+        parameters_hash=fix["parameters_hash"],
+    )
     state["fix_proposal"] = {
         "fix_proposal_id": proposal.id,
         "action_type": fix["action_type"],
@@ -152,6 +161,11 @@ def propose_fix(state: IncidentState) -> dict:
         "parameters": fix["parameters"],
         "parameters_hash": fix["parameters_hash"],
         "reason": fix.get("reason"),
+    }
+    state["approval"] = {
+        "approval_id": approval.id,
+        "status": "pending",
+        "fix_proposal_id": proposal.id,
     }
     state["status"] = "awaiting_approval"
     return state
@@ -164,6 +178,51 @@ def report(state: IncidentState) -> dict:
     postmortem_repo.create_postmortem(incident_id=state["incident_id"], content=content)
     state["report"] = content
     # status 保持前序终态(recovered / needs_human / rejected 等)
+    return state
+
+
+def human_approval(state: IncidentState) -> dict:
+    """审批挂起:interrupt 等待决策;resume 后按决策分流(记录由 propose_fix 预创建)。"""
+    proposal = state.get("fix_proposal") or {}
+    approval = state["approval"]  # propose_fix 已创建
+
+    decision = interrupt({
+        "type": "approval_request",
+        "approval_id": approval["approval_id"],
+        "proposal": proposal,
+    })
+
+    # resume 分支:决策由 API/scanner 在恢复前已写入 approval 表
+    if decision.get("decision") == "approved":
+        approval["status"] = "approved"
+        state["status"] = "executing"
+    else:
+        approval["status"] = decision.get("decision", "rejected")
+        state["status"] = "rejected"
+        state["termination_reason"] = decision.get("comment") or "rejected_by_approver"
+    return state
+
+
+def execute_fix(state: IncidentState) -> dict:
+    """执行审批后的预定义修复(唯一业务写路径,含六项校验)。"""
+    proposal = state.get("fix_proposal") or {}
+    approval = state.get("approval") or {}
+    state["status"] = "executing"
+    try:
+        result = fix_service.execute_fix(
+            incident_id=state["incident_id"],
+            fix_proposal_id=proposal.get("fix_proposal_id"),
+            approval_id=approval.get("approval_id"),
+        )
+    except ValueError as exc:
+        state["status"] = "failed"
+        state["error"] = str(exc)
+        return state
+    state["fix_execution"] = {
+        "fix_execution_id": result.get("fix_execution_id"),
+        "status": result.get("status"),
+    }
+    state["status"] = "executing"
     return state
 
 
