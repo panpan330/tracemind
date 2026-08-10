@@ -6,6 +6,9 @@ import * as client from '@/api/client'
 import type { IncidentDetail } from '@/api/types'
 
 const { mockRoute, mockPush } = vi.hoisted(() => ({ mockRoute: { params: { id: '7' } }, mockPush: vi.fn() }))
+const { mockES } = vi.hoisted(() => ({
+  mockES: { onopen: null, onmessage: null, onerror: null, close: vi.fn() },
+}))
 
 vi.mock('@/api/client', () => ({
   getIncident: vi.fn(),
@@ -34,7 +37,10 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
   }
 }
 
-beforeEach(() => { vi.clearAllMocks() })
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.stubGlobal('EventSource', vi.fn(() => mockES))
+})
 
 describe('IncidentDetailView', () => {
   it('渲染假设、证据与待审批', async () => {

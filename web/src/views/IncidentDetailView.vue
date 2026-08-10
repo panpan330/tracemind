@@ -89,7 +89,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import * as client from '@/api/client'
@@ -98,6 +98,7 @@ import StatusTag from '@/components/StatusTag.vue'
 import HypothesisList from '@/components/HypothesisList.vue'
 import EvidenceTable from '@/components/EvidenceTable.vue'
 import ApprovalPanel from '@/components/ApprovalPanel.vue'
+import { useIncidentStream } from '@/composables/useIncidentStream'
 import { isTerminal } from '@/utils/status'
 
 const route = useRoute()
@@ -107,6 +108,12 @@ const incidentId = Number(route.params.id)
 const detail = ref<IncidentDetail | null>(null)
 const loading = ref(false)
 let timer: number | undefined
+
+// SSE 实时状态:状态变化立即刷新详情;轮询保留作为断线兜底
+const { status: liveStatus } = useIncidentStream(incidentId)
+watch(liveStatus, (s) => {
+  if (s) refresh()
+})
 
 async function refresh() {
   try {
@@ -131,7 +138,7 @@ function goReport() {
 onMounted(() => {
   loading.value = true
   refresh()
-  // 非终态每 3s 轮询;终态后由 SSE/手动刷新
+  // 非终态每 3s 轮询兜底(SSE 断线时);终态后停止
   timer = window.setInterval(() => {
     if (detail.value && !isTerminal(detail.value.status)) refresh()
   }, 3000)
