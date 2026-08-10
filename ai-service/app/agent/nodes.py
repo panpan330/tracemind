@@ -1,7 +1,9 @@
 import json
 
+from app.agent.llm import get_llm
 from app.agent.rules import EVIDENCE_TOOL_MAP, evaluate_evidence_gate
 from app.agent.state import IncidentState
+from app.repositories import postmortem_repo, proposal_repo
 from app.tools.execute import execute_tool
 
 # 固定探测参数(INVENTORY_LOOKUP 白名单模板)
@@ -109,6 +111,59 @@ def diagnose(state: IncidentState) -> dict:
             state["status"] = "needs_human"
         else:
             state["status"] = "investigating"  # 继续循环
+    return state
+
+
+def ingest(state: IncidentState) -> dict:
+    """初始化调查预算与状态(Incident 已在 API 层创建)。"""
+    state.setdefault("investigation_round", 0)
+    state.setdefault("max_investigation_rounds", DEFAULT_MAX_ROUNDS)
+    state.setdefault("tool_call_count", 0)
+    state.setdefault("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
+    state["status"] = "investigating"
+    return state
+
+
+def hypothesize(state: IncidentState) -> dict:
+    """调用 LLM 生成初始假设列表,写入 hypotheses 并进入调查。"""
+    llm = get_llm()
+    hyps = llm.hypothesize(state)
+    state["hypotheses"] = hyps
+    state["status"] = "investigating"
+    return state
+
+
+def propose_fix(state: IncidentState) -> dict:
+    """根因确认后生成修复提案并落库,状态进入 awaiting_approval。"""
+    llm = get_llm()
+    fix = llm.propose_fix(state)
+    proposal = proposal_repo.create_proposal(
+        incident_id=state["incident_id"],
+        action_type=fix["action_type"],
+        risk_level=fix["risk_level"],
+        parameters=fix["parameters"],
+        parameters_hash=fix["parameters_hash"],
+        reason=fix.get("reason"),
+    )
+    state["fix_proposal"] = {
+        "fix_proposal_id": proposal.id,
+        "action_type": fix["action_type"],
+        "risk_level": fix["risk_level"],
+        "parameters": fix["parameters"],
+        "parameters_hash": fix["parameters_hash"],
+        "reason": fix.get("reason"),
+    }
+    state["status"] = "awaiting_approval"
+    return state
+
+
+def report(state: IncidentState) -> dict:
+    """终态复盘:调用 LLM 用已落库事实生成报告并写 postmortem 表。"""
+    llm = get_llm()
+    content = llm.write_report(state)
+    postmortem_repo.create_postmortem(incident_id=state["incident_id"], content=content)
+    state["report"] = content
+    # status 保持前序终态(recovered / needs_human / rejected 等)
     return state
 
 
