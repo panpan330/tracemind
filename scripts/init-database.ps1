@@ -26,6 +26,10 @@ Write-Host "==> business DDL (idempotent)"
 & mysql @mysqlArgs "source $(Join-Path $sqlDir '03-schema.sql')"
 if ($LASTEXITCODE -ne 0) { throw "failed to create tables" }
 
+Write-Host "==> control schema DDL (idempotent)"
+& mysql @mysqlArgs "source $(Join-Path $sqlDir '04-control-schema.sql')"
+if ($LASTEXITCODE -ne 0) { throw "failed to create control tables" }
+
 Write-Host "==> init done"
 Write-Host "    dbs: tracemind_business / tracemind_business_test / tracemind_control"
 Write-Host "    users: app_business / tracemind_control_app / ai_investigator / fix_executor"
