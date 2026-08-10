@@ -9,6 +9,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_business.* TO 'app_business'@'
 GRANT INDEX ON tracemind_business.* TO 'app_business'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_business_test.* TO 'app_business'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_control.* TO 'tracemind_control_app'@'%';
+GRANT CREATE TEMPORARY TABLES ON tracemind_control.* TO 'tracemind_control_app'@'%';
 GRANT SELECT ON tracemind_business.* TO 'ai_investigator'@'%';
 GRANT SELECT ON tracemind_business_test.* TO 'ai_investigator'@'%';
 GRANT SELECT ON performance_schema.* TO 'ai_investigator'@'%';
