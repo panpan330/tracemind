@@ -1,0 +1,42 @@
+-- TraceMind:业务表 DDL(幂等)
+USE tracemind_business;
+
+CREATE TABLE IF NOT EXISTS inventory (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  sku_id BIGINT NOT NULL,
+  warehouse_id BIGINT NOT NULL,
+  quantity INT NOT NULL DEFAULT 0,
+  version INT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_sku_warehouse (sku_id, warehouse_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS orders (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_no VARCHAR(32) NOT NULL UNIQUE,
+  customer_id BIGINT NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'CREATED',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS order_item (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_id BIGINT NOT NULL,
+  sku_id BIGINT NOT NULL,
+  warehouse_id BIGINT NOT NULL,
+  quantity INT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS scenario_audit (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  scenario_id VARCHAR(32) NOT NULL,
+  action VARCHAR(16) NOT NULL,
+  actor VARCHAR(64) NOT NULL,
+  detail JSON NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- fix_executor 仅拥有目标表的 INDEX 权限(依赖 inventory 表已存在)
+GRANT INDEX ON tracemind_business.inventory TO 'fix_executor'@'%';
