@@ -31,8 +31,9 @@ def test_get_query_plan_rejects_unknown_ref():
 def test_get_index_info_returns_indexes():
     out = execute_tool("get_index_info", incident_id=None, table_ref="inventory")
     assert out["success"] is True
+    assert isinstance(out["data"]["indexes"], list)
     names = [i["index_name"] for i in out["data"]["indexes"]]
-    assert "idx_sku_warehouse" in names
+    assert "PRIMARY" in names  # PRIMARY 始终存在,不依赖故障状态
 
 
 def test_execute_tool_validates_params():

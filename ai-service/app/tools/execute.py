@@ -10,12 +10,19 @@ from app.tools.registry import TOOL_REGISTRY
 from app.tools.schemas import ToolResult
 
 
-def execute_tool(tool_name: str, incident_id: int | None, **kwargs: Any) -> dict:
-    """统一工具执行:参数校验、计时、成功/失败封装、审计落库。"""
+def execute_tool(tool_name: str, incident_id: int | None = None, **kwargs: Any) -> dict:
+    """统一工具执行:参数校验、计时、成功/失败封装、审计落库。
+
+    incident_id 由调用方显式传入(路径参数),kwargs 中出现的 incident_id
+    一律剔除(防伪造);工具 schema 需要 incident_id 时自动注入。
+    """
     spec = TOOL_REGISTRY.get(tool_name)
     if spec is None:
         return ToolResult(success=False, error_code="UNKNOWN_TOOL",
                           error_message=f"unknown tool: {tool_name}").model_dump()
+    kwargs.pop("incident_id", None)
+    if incident_id is not None and "incident_id" in spec.input_schema.model_fields:
+        kwargs["incident_id"] = incident_id
     try:
         parsed = spec.input_schema(**kwargs)
     except ValidationError as e:

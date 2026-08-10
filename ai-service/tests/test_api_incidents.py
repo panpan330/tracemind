@@ -32,4 +32,4 @@ def test_tool_entry_point():
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True
-    assert "idx_sku_warehouse" in [i["index_name"] for i in body["data"]["indexes"]]
+    assert "PRIMARY" in [i["index_name"] for i in body["data"]["indexes"]]

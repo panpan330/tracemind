@@ -13,7 +13,7 @@ class ToolResult(BaseModel):
     success: bool
     observed_at: str = Field(default_factory=utcnow_iso)
     duration_ms: int = 0
-    data: dict[str, Any] | None = None
+    data: dict[str, Any] | list | None = None
     error_code: str | None = None
     error_message: str | None = None
 

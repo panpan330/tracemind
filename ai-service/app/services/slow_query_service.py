@@ -10,7 +10,11 @@ def list_expensive_digests(incident_id: int) -> list[dict]:
         row = conn.execute(text(
             "SELECT incident_digest_baseline FROM agent_run "
             "WHERE incident_id = :i ORDER BY id DESC LIMIT 1"), {"i": incident_id}).fetchone()
-        baseline = row[0] if row and row[0] else {}
+        raw = row[0] if row else None
+        if isinstance(raw, str):  # 原生 SQL 读 JSON 列返回 str,含 'null'
+            import json
+            raw = json.loads(raw)
+        baseline = raw if isinstance(raw, dict) else {}
 
     current: dict[str, dict] = {}
     with get_readonly_engine().connect() as conn:

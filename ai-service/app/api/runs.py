@@ -39,4 +39,6 @@ def get_run(incident_id: int, run_id: int):
 def call_tool(incident_id: int, payload: ToolCallIn):
     """统一工具调用入口(LLM_MODE=fake 时即演示入口;M3 由 Agent 内部调用)。"""
     from app.tools.execute import execute_tool
-    return execute_tool(payload.tool, incident_id=incident_id, **payload.args)
+    args = dict(payload.args)
+    args.pop("incident_id", None)  # 路径参数为准,防调用方伪造
+    return execute_tool(payload.tool, incident_id=incident_id, **args)
