@@ -1,0 +1,14 @@
+server:
+  port: ${ORDER_SERVICE_PORT:8081}
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: ${BUSINESS_DB_URL:jdbc:mysql://localhost:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: ${BUSINESS_DB_USER:app_business}
+    password: ${BUSINESS_DB_PASSWORD:app_business_pwd}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
