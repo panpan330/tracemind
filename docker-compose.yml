@@ -1,0 +1,143 @@
+# TraceMind 一键编排:MySQL 8 + order/inventory + AI 服务 + 前端工作台
+# 用法: docker compose up -d --build && docker compose ps
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: tracemind-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_pwd_2026
+      MYSQL_DATABASE: tracemind_business
+      TZ: Asia/Shanghai
+    command:
+      - --innodb-buffer-pool-size=64M
+      - --innodb-flush-log-at-trx-commit=2
+      - --performance-schema=ON
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 首次启动自动执行:建库/四账号/业务表/控制库 13 表(全部幂等)
+      - ./scripts/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot_pwd_2026 --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 20s
+    networks: [tracemind]
+
+  # 一次性灌压测数据(幂等:已有数据则跳过);容器正常退出
+  seed:
+    image: python:3.12-slim
+    container_name: tracemind-seed
+    environment:
+      BUSINESS_DB_URL: "mysql:3306/tracemind_business"
+      BUSINESS_DB_USER: app_business
+      BUSINESS_DB_PASSWORD: app_business_pwd
+      INVENTORY_ROWS: "500000"
+    command: ["sh", "-c", "pip install -q pymysql && python /seed/seed_data.py"]
+    volumes:
+      - ./scripts/seed_data.py:/seed/seed_data.py:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    networks: [tracemind]
+
+  order-service:
+    build:
+      context: ./java
+      dockerfile: order-service/Dockerfile
+    container_name: tracemind-order
+    environment:
+      ORDER_SERVICE_PORT: "8081"
+      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      BUSINESS_DB_USER: app_business
+      BUSINESS_DB_PASSWORD: app_business_pwd
+    ports:
+      - "8081:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [tracemind]
+
+  inventory-service:
+    build:
+      context: ./java
+      dockerfile: inventory-service/Dockerfile
+    container_name: tracemind-inventory
+    environment:
+      INVENTORY_SERVICE_PORT: "8082"
+      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      BUSINESS_DB_USER: app_business
+      BUSINESS_DB_PASSWORD: app_business_pwd
+      DEMO_MODE: "true"
+      DEMO_KEY: demo-secret-2026
+    ports:
+      - "8082:8082"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8082'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [tracemind]
+
+  ai-service:
+    build:
+      context: ./ai-service
+    container_name: tracemind-ai
+    environment:
+      TRACEMIND_CONTROL_DB_URL: "mysql+pymysql://tracemind_control_app:control_app_pwd@mysql:3306/tracemind_control"
+      TRACEMIND_READONLY_DB_URL: "mysql+pymysql://ai_investigator:investigator_pwd@mysql:3306/tracemind_business"
+      TRACEMIND_ORDER_SERVICE_URL: "http://order-service:8081"
+      TRACEMIND_INVENTORY_SERVICE_URL: "http://inventory-service:8082"
+      TRACEMIND_DEMO_MODE: "true"
+      TRACEMIND_DEMO_KEY: demo-secret-2026
+      TRACEMIND_LLM_MODE: fake
+    ports:
+      - "8000:8000"
+    volumes:
+      - ai-checkpoints:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy
+      inventory-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    networks: [tracemind]
+
+  web:
+    build:
+      context: ./web
+    container_name: tracemind-web
+    ports:
+      - "8080:80"
+    depends_on:
+      ai-service:
+        condition: service_healthy
+    networks: [tracemind]
+
+volumes:
+  mysql-data:
+  ai-checkpoints:
+
+networks:
+  tracemind:
+    driver: bridge

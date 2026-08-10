@@ -23,7 +23,11 @@ def main() -> int:
     )
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM inventory")  # 先清空,保证可重复执行
+            cur.execute("SELECT COUNT(*) FROM inventory")
+            if cur.fetchone()[0] > 0:
+                print("inventory 已有数据,跳过灌入(幂等)")
+                return 0
+            cur.execute("DELETE FROM inventory")  # 保证可重复执行
             conn.commit()
             # (sku_id, warehouse_id) 组合唯一采样:空间 20000x50=100 万,从中随机选 ROWS 个不重复组合
             # 注意:不能加 UNIQUE 约束,否则会破坏"缺联合索引"故障场景
