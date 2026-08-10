@@ -22,6 +22,12 @@ def get_run(run_id: int) -> AgentRun | None:
         return session.get(AgentRun, run_id)
 
 
+def get_run_by_thread(thread_id: str) -> AgentRun | None:
+    with Session(get_control_engine()) as session:
+        return session.scalars(
+            select(AgentRun).filter(AgentRun.thread_id == thread_id).limit(1)).first()
+
+
 def list_runs(incident_id: int) -> list[AgentRun]:
     with Session(get_control_engine()) as session:
         return list(session.scalars(

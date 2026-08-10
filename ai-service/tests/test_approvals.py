@@ -44,6 +44,10 @@ def _patch_node_deps(monkeypatch):
     monkeypatch.setattr("app.agent.nodes.fix_service.execute_fix", fake_execute_fix)
     monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
     monkeypatch.setattr("app.agent.nodes.postmortem_repo.create_postmortem", fake_create_postmortem)
+    monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
+                        lambda *a, **kw: {"id": 1})
+    monkeypatch.setattr("app.agent.nodes.evidence_repo.upsert_evidence",
+                        lambda *a, **kw: {"id": 1})
 
 
 def _run_to_interrupt(graph, config):

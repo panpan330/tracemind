@@ -45,14 +45,17 @@ async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dic
     except Exception:
         logger.exception("graph run failed incident=%s run=%s", incident_id, run_id)
         run_repo.update_run_status(run_id, "failed")
+        incident_repo.update_status(incident_id, "failed")
         return
     status = result.get("status") or "finished"
     run_repo.update_run_status(run_id, status)
+    incident_repo.update_status(incident_id, status)
     logger.info("graph finished incident=%s run=%s status=%s", incident_id, run_id, status)
 
 
 async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> None:
     run_repo.update_run_status(run_id, "investigating")
+    incident_repo.update_status(incident_id, "investigating")
     inc = incident_repo.get_incident(incident_id)
     initial = {
         "incident_id": incident_id,
@@ -71,11 +74,17 @@ async def resume_investigation(thread_id: str, resume_value: dict) -> None:
     """用同一 thread_id 恢复挂起的图(interrupt 处继续)。"""
     from app.agent.graph import build_graph
     graph = build_graph(checkpointer=get_saver())
-    await asyncio.to_thread(
+    result = await asyncio.to_thread(
         graph.invoke,
         Command(resume=resume_value),
         {"thread_id": thread_id, "recursion_limit": 100},
     )
+    run = run_repo.get_run_by_thread(thread_id)
+    if run is not None:
+        status = result.get("status") or "finished"
+        run_repo.update_run_status(run.id, status)
+        incident_repo.update_status(run.incident_id, status)
+        logger.info("graph resumed thread=%s status=%s", thread_id, status)
 
 
 async def recover_pending_runs() -> None:

@@ -33,3 +33,12 @@ def get_incident(incident_id: int) -> Incident | None:
 def list_incidents() -> list[Incident]:
     with Session(get_control_engine()) as session:
         return list(session.scalars(select(Incident).order_by(Incident.id.desc())).all())
+
+
+def update_status(incident_id: int, status: str) -> None:
+    with Session(get_control_engine()) as session:
+        inc = session.get(Incident, incident_id)
+        if inc is None:
+            return
+        inc.status = status
+        session.commit()

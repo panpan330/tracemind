@@ -34,6 +34,10 @@ def test_full_evidence_path_reaches_awaiting_approval(monkeypatch):
 
     monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
     monkeypatch.setattr("app.agent.nodes.proposal_repo.create_proposal", fake_create_proposal)
+    monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
+                        lambda *a, **kw: {"id": 1})
+    monkeypatch.setattr("app.agent.nodes.evidence_repo.upsert_evidence",
+                        lambda *a, **kw: {"id": 1})
     graph = build_graph()
     state = {"incident_id": 1, "service_ref": "inventory-service", "severity": "high"}
     result = graph.invoke(state)
@@ -64,6 +68,10 @@ def test_incomplete_evidence_keeps_collecting(monkeypatch):
         return {"success": False, "data": None}
 
     monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
+    monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
+                        lambda *a, **kw: {"id": 1})
+    monkeypatch.setattr("app.agent.nodes.evidence_repo.upsert_evidence",
+                        lambda *a, **kw: {"id": 1})
     graph = build_graph()
     state = {"incident_id": 2, "service_ref": "inventory-service",
              "severity": "high", "max_investigation_rounds": 1, "max_tool_calls": 5}

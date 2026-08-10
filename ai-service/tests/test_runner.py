@@ -37,6 +37,10 @@ def _patch_graph_deps(monkeypatch, tmp_path):
                         lambda **kw: type("P", (), {"id": 1})())
     monkeypatch.setattr("app.agent.nodes.approval_repo.create_approval",
                         lambda **kw: type("A", (), {"id": 2})())
+    monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
+                        lambda *a, **kw: {"id": 1})
+    monkeypatch.setattr("app.agent.nodes.evidence_repo.upsert_evidence",
+                        lambda *a, **kw: {"id": 1})
 
 
 async def test_start_investigation_runs_graph_to_interrupt(monkeypatch, tmp_path):

@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.db.engine import get_readonly_engine
-from app.repositories import incident_repo
+from app.db.engine import get_control_engine, get_readonly_engine
+from app.db.models import Approval, FixExecution, Postmortem, RecoveryCheck
+from app.repositories import evidence_repo, hypothesis_repo, incident_repo
 from app.services.baseline_service import capture_digest_baseline
 
 router = APIRouter(prefix="/api/incidents")
@@ -38,6 +41,42 @@ def get_incident(incident_id: int):
     inc = incident_repo.get_incident(incident_id)
     if inc is None:
         raise HTTPException(404, "incident not found")
-    return {"id": inc.id, "title": inc.title, "status": inc.status,
-            "severity": inc.severity, "service_ref": inc.service_ref,
-            "created_at": str(inc.created_at), "finished_at": str(inc.finished_at) if inc.finished_at else None}
+    hypotheses = hypothesis_repo.list_by_incident(incident_id)
+    evidence = evidence_repo.list_by_incident(incident_id)
+    with Session(get_control_engine()) as session:
+        approvals = list(session.scalars(select(Approval).filter(
+            Approval.incident_id == incident_id).order_by(Approval.id.desc())).all())
+        fix_execs = list(session.scalars(select(FixExecution).filter(
+            FixExecution.incident_id == incident_id).order_by(FixExecution.id.desc())).all())
+        checks = list(session.scalars(select(RecoveryCheck).filter(
+            RecoveryCheck.incident_id == incident_id).order_by(RecoveryCheck.id.desc())).all())
+        pms = list(session.scalars(select(Postmortem).filter(
+            Postmortem.incident_id == incident_id).order_by(Postmortem.id.desc())).all())
+    return {
+        "id": inc.id, "title": inc.title, "status": inc.status,
+        "severity": inc.severity, "service_ref": inc.service_ref,
+        "created_at": str(inc.created_at),
+        "finished_at": str(inc.finished_at) if inc.finished_at else None,
+        "hypotheses": [{"id": h.id, "description": h.description, "status": h.status}
+                       for h in hypotheses],
+        "evidence": [{"id": e.id, "source": e.source,
+                      "key": (e.content or {}).get("key"),
+                      "passed": (e.content or {}).get("passed"),
+                      "content": (e.content or {}).get("data")} for e in evidence],
+        "approvals": [{"id": a.id, "fix_proposal_id": a.fix_proposal_id,
+                       "status": a.status, "approver": a.approver,
+                       "comment": a.comment,
+                       "expires_at": str(a.expires_at) if a.expires_at else None}
+                      for a in approvals],
+        "fix_execution": ({
+            "id": fix_execs[0].id, "fix_proposal_id": fix_execs[0].fix_proposal_id,
+            "status": fix_execs[0].status,
+        } if fix_execs else None),
+        "recovery": ({
+            "id": checks[0].id, "status": checks[0].status,
+            "index_present": checks[0].index_present,
+            "query_plan_uses_target_index": checks[0].query_plan_uses_target_index,
+            "estimated_rows_after": checks[0].estimated_rows_after,
+        } if checks else None),
+        "report": (pms[0].content or {}) if pms else None,
+    }

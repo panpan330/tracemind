@@ -5,7 +5,8 @@ from langgraph.types import interrupt
 from app.agent.llm import get_llm
 from app.agent.rules import EVIDENCE_TOOL_MAP, evaluate_evidence_gate
 from app.agent.state import IncidentState
-from app.repositories import approval_repo, postmortem_repo, proposal_repo
+from app.repositories import approval_repo, evidence_repo, hypothesis_repo
+from app.repositories import postmortem_repo, proposal_repo
 from app.services import fix_service
 from app.tools.execute import execute_tool
 
@@ -94,6 +95,11 @@ def collect_evidence(state: IncidentState) -> dict:
 
     state["evidence_gate"] = status  # type: ignore[assignment]
 
+    # 审计落库:每轮证据写 evidence 表(按 source 幂等覆盖)
+    for ev in state.get("evidence", []):
+        evidence_repo.upsert_evidence(state["incident_id"], ev["id"], ev["source"],
+                                      ev.get("content"), bool(ev.get("passed")))
+
     # 预算耗尽判断
     if (state.get("investigation_round", 0) >= state.get("max_investigation_rounds", DEFAULT_MAX_ROUNDS)
             or state.get("tool_call_count", 0) >= state.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)):
@@ -108,6 +114,9 @@ def diagnose(state: IncidentState) -> dict:
         state["confirmed_hypothesis_id"] = "h1"
         state["status"] = "investigating"
         state["termination_reason"] = None
+        for h in state.get("hypotheses", []):
+            hypothesis_repo.upsert_hypothesis(state["incident_id"],
+                                              h.get("description", ""), "confirmed")
     else:
         # 证据不足:预算耗尽 -> needs_human;否则回到 collect_evidence(条件边)
         if state.get("termination_reason") == "evidence_budget_exhausted":
@@ -132,6 +141,10 @@ def hypothesize(state: IncidentState) -> dict:
     llm = get_llm()
     hyps = llm.hypothesize(state)
     state["hypotheses"] = hyps
+    # 审计落库:假设写 hypothesis 表(幂等)
+    for h in hyps:
+        hypothesis_repo.upsert_hypothesis(state["incident_id"],
+                                          h.get("description", ""), "proposed")
     state["status"] = "investigating"
     return state
 
