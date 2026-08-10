@@ -138,9 +138,11 @@ docker-compose.yml    # 一键编排
 
 ```bash
 cd java && mvn test               # JUnit5 + Mockito(单元)
+cd java && mvn verify             # 追加 Testcontainers MySQL 集成测试(需 Docker,EXPLAIN 断言走索引)
 cd ai-service && uv run pytest    # Agent 图/工具/API(pytest,49+)
 cd web && npx vitest run          # Vue 组件/组合式函数
-python scripts/verify-m3.py       # 端到端闭环验收
+npx playwright test               # 浏览器 E2E 冒烟(演示闭环,需全栈运行)
+python scripts/verify-m5.py --base http://localhost:8000   # Docker 部署端到端验收
 ```
 
 ## 技术栈
