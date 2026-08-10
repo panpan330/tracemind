@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.db.engine import get_readonly_engine
 from app.repositories import incident_repo, run_repo
+from app.services.baseline_service import capture_digest_baseline
 
 router = APIRouter(prefix="/api/incidents")
 
@@ -16,9 +18,8 @@ async def start_investigation(incident_id: int):
     inc = incident_repo.get_incident(incident_id)
     if inc is None:
         raise HTTPException(404, "incident not found")
-    # 取该 incident 最近一次 digest 基线(创建 Incident 时已采集)
-    runs = run_repo.list_runs(incident_id)
-    baseline = runs[0].incident_digest_baseline if runs else None
+    # 开始调查时采集新鲜 digest 基线,供 E3 计算 Incident 期间增量
+    baseline = capture_digest_baseline(get_readonly_engine())
     run = run_repo.create_run(incident_id, baseline=baseline)
     from app.services import runner
     await runner.start_investigation(incident_id, run.id, run.thread_id)

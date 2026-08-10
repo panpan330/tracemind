@@ -18,7 +18,8 @@ def create_incident(title: str, description: str | None, severity: str,
         return inc
 
 
-def save_incident_baseline(incident_id: int, baseline: dict) -> None:
+def save_health_baseline(incident_id: int, baseline: dict | None) -> None:
+    """保存健康指标基线(P95/QPS/错误率);采集失败时允许写 NULL。"""
     with Session(get_control_engine()) as session:
         inc = session.get(Incident, incident_id)
         inc.healthy_metrics_baseline = baseline

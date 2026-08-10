@@ -41,17 +41,13 @@ def wait_status(incident_id: str, target: str, timeout: int = 60) -> dict:
 def main() -> None:
     t0 = time.time()
 
-    # 1) 重置 + 注入故障
+    # 1) 重置环境(健康态)
     r = requests.post(f"{AI}/api/demo/scenarios/SCN-001/reset", headers=HEADERS, timeout=10)
     if r.status_code >= 400:
         fail(f"reset 失败: {r.status_code} {r.text[:200]}")
     print(f"[{time.time()-t0:5.1f}s] reset 完成")
-    r = requests.post(f"{AI}/api/demo/scenarios/SCN-001/inject", headers=HEADERS, timeout=10)
-    if r.status_code >= 400:
-        fail(f"inject 失败: {r.status_code} {r.text[:200]}")
-    print(f"[{time.time()-t0:5.1f}s] 故障已注入")
 
-    # 2) 创建 Incident 并启动调查
+    # 2) 健康态创建 Incident(此时采集健康指标基线)
     r = requests.post(f"{AI}/api/incidents", json={
         "title": "M3 验收:库存查询变慢",
         "description": "P95 异常,怀疑缺联合索引",
@@ -61,17 +57,24 @@ def main() -> None:
     if r.status_code != 201:
         fail(f"创建 incident 失败: {r.status_code} {r.text[:200]}")
     incident_id = str(r.json()["id"])
-    print(f"[{time.time()-t0:5.1f}s] incident {incident_id} 已创建")
+    print(f"[{time.time()-t0:5.1f}s] incident {incident_id} 已创建(健康基线已采集)")
 
-    # 2.5) 制造故障态负载(指标与 digest 增量数据),再启动调查
-    run_load(seconds=8, qps=15)
-    print(f"[{time.time()-t0:5.1f}s] 故障态负载完成")
+    # 3) 注入故障
+    r = requests.post(f"{AI}/api/demo/scenarios/SCN-001/inject", headers=HEADERS, timeout=10)
+    if r.status_code >= 400:
+        fail(f"inject 失败: {r.status_code} {r.text[:200]}")
+    print(f"[{time.time()-t0:5.1f}s] 故障已注入")
 
+    # 4) 启动调查(此时采集 digest 基线)
     r = requests.post(f"{AI}/api/incidents/{incident_id}/investigations", timeout=10)
     if r.status_code != 202:
         fail(f"启动调查失败: {r.status_code} {r.text[:200]}")
     run_id = r.json()["run_id"]
     print(f"[{time.time()-t0:5.1f}s] 调查已启动 run={run_id}")
+
+    # 5) 故障态负载(digest 增量与故障 P95 数据,供 Agent 收集)
+    run_load(seconds=8, qps=15)
+    print(f"[{time.time()-t0:5.1f}s] 故障态负载完成")
 
     # 3) 轮询到 awaiting_approval
     inc = wait_status(incident_id, "awaiting_approval")

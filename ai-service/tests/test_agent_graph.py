@@ -14,7 +14,7 @@ def test_full_evidence_path_reaches_awaiting_approval(monkeypatch):
     def fake_execute(tool, incident_id=None, **kwargs):
         if tool == "get_service_metrics":
             return {"success": True,
-                    "data": {"p95Ms": 100, "representativeSlowTraceId": "t1"}}
+                    "data": {"p95Ms": 150, "representativeSlowTraceId": "t1"}}
         if tool == "get_trace":
             return {"success": True, "data": {"inventory_service": [
                 {"stage": "database", "durationMs": 90},

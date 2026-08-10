@@ -6,7 +6,7 @@ from app.agent.llm import get_llm
 from app.agent.rules import EVIDENCE_TOOL_MAP, evaluate_evidence_gate
 from app.agent.state import IncidentState
 from app.repositories import approval_repo, evidence_repo, hypothesis_repo
-from app.repositories import postmortem_repo, proposal_repo
+from app.repositories import incident_repo, postmortem_repo, proposal_repo
 from app.services import fix_service
 from app.tools.execute import execute_tool
 
@@ -15,7 +15,8 @@ PROBE_PARAMS = {"skuId": 42, "warehouseId": 7}
 DEFAULT_MAX_ROUNDS = 3
 DEFAULT_MAX_TOOL_CALLS = 12
 
-HEALTHY_BASELINE_P95 = 10  # 健康态基线(ms),用于恢复判定;M4 改为 Incident 记录的真实基线
+# 基线缺失时的宽松判定阈值(ms):仅当健康基线采集失败时使用
+FALLBACK_E1_P95_MS = 100
 
 
 def _call_tool(state: IncidentState, tool: str, **kwargs) -> dict:
@@ -41,11 +42,17 @@ def collect_evidence(state: IncidentState) -> dict:
     state["investigation_round"] = state.get("investigation_round", 0) + 1
     status = {}
 
-    # E1: 目标服务 P95 相对健康基线异常
+    # E1: 目标服务 P95 相对健康基线异常(基线缺失时用宽松阈值兜底)
     r1 = _call_tool(state, "get_service_metrics",
                     service_ref=state["service_ref"], window_seconds=300)
     p95 = (r1.get("data") or {}).get("p95Ms")
-    e1 = r1["success"] and p95 is not None and p95 > HEALTHY_BASELINE_P95
+    inc = incident_repo.get_incident(state["incident_id"])
+    health = (inc.healthy_metrics_baseline or {}) if inc else {}
+    base_p95 = (health or {}).get("p95_ms")
+    if p95 is not None and base_p95 is not None:
+        e1 = p95 > int(base_p95) * 1.2
+    else:
+        e1 = p95 is not None and p95 > FALLBACK_E1_P95_MS
     _append_evidence(state, "E1", "get_service_metrics", {"p95Ms": p95}, e1)
     status["E1"] = e1
     slow_trace = (r1.get("data") or {}).get("representativeSlowTraceId")

@@ -29,16 +29,18 @@ def main() -> int:
     c.headers.update(HEADERS)
 
     c.post(f"{AI}/api/demo/scenarios/SCN-001/reset", timeout=10)
-    c.post(f"{AI}/api/demo/scenarios/SCN-001/inject", timeout=10)
+    # 健康态创建 Incident(采集健康基线)
     inc = c.post(f"{AI}/api/incidents", json={
         "title": "过期审批验证", "severity": "high",
         "service_ref": "inventory-service"}).json()
     iid = inc["id"]
-
+    c.post(f"{AI}/api/demo/scenarios/SCN-001/inject", timeout=10)
+    # 启动调查(采集 digest 基线)
+    c.post(f"{AI}/api/incidents/{iid}/investigations", timeout=10)
+    # 故障态负载
     env = {**os.environ, "LOAD_DURATION_SECONDS": "8", "LOAD_QPS": "15"}
     subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "loadgen.py")],
                    env=env, cwd=ROOT, check=True, timeout=60)
-    c.post(f"{AI}/api/incidents/{iid}/investigations", timeout=10)
 
     # 等 awaiting_approval
     deadline = time.time() + 60
