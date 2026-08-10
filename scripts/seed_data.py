@@ -25,12 +25,16 @@ def main() -> int:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM inventory")  # 先清空,保证可重复执行
             conn.commit()
+            # (sku_id, warehouse_id) 组合唯一采样:空间 20000x50=100 万,从中随机选 ROWS 个不重复组合
+            # 注意:不能加 UNIQUE 约束,否则会破坏"缺联合索引"故障场景
             random.seed(42)
+            space = 20000 * 50
+            combos = [(i // 50, i % 50) for i in random.sample(range(space), ROWS)]
             inserted = 0
-            while inserted < ROWS:
+            for i in range(0, ROWS, BATCH):
                 batch = [
-                    (random.randint(0, 19999), random.randint(0, 49), random.randint(0, 999))
-                    for _ in range(min(BATCH, ROWS - inserted))
+                    (sku, wh, random.randint(0, 999))
+                    for sku, wh in combos[i:i + BATCH]
                 ]
                 cur.executemany(
                     "INSERT INTO inventory (sku_id, warehouse_id, quantity) VALUES (%s, %s, %s)",

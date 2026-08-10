@@ -34,6 +34,12 @@ public class InventoryClient {
                     .header(TraceIdFilter.TRACE_ID_HEADER, MDC.get("traceId"))
                     .retrieve()
                     .body(Map.class);
+        } catch (org.springframework.web.client.RestClientResponseException e) {
+            if (e.getStatusCode().value() == 404) {
+                // 库存记录不存在 = 库存 0,不是服务故障
+                return Map.of("quantity", 0);
+            }
+            throw e;
         } finally {
             long httpMs = (System.nanoTime() - start) / 1_000_000;
             String traceId = MDC.get("traceId");
