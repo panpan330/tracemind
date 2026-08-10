@@ -12,7 +12,7 @@ TraceMind 是一个面向微服务系统的 AI 故障诊断与安全处置平台
 
 1. **证据驱动的根因判定**——根因与恢复结论由程序规则闸门确定,LLM 只负责提出假设、选择工具与解释证据,不允许仅凭猜测下结论。
 2. **人机协同的安全闭环**——Agent 永远无法执行任意 SQL/Shell;修复动作必须预定义、经人工审批、校验审批绑定后执行;审批前状态机挂起,审批后恢复。
-3. **全链路审计可回放**——每次工具调用、假设变化、审批决策、修复执行均落库,配合 `incident_event` 事件流,调查全过程可展示、可复盘、可回放。
+3. **全链路审计可追溯**——每次工具调用、假设变化、审批决策、修复执行均落库,配合 `incident_event` 事件流,调查全过程可展示、可复盘;完整执行回放属于 V1.1。
 
 ## 2. 范围与版本边界
 
@@ -103,13 +103,15 @@ ingest
 
 ### 4.3 根因判定规则(SCN-001,写死在 diagnose 节点)
 
-当且仅当同时满足以下三条,才将"缺少联合索引 `idx_sku_warehouse(sku_id, warehouse_id)`"标记为 confirmed:
+当且仅当同时满足 E1~E5 五项,才将"缺少联合索引 `idx_sku_warehouse(sku_id, warehouse_id)`"标记为 confirmed:
 
-1. 慢查询证据存在(`list_expensive_query_digests` 增量显示目标查询扫描行数/耗时异常);
-2. 执行计划证据(`get_query_plan` 的 `EXPLAIN FORMAT=JSON`)显示全表扫描或未使用目标联合索引;
-3. 索引元数据证据(`get_index_info`)确认 `(sku_id, warehouse_id)` 联合索引确实缺失。
+- **E1**:目标服务 P95 相对健康基线异常(`get_service_metrics`);
+- **E2**:代表性慢请求的 trace 显示主要耗时位于 inventory 数据库阶段(`get_trace`);
+- **E3**:目标 SQL 的执行次数、总耗时与扫描行数异常(`list_expensive_query_digests` 增量);
+- **E4**:执行计划显示全表扫描或未命中目标索引(`get_query_plan` 的 `EXPLAIN FORMAT=JSON`);
+- **E5**:索引元数据确认 `(sku_id, warehouse_id)` 联合索引确实缺失(`get_index_info`)。
 
-任一缺失 → 状态为 unknown,回到 collect_evidence 继续收集。
+任一证据缺失且预算充足 → 继续收集;预算耗尽 → 进入 `needs_human`。
 
 ### 4.4 恢复判定规则(写死在 verify_recovery 节点,不让 LLM 决定)
 
@@ -118,8 +120,10 @@ ingest
 - `index_present = true`(目标索引已存在);
 - `query_plan_uses_target_index = true`(执行计划命中目标索引);
 - `estimated_rows_after` 较 `estimated_rows_before` 明显下降(示例阈值:`after ≤ before × 10%`);
-- `latency_p95_after` 相对故障前基线恢复(示例阈值:`p95_after ≤ 基线 × 1.2`;不依赖绝对毫秒数,判定基于相对基线变化);
-- `consecutive_healthy_checks >= 3`(连续 3 次采样通过)。
+- `latency_p95_after` 相对健康基线恢复(示例阈值:`p95_after ≤ 基线 × 1.2`;不依赖绝对毫秒数,判定基于相对基线变化);
+- `consecutive_healthy_checks >= 3`(连续 3 批固定探测请求,每批独立计算一次 P95,全部通过才算恢复)。
+
+恢复验证**不直接读取包含修复前慢请求的 Micrometer 滑动窗口**(旧样本会污染 P95);修复后主动执行三批固定探测请求(与健康基线采集使用相同参数与负载),每批计算一次 P95。
 
 其余情况返回 `not_recovered` 或 `inconclusive`,均进入 `report(needs_human)`。V1.0 不自动回滚——修复动作是创建索引,未恢复时删除索引只会重新制造原始故障;只有当确认修复动作引入新风险时,才可提出新的回滚 Action 并再次走人工审批。
 
@@ -134,6 +138,9 @@ class IncidentState(TypedDict):
     title: str
     description: str
     severity: str
+    service_ref: str
+    observed_at: str
+    trigger_trace_id: str | None        # 调查过程中由证据补充
     status: str                       # 见 4.6
     hypotheses: Annotated[list[Hypothesis], id_reducer]
     evidence: Annotated[list[Evidence], id_reducer]
@@ -160,6 +167,16 @@ class IncidentState(TypedDict):
 - 每次调查使用**稳定且唯一的 thread_id**(与 `agent_run` 绑定);审批恢复时使用原 thread_id。
 - 审批节点在 `interrupt()` 前**不得执行不可重复的写操作**(LangGraph 恢复时会从包含 interrupt() 的节点开头重放,而非从断点行继续),节点内副作用需幂等。
 - 审批绑定具体修复方案:`incident_id + fix_proposal_id + action_type + parameters_hash + approved_by + approved_at + expires_at`;修复方案变化后旧审批自动失效。
+- **过期审批自动处理**:AI 服务每 30 秒后台扫描过期且仍为 pending 的 Approval,原子更新为 expired,并用对应 `thread_id` 恢复 LangGraph,图进入 `report(rejected_or_expired)`。不需要 Redis 定时任务。
+- **审批人身份**:V1.0 不做用户系统,由服务端固定记录 `DEMO_APPROVER_ID=demo-approver`,README 注明这是本地演示身份,不代表生产级认证。
+
+### 4.8 真实模型运行模式
+
+- 环境变量 `LLM_MODE=fake | openai_compatible`;`fake` 用于测试与无密钥环境,`openai_compatible` 调用真实模型。
+- `hypothesize` 使用 Structured Output 强制输出假设结构;模型格式错误最多重试两次,重试耗尽或模型不可用 → 进入 `needs_human`。
+- `collect_evidence` 只绑定五个只读调查工具,不暴露 `execute_fix` / `verify_recovery`。
+- `report` 只使用已落库事实(Incident / 假设 / 证据 / 审批 / 执行 / 恢复记录)生成报告,不引入模型臆测。
+- 真实模型冒烟测试默认不进入 CI,需显式配置密钥后手动运行。
 
 ## 5. 受控工具层
 
@@ -167,9 +184,11 @@ class IncidentState(TypedDict):
 
 Agent 永远无法提交任意 SQL、Shell、服务名或表名;所有参数经 Pydantic 校验,枚举白名单由服务端维护。
 
+工具分两组:**LLM 可调用的调查工具(5 个)**——`get_service_metrics`、`get_trace`、`list_expensive_query_digests`、`get_query_plan`、`get_index_info`;**仅由 LangGraph 确定性节点调用(2 个)**——`execute_fix`、`verify_recovery`。`execute_fix` 与 `verify_recovery` 绝不绑定给 LLM。
+
 | 工具 | 入参 | 出参核心字段 | 数据来源/账号 |
 |---|---|---|---|
-| `get_service_metrics` | `service_ref`, `window_seconds` | P95 / QPS / 错误率 | Java 内部观测接口(Micrometer)/ ai_investigator |
+| `get_service_metrics` | `service_ref`, `window_seconds` | P95 / QPS / 错误率 / `representative_slow_trace_id` | Java 内部观测接口(Micrometer)/ ai_investigator |
 | `get_trace` | `trace_id` | 两服务阶段耗时组合;查无 → `TRACE_NOT_FOUND` | Java 观测记录 / ai_investigator |
 | `list_expensive_query_digests` | `incident_id` | 增量:次数 / 总耗时 / 扫描行数 / `QUERY_SAMPLE_TEXT` | `performance_schema.events_statements_summary_by_digest` 基线差值 / ai_investigator |
 | `get_query_plan` | `query_ref`, `sample_parameters` | `EXPLAIN FORMAT=JSON` 结果 | 查询白名单模板 / ai_investigator |
@@ -189,6 +208,7 @@ Agent 永远无法提交任意 SQL、Shell、服务名或表名;所有参数经 
 - **`get_query_plan` 不接收完整 SQL**:`query_ref` 必须来自服务端查询白名单(V1.0 仅 `INVENTORY_LOOKUP`),SQL 模板固化在代码中,参数经类型/范围/长度校验,服务端固定执行 `EXPLAIN FORMAT=JSON`。理由:MySQL `EXPLAIN` 支持 SELECT/DELETE/INSERT/UPDATE,不能依赖前缀拼接保证安全。
 - **`list_expensive_query_digests` 使用基线差值**:digest 计数为累计值,Incident 创建时(ingest 节点)采集基线快照,调查时用当前值减基线,得到本次 Incident 期间的新增量。
 - **`execute_fix` 执行前六项校验**:Incident 处于 `awaiting_approval`;Approval 状态为 approved;Approval 未过期且未消费;`parameters_hash` 与当前方案一致;`fix_proposal_id` 属于当前 Incident;幂等键 `incident_id + fix_proposal_id + parameters_hash` 无成功执行记录。实际 DDL 模板固化在代码中,`fix_definition` 表只存动作名称/风险级别/说明,不存可动态执行的 SQL。
+- **`execute_fix` 支持 no_op**:审批后发现索引已存在,返回 `no_op` 而非报错,也绝不重复创建;`fix_execution.status` 含 `pending / running / succeeded / failed / no_op`;`no_op` 后仍进入 `verify_recovery`。
 - **`verify_recovery` 由规则计算**:LLM 不参与恢复与否的判断。
 
 ## 6. 数据模型
@@ -203,21 +223,27 @@ Agent 永远无法提交任意 SQL、Shell、服务名或表名;所有参数经 
 
 | 表 | 关键字段 |
 |---|---|
-| `incident` | id, title, description, severity, status, created_at, finished_at |
-| `agent_run` | id, incident_id, thread_id, status, investigation_round, tool_call_count, baseline_snapshot(JSON), started_at, finished_at |
-| `hypothesis` | id, incident_id, description, status(proposed/supported/refuted/unknown), confidence, created_at |
+| `incident` | id, title, description, severity, service_ref, observed_at, trigger_trace_id, healthy_metrics_baseline(JSON), status, created_at, finished_at |
+| `agent_run` | id, incident_id, thread_id, status, investigation_round, tool_call_count, incident_digest_baseline(JSON), started_at, finished_at |
+| `hypothesis` | id, incident_id, description, status(proposed/supported/refuted/unknown), created_at |
 | `evidence` | id, incident_id, tool_call_id, source, content, created_at |
 | `hypothesis_evidence` | hypothesis_id, evidence_id, relation(supports/refutes) |
 | `tool_call` | id, incident_id, tool_name, input(JSON), output(JSON), status, duration_ms, created_at |
 | `fix_definition` | id, action_name, risk_level, description |
 | `fix_proposal` | id, incident_id, fix_definition_id, parameters_json, parameters_hash, risk_level, reason, status, created_at |
 | `approval` | id, incident_id, fix_proposal_id, action_type, parameters_hash, status, approver, comment, expires_at, consumed_at |
-| `fix_execution` | id, incident_id, fix_proposal_id, approval_id, idempotency_key, status, result, created_at |
+| `fix_execution` | id, incident_id, fix_proposal_id, approval_id, idempotency_key, status(pending/running/succeeded/failed/no_op), result, created_at |
 | `recovery_check` | id, incident_id, fix_execution_id, index_present, query_plan_uses_target_index, estimated_rows_before, estimated_rows_after, latency_p95_before, latency_p95_after, consecutive_healthy_checks, status, created_at |
 | `postmortem` | id, incident_id, content(JSON), created_at |
-| `incident_event` | id, incident_id, sequence, event_type, payload(JSON), occurred_at |
+| `incident_event` | id, incident_id, sequence, event_type, payload(JSON), occurred_at;`UNIQUE(incident_id, sequence)`、`INDEX(incident_id, id)` |
 
 `incident_event` 为 SSE 事件持久化表,支持断线补发与审计。
+
+基线数据区分三份,不可混用:
+
+- **healthy_metrics_baseline**:健康基线,索引存在时用固定负载提前采集,属于 Incident / 场景运行记录,不是故障期间状态;
+- **incident_digest_baseline**:Incident 创建时采集的 digest 计数器快照,只用于计算 Performance Schema 增量;
+- **recovery_probe_result**:修复后使用相同参数与负载重新采样,用于恢复判定。
 
 ### 6.3 数据库账号与连接池(四账号三连接池)
 
@@ -247,6 +273,7 @@ Agent 永远无法提交任意 SQL、Shell、服务名或表名;所有参数经 
   - `order-service`:`total_duration_ms`、`inventory_http_duration_ms`
   - `inventory-service`:`total_duration_ms`、`database_duration_ms`
 - 观测记录使用内存 TTL 缓存或固定长度 Ring Buffer(如保留最近 10 分钟、最多 10,000 条);服务重启后记录丢失在 V1.0 可接受,但必须返回 `TRACE_NOT_FOUND`,**不允许 LLM 补造缺失数据**。
+- 观测接口在窗口内选择**最慢的一个请求**作为 `representative_slow_trace_id` 返回,供 Agent 衔接 `get_trace` 定位慢请求的耗时分布。
 - 提供独立演示负载发生器(脚本或 Compose 可选 profile,不进正式业务接口),保证演示期间有持续请求、指标非空。
 
 ### 7.3 演示场景控制(与处置路径隔离)
@@ -259,7 +286,7 @@ GET  /internal/scenarios/SCN-001/status    # 场景状态
 
 - 仅在 `DEMO_MODE=true` 时启用;使用独立管理密钥,密钥仅存于 AI 服务环境变量,不出现在 Vue 代码中。
 - `inject` 用于开始演示;`reset` 只用于演示前后的环境初始化,**属于"实验环境重置"而非正式故障处置**,运行中的 Incident 禁止调用 reset。
-- 正常处置过程中,创建索引只能通过审批后的 `execute_fix`;`execute_fix` 是 Incident 处置过程中的唯一写路径。
+- 正常处置过程中,创建索引只能通过审批后的 `execute_fix`;`execute_fix` 是 **Incident 正常处置过程中的唯一业务写路径**,场景注入与环境重置属于隔离的演示控制路径。
 - 注入与重置同样记录审计日志;`inject`/`reset` 均幂等。
 
 ### 7.4 查询与索引定义(全文统一,不得出现第二种写法)
@@ -273,7 +300,7 @@ GET  /internal/scenarios/SCN-001/status    # 场景状态
 创建事件与启动调查分离,便于失败重试、回放与状态管理:
 
 ```
-POST /api/incidents                                      # 创建 Incident + 采集基线 → 201
+POST /api/incidents                                      # 创建 Incident + 采集 digest 基线 → 201
 GET  /api/incidents                                      # 列表(可按状态筛选)
 GET  /api/incidents/{incident_id}                        # 详情快照
 POST /api/incidents/{incident_id}/investigations         # 创建 AgentRun + 异步启动 → 202(重复请求不重复启动)
@@ -281,11 +308,23 @@ GET  /api/incidents/{incident_id}/runs/{run_id}          # 单次调查详情
 GET  /api/incidents/{incident_id}/stream                 # SSE(Last-Event-ID 支持)
 POST /api/incidents/{incident_id}/approvals/{approval_id}/decision   # 审批决策
 GET  /api/incidents/{incident_id}/report                 # 复盘报告
-POST /api/demo/scenarios/SCN-001/{inject|reset|status}   # 演示场景代理(仅 DEMO_MODE)
+POST /api/demo/scenarios/SCN-001/inject                   # 演示场景代理:注入故障(仅 DEMO_MODE)
+POST /api/demo/scenarios/SCN-001/reset                    # 演示场景代理:实验环境重置(仅 DEMO_MODE)
+GET  /api/demo/scenarios/SCN-001/status                   # 演示场景代理:场景状态(仅 DEMO_MODE)
 ```
 
+`POST /api/incidents` 创建 Incident 时携带 `service_ref`、`observed_at`,可选 `trigger_trace_id`(调查过程中由证据补充)。
+
 审批决策请求体:`{ "decision": "approved" | "rejected", "comment": "..." }`。
-服务端校验:Approval 属于当前 Incident;FixProposal 未变化;`parameters_hash` 一致;Approval 未过期未消费;Incident 处于 `awaiting_approval`;相同 Action 未成功执行过。**审批人身份由服务端确定,不信任请求体中的 `approved_by`**。
+服务端校验:Approval 属于当前 Incident;FixProposal 未变化;`parameters_hash` 一致;Approval 未过期未消费;Incident 处于 `awaiting_approval`;相同 Action 未成功执行过。**审批人身份由服务端确定(固定 `DEMO_APPROVER_ID=demo-approver`),不信任请求体中的 `approved_by`**。
+
+### 8.1 后台执行模型(202 之后由谁继续)
+
+- AI 服务只运行一个 Uvicorn Worker。
+- 调查接口使用受管理的 `asyncio.Task` 启动 `graph.ainvoke()`;审批接口使用相同 `thread_id` 调用 `Command(resume=...)` 恢复。
+- `agent_run` 与 LangGraph Checkpoint 持久化;服务启动时扫描 `investigating / executing / verifying` 状态的 AgentRun,从最后 Checkpoint 恢复未完成任务。
+- 所有外部副作用保持幂等;Docker 交付时 SQLite Checkpoint 文件挂载持久卷。
+- V1.0 不需要 Redis,也不需要任务队列。
 
 ## 9. SSE 设计
 
@@ -301,6 +340,7 @@ POST /api/demo/scenarios/SCN-001/{inject|reset|status}   # 演示场景代理(�
 要求:
 
 - 持久化到 `incident_event`;SSE 按 `Last-Event-ID` 断线补发;前端按 `event_id` 去重。
+- 领域状态修改与 `incident_event` 插入尽量在**同一个 MySQL 事务**中完成,避免状态已变而事件缺失;heartbeat **不写入** `incident_event`。
 - 15~30 秒发送一次 heartbeat。
 - Incident 进入终态后发送最终事件并关闭连接。
 - 页面首次打开先请求 Incident 当前快照,再连接 SSE;浏览器重连后只补发缺失事件。
@@ -316,7 +356,7 @@ POST /api/demo/scenarios/SCN-001/{inject|reset|status}   # 演示场景代理(�
 
 ## 11. 安全设计(汇总)
 
-- 四数据库账号隔离 + Python 三连接池;`execute_fix` 为唯一写路径。
+- 四数据库账号隔离 + Python 三连接池;`execute_fix` 是 Incident 正常处置过程中的唯一业务写路径,场景注入与环境重置属于隔离的演示控制路径。
 - 工具白名单;Agent 不能提交任意 SQL、Shell、服务名、表名、完整查询。
 - `get_query_plan` 白名单模板;`execute_fix` 六项审批校验 + 幂等键。
 - 场景管理路径与 Incident 处置路径隔离;`reset` 仅演示环境,运行中 Incident 禁止调用。
@@ -372,7 +412,7 @@ POST /api/demo/scenarios/SCN-001/{inject|reset|status}   # 演示场景代理(�
 
 - `.env.example`(提交)、`.env.local`(真实密码,加入 `.gitignore`)。
 - 脚本:`scripts/init-database.ps1`、`scripts/generate-data.ps1`、`scripts/start-dev.ps1`、`scripts/run-load.ps1`。
-- 配置项(全部走环境变量,不写死 localhost):`BUSINESS_DB_URL`、`CONTROL_DB_URL`、`INVENTORY_SERVICE_URL`、`ORDER_SERVICE_URL`、`AI_SERVICE_URL`、`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`、`CHECKPOINT_DB_PATH`、`DEMO_MODE`。
+- 配置项(全部走环境变量,不写死 localhost):`BUSINESS_DB_URL`、`CONTROL_DB_URL`、`INVENTORY_SERVICE_URL`、`ORDER_SERVICE_URL`、`AI_SERVICE_URL`、`OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL`、`LLM_MODE`、`CHECKPOINT_DB_PATH`、`DEMO_MODE`。
 
 ### 13.3 最终交付(M5)
 
@@ -392,7 +432,7 @@ V1.0 完整验收后进入 **V1.1**:Qdrant、Runbook RAG、Agent 评测集、调
 
 ## 15. 演示脚本(面试用)
 
-1. `reset` 重置实验环境(重建索引、清数据)。
+1. `reset` 重置实验环境:重建目标索引,清理上一轮 Incident、观测缓存与场景状态,**保留业务压测数据**。
 2. `inject` 注入故障(drop 联合索引)。
 3. 启动负载发生器产生持续请求。
 4. 创建 Incident → 启动调查。
