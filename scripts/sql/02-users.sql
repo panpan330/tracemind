@@ -5,6 +5,8 @@ CREATE USER IF NOT EXISTS 'ai_investigator'@'%' IDENTIFIED BY 'investigator_pwd'
 CREATE USER IF NOT EXISTS 'fix_executor'@'%' IDENTIFIED BY 'fix_executor_pwd';
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_business.* TO 'app_business'@'%';
+-- 场景注入/重置需要索引 DDL(仅 INDEX 权限,最小化)
+GRANT INDEX ON tracemind_business.* TO 'app_business'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_business_test.* TO 'app_business'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_control.* TO 'tracemind_control_app'@'%';
 GRANT SELECT ON tracemind_business.* TO 'ai_investigator'@'%';
