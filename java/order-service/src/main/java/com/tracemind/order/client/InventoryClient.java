@@ -1,5 +1,6 @@
 package com.tracemind.order.client;
 
+import com.tracemind.common.obs.ObservationStore;
 import com.tracemind.common.trace.TraceIdFilter;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,21 +13,33 @@ import java.util.Map;
 @Component
 public class InventoryClient {
     private final RestClient restClient;
+    private final ObservationStore observationStore;
 
-    public InventoryClient(@Value("${INVENTORY_SERVICE_URL:http://localhost:8082}") String baseUrl) {
+    public InventoryClient(@Value("${INVENTORY_SERVICE_URL:http://localhost:8082}") String baseUrl,
+                           ObservationStore observationStore) {
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(new JdkClientHttpRequestFactory())
                 .build();
+        this.observationStore = observationStore;
     }
 
     @SuppressWarnings("unchecked")
     public Map<String, Object> queryStock(long skuId, long warehouseId) {
-        return restClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/api/inventory")
-                        .queryParam("skuId", skuId).queryParam("warehouseId", warehouseId).build())
-                .header(TraceIdFilter.TRACE_ID_HEADER, MDC.get("traceId"))
-                .retrieve()
-                .body(Map.class);
+        long start = System.nanoTime();
+        try {
+            return restClient.get()
+                    .uri(uriBuilder -> uriBuilder.path("/api/inventory")
+                            .queryParam("skuId", skuId).queryParam("warehouseId", warehouseId).build())
+                    .header(TraceIdFilter.TRACE_ID_HEADER, MDC.get("traceId"))
+                    .retrieve()
+                    .body(Map.class);
+        } finally {
+            long httpMs = (System.nanoTime() - start) / 1_000_000;
+            String traceId = MDC.get("traceId");
+            if (traceId != null) {
+                observationStore.record("order-service", traceId, "order.inventory_http", httpMs, true);
+            }
+        }
     }
 }

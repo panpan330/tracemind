@@ -1,0 +1,41 @@
+package com.tracemind.inventory;
+
+import com.tracemind.common.obs.ObservationStore;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.MDC;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+
+@Component
+public class InventoryTraceInterceptor extends OncePerRequestFilter {
+    private final ObservationStore observationStore;
+
+    public InventoryTraceInterceptor(ObservationStore observationStore) {
+        this.observationStore = observationStore;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+        if (request.getRequestURI().startsWith("/internal/")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+        long start = System.nanoTime();
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            long totalMs = (System.nanoTime() - start) / 1_000_000;
+            String traceId = MDC.get("traceId");
+            if (traceId != null) {
+                observationStore.record("inventory-service", traceId, "inventory.total", totalMs,
+                        response.getStatus() < 500);
+            }
+        }
+    }
+}
