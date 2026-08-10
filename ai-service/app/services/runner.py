@@ -1,32 +1,99 @@
-"""LangGraph 执行管理:全局持久化 checkpointer + 审批恢复。
+"""LangGraph 执行管理:全局持久化 checkpointer + asyncio.Task 后台执行 + 启动恢复。
 
-后台 asyncio.Task 管理与启动 checkpoint 恢复在 Task 3.6 补充。
+- start_investigation:创建后台任务跑图,thread_id 固定为 agent_run.thread_id。
+- resume_investigation:审批/过期扫描用 Command(resume=...) 恢复。
+- recover_pending_runs:启动时扫描未完成任务,从 checkpoint 继续。
+
+checkpointer 使用同步 SqliteSaver(aiosqlite/AsyncSqliteSaver 在 Windows 测试环境
+存在偶发死锁),图调用经 asyncio.to_thread 在线程池执行,避免阻塞事件循环。
 """
+import asyncio
+import logging
 import os
+import sqlite3
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from app.config import settings
+from app.repositories import incident_repo, run_repo
 
-_saver: AsyncSqliteSaver | None = None
+logger = logging.getLogger(__name__)
+
+_saver: SqliteSaver | None = None
+_tasks: dict[int, asyncio.Task] = {}
 
 
-async def get_saver() -> AsyncSqliteSaver:
+def get_saver() -> SqliteSaver:
     global _saver
     if _saver is None:
         path = settings.checkpoint_path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        _saver = await AsyncSqliteSaver.from_conn_string(path)
+        _saver = SqliteSaver(sqlite3.connect(path, check_same_thread=False))
     return _saver
+
+
+async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dict) -> None:
+    from app.agent.graph import build_graph
+    graph = build_graph(checkpointer=get_saver())
+    try:
+        result = await asyncio.to_thread(
+            graph.invoke,
+            initial,
+            {"thread_id": thread_id, "recursion_limit": 100},
+        )
+    except Exception:
+        logger.exception("graph run failed incident=%s run=%s", incident_id, run_id)
+        run_repo.update_run_status(run_id, "failed")
+        return
+    status = result.get("status") or "finished"
+    run_repo.update_run_status(run_id, status)
+    logger.info("graph finished incident=%s run=%s status=%s", incident_id, run_id, status)
+
+
+async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> None:
+    run_repo.update_run_status(run_id, "investigating")
+    inc = incident_repo.get_incident(incident_id)
+    initial = {
+        "incident_id": incident_id,
+        "run_id": run_id,
+        "thread_id": thread_id,
+        "severity": inc.severity if inc else "medium",
+        "service_ref": inc.service_ref if inc else "inventory-service",
+        "status": "created",
+    }
+    task = asyncio.create_task(_run_graph(incident_id, run_id, thread_id, initial))
+    _tasks[run_id] = task
+    task.add_done_callback(lambda _t: _tasks.pop(run_id, None))
 
 
 async def resume_investigation(thread_id: str, resume_value: dict) -> None:
     """用同一 thread_id 恢复挂起的图(interrupt 处继续)。"""
     from app.agent.graph import build_graph
-    saver = await get_saver()
-    graph = build_graph(checkpointer=saver)
-    await graph.ainvoke(
+    graph = build_graph(checkpointer=get_saver())
+    await asyncio.to_thread(
+        graph.invoke,
         Command(resume=resume_value),
-        config={"thread_id": thread_id, "recursion_limit": 100},
+        {"thread_id": thread_id, "recursion_limit": 100},
     )
+
+
+async def recover_pending_runs() -> None:
+    """启动时从 checkpoint 恢复未完成任务(interrupt 处重新挂起等待审批)。"""
+    pending = run_repo.list_pending_runs()
+    for run in pending:
+        inc = incident_repo.get_incident(run.incident_id)
+        initial = {
+            "incident_id": run.incident_id,
+            "run_id": run.id,
+            "thread_id": run.thread_id,
+            "severity": inc.severity if inc else "medium",
+            "service_ref": inc.service_ref if inc else "inventory-service",
+            "status": run.status,
+        }
+        task = asyncio.create_task(
+            _run_graph(run.incident_id, run.id, run.thread_id, initial))
+        _tasks[run.id] = task
+        task.add_done_callback(lambda _t: _tasks.pop(run.id, None))
+    if pending:
+        logger.info("recovered %d pending run(s)", len(pending))

@@ -12,7 +12,7 @@ class ToolCallIn(BaseModel):
 
 
 @router.post("/{incident_id}/investigations", status_code=202)
-def start_investigation(incident_id: int):
+async def start_investigation(incident_id: int):
     inc = incident_repo.get_incident(incident_id)
     if inc is None:
         raise HTTPException(404, "incident not found")
@@ -20,7 +20,9 @@ def start_investigation(incident_id: int):
     runs = run_repo.list_runs(incident_id)
     baseline = runs[0].incident_digest_baseline if runs else None
     run = run_repo.create_run(incident_id, baseline=baseline)
-    return {"run_id": run.id, "thread_id": run.thread_id, "status": run.status}
+    from app.services import runner
+    await runner.start_investigation(incident_id, run.id, run.thread_id)
+    return {"run_id": run.id, "thread_id": run.thread_id, "status": "investigating"}
 
 
 @router.get("/{incident_id}/runs/{run_id}")

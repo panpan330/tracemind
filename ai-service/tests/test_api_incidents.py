@@ -16,7 +16,11 @@ def test_create_incident():
     assert body["status"] == "created"
 
 
-def test_start_investigation_returns_202():
+def test_start_investigation_returns_202(monkeypatch):
+    async def fake_start(incident_id, run_id, thread_id):
+        pass  # 后台图执行由 test_runner.py 覆盖,这里隔离真实启动
+
+    monkeypatch.setattr("app.services.runner.start_investigation", fake_start)
     inc = client.post("/api/incidents", json={
         "title": "t", "severity": "medium", "service_ref": "inventory-service"}).json()
     resp = client.post(f"/api/incidents/{inc['id']}/investigations")
