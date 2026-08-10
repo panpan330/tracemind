@@ -1,9 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON,
                         String, Text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -21,7 +25,7 @@ class Incident(Base):
     trigger_trace_id: Mapped[Optional[str]] = mapped_column(String(64))
     healthy_metrics_baseline: Mapped[Optional[dict]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), default="created")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
@@ -34,7 +38,7 @@ class AgentRun(Base):
     investigation_round: Mapped[int] = mapped_column(Integer, default=0)
     tool_call_count: Mapped[int] = mapped_column(Integer, default=0)
     incident_digest_baseline: Mapped[Optional[dict]] = mapped_column(JSON)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
@@ -44,7 +48,7 @@ class Hypothesis(Base):
     incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     description: Mapped[str] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(16), default="proposed")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Evidence(Base):
@@ -54,7 +58,7 @@ class Evidence(Base):
     tool_call_id: Mapped[Optional[str]] = mapped_column(String(64))
     source: Mapped[str] = mapped_column(String(64))
     content: Mapped[Optional[dict]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class HypothesisEvidence(Base):
@@ -75,7 +79,7 @@ class ToolCall(Base):
     output: Mapped[Optional[dict]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(16), default="success")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class FixDefinition(Base):
@@ -96,7 +100,7 @@ class FixProposal(Base):
     risk_level: Mapped[str] = mapped_column(String(16), default="medium")
     reason: Mapped[Optional[str]] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(16), default="proposed")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Approval(Base):
@@ -111,7 +115,7 @@ class Approval(Base):
     comment: Mapped[Optional[str]] = mapped_column(String(512))
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class FixExecution(Base):
@@ -123,7 +127,7 @@ class FixExecution(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     result: Mapped[Optional[dict]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class RecoveryCheck(Base):
@@ -139,7 +143,7 @@ class RecoveryCheck(Base):
     latency_p95_after: Mapped[Optional[int]] = mapped_column(BigInteger)
     consecutive_healthy_checks: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Postmortem(Base):
@@ -147,7 +151,7 @@ class Postmortem(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content: Mapped[Optional[dict]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class IncidentEvent(Base):
@@ -157,4 +161,4 @@ class IncidentEvent(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(32))
     payload: Mapped[Optional[dict]] = mapped_column(JSON)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
