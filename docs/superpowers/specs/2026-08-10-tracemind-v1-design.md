@@ -117,8 +117,8 @@ ingest
 
 - `index_present = true`(目标索引已存在);
 - `query_plan_uses_target_index = true`(执行计划命中目标索引);
-- `estimated_rows_after` 较 `estimated_rows_before` 明显下降;
-- `latency_p95_after` 相对故障前基线恢复(不依赖绝对毫秒数,判定基于相对基线变化);
+- `estimated_rows_after` 较 `estimated_rows_before` 明显下降(示例阈值:`after ≤ before × 10%`);
+- `latency_p95_after` 相对故障前基线恢复(示例阈值:`p95_after ≤ 基线 × 1.2`;不依赖绝对毫秒数,判定基于相对基线变化);
 - `consecutive_healthy_checks >= 3`(连续 3 次采样通过)。
 
 其余情况返回 `not_recovered` 或 `inconclusive`,均进入 `report(needs_human)`。V1.0 不自动回滚——修复动作是创建索引,未恢复时删除索引只会重新制造原始故障;只有当确认修复动作引入新风险时,才可提出新的回滚 Action 并再次走人工审批。
