@@ -22,6 +22,7 @@ class IncidentState(TypedDict, total=False):
     max_investigation_rounds: int
     tool_call_count: int
     max_tool_calls: int
+    evidence_gate: dict  # E1~E5 布尔判定(collect_evidence 产出)
     termination_reason: str | None
     hypotheses: Annotated[list[dict], dedup_by_id]
     evidence: Annotated[list[dict], dedup_by_id]
