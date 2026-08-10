@@ -23,3 +23,7 @@ dist/
 # 其他
 .DS_Store
 *.log
+
+# 运行时产物
+ai-service/data/
+web/*.tsbuildinfo
