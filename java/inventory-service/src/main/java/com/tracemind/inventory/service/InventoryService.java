@@ -24,7 +24,7 @@ public class InventoryService {
         long dbMs = (System.nanoTime() - start) / 1_000_000;
         String traceId = MDC.get("traceId");
         if (traceId != null) {
-            observationStore.record("inventory-service", traceId, "inventory.database", dbMs, true);
+            observationStore.record("inventory-service", traceId, "database", dbMs, true);
         }
         return Optional.ofNullable(inventory);
     }

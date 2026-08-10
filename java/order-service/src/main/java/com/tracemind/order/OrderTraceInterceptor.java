@@ -1,5 +1,6 @@
 package com.tracemind.order;
 
+import com.tracemind.common.obs.MetricsCollector;
 import com.tracemind.common.obs.ObservationStore;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -14,9 +15,11 @@ import java.io.IOException;
 @Component
 public class OrderTraceInterceptor extends OncePerRequestFilter {
     private final ObservationStore observationStore;
+    private final MetricsCollector metricsCollector;
 
-    public OrderTraceInterceptor(ObservationStore observationStore) {
+    public OrderTraceInterceptor(ObservationStore observationStore, MetricsCollector metricsCollector) {
         this.observationStore = observationStore;
+        this.metricsCollector = metricsCollector;
     }
 
     @Override
@@ -31,10 +34,11 @@ public class OrderTraceInterceptor extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             long totalMs = (System.nanoTime() - start) / 1_000_000;
+            boolean success = response.getStatus() < 500;
+            metricsCollector.record(totalMs, success);
             String traceId = MDC.get("traceId");
             if (traceId != null) {
-                observationStore.record("order-service", traceId, "order.total", totalMs,
-                        response.getStatus() < 500);
+                observationStore.record("order-service", traceId, "total", totalMs, success);
             }
         }
     }

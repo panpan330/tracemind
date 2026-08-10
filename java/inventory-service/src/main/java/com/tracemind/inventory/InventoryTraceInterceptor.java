@@ -1,5 +1,6 @@
 package com.tracemind.inventory;
 
+import com.tracemind.common.obs.MetricsCollector;
 import com.tracemind.common.obs.ObservationStore;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -14,9 +15,11 @@ import java.io.IOException;
 @Component
 public class InventoryTraceInterceptor extends OncePerRequestFilter {
     private final ObservationStore observationStore;
+    private final MetricsCollector metricsCollector;
 
-    public InventoryTraceInterceptor(ObservationStore observationStore) {
+    public InventoryTraceInterceptor(ObservationStore observationStore, MetricsCollector metricsCollector) {
         this.observationStore = observationStore;
+        this.metricsCollector = metricsCollector;
     }
 
     @Override
@@ -31,10 +34,11 @@ public class InventoryTraceInterceptor extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             long totalMs = (System.nanoTime() - start) / 1_000_000;
+            boolean success = response.getStatus() < 500;
+            metricsCollector.record(totalMs, success);
             String traceId = MDC.get("traceId");
             if (traceId != null) {
-                observationStore.record("inventory-service", traceId, "inventory.total", totalMs,
-                        response.getStatus() < 500);
+                observationStore.record("inventory-service", traceId, "total", totalMs, success);
             }
         }
     }

@@ -38,7 +38,7 @@ public class InventoryClient {
             long httpMs = (System.nanoTime() - start) / 1_000_000;
             String traceId = MDC.get("traceId");
             if (traceId != null) {
-                observationStore.record("order-service", traceId, "order.inventory_http", httpMs, true);
+                observationStore.record("order-service", traceId, "inventory_http", httpMs, true);
             }
         }
     }
