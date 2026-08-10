@@ -1,0 +1,6 @@
+pyproject.toml
+tracemind_ai.egg-info/PKG-INFO
+tracemind_ai.egg-info/SOURCES.txt
+tracemind_ai.egg-info/dependency_links.txt
+tracemind_ai.egg-info/requires.txt
+tracemind_ai.egg-info/top_level.txt
