@@ -13,4 +13,6 @@ GRANT CREATE TEMPORARY TABLES ON tracemind_control.* TO 'tracemind_control_app'@
 GRANT SELECT ON tracemind_business.* TO 'ai_investigator'@'%';
 GRANT SELECT ON tracemind_business_test.* TO 'ai_investigator'@'%';
 GRANT SELECT ON performance_schema.* TO 'ai_investigator'@'%';
+-- fix_executor:仅 INDEX 权限,execute_fix 唯一写路径
+GRANT INDEX ON tracemind_business.* TO 'fix_executor'@'%';
 FLUSH PRIVILEGES;
