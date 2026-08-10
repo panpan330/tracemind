@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     demo_mode: bool = False
     demo_key: str = ""
     llm_mode: str = "fake"
+    # OpenAI 兼容 LLM(V1.1 接入;base_url 可为任意兼容端点,如阿里云百炼/DeepSeek/OpenAI)
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
     demo_approver_id: str = "demo-approver"
     checkpoint_path: str = "./data/checkpoints.sqlite"
 
