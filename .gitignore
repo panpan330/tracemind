@@ -1,0 +1,24 @@
+# Reasonix / 工具
+.reasonix/
+
+# 本地环境配置(含真实密码)
+.env.local
+.env
+
+# Java
+java/**/target/
+*.class
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# 其他
+.DS_Store
+*.log
