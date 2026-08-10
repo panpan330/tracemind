@@ -1,7 +1,7 @@
 # TraceMind V1.1 设计:真实 LLM + Tool Calling + Runbook RAG + 评测体系
 
 > 阶段:V1.0(完整闭环)已验收通过。本文档定义 V1.1 范围与设计。
-> 本文档经分段评审定稿;核心决策:三模式/确定性降级/状态分离/预算拆分/参数程序解析/可执行约束/Fixture 评测/指标公式化/评测运行记录。
+> 核心决策:三模式/确定性降级/状态分离/预算拆分/参数程序解析/可执行约束/Fixture 评测/指标公式化/评测运行记录。
 
 ## 1. 目标与范围
 
@@ -23,7 +23,7 @@ V1.0 闭环使用 FakeLLM(确定性模拟)。V1.1 将其替换为**真实模型*
 
 | 模式 | 用途 | 失败策略 |
 |---|---|---|
-| `fake` | 单元测试 / CI | FakeLLM(**仅存在于测试**) |
+| `fake` | 单元测试 / CI / 显式回归 | FakeLLM(仅用于测试、CI 和显式回归模式) |
 | `real_strict` | 正式评测 | 禁止降级;调查阶段失败 → `needs_human` + `termination_reason=llm_unavailable/invalid_model_output` |
 | `real_demo` | 人工演示 | **确定性组件降级** + 显式标记 `degraded=true`、`llm_degraded` 事件、审计记录错误原因与执行者、复盘写明"模型不可用已降级" |
 
@@ -32,7 +32,7 @@ V1.0 闭环使用 FakeLLM(确定性模拟)。V1.1 将其替换为**真实模型*
 ### 2.2 状态分离
 
 - `IncidentStatus`(业务结果,V1.0 完整枚举):created / investigating / awaiting_approval / executing / verifying / recovered / needs_human / rejected / failed;`needs_human` 来自多来源:LLM 失败、证据不足、预算耗尽、矛盾证据、恢复失败;
-- `AgentRunStatus`(调查进程):pending / running / interrupted / completed / failed / cancelled;**degraded 是属性不是主状态**:`degraded: bool` + `degradation_reasons: list[str]`(运行中可同时处于降级与等待审批);
+- `AgentRunStatus`(调查进程):pending / running / interrupted / completed / failed / cancelled;**degraded 是属性不是主状态**:`degraded: bool` + `degradation_reasons: list[str]`(运行中可同时处于降级与等待审批);降级原因枚举:`llm_unavailable / invalid_model_output / tool_call_unsupported / rag_unavailable / report_generation_failed`;
 - `ReportStatus`(报告):pending / failed / ready;**报告阶段失败不推翻 recovered**(模型无法生成复盘 → `report.status=failed` + `agent_run.degraded=true`,可稍后重生成)。
 
 ### 2.3 Provider 拆分与传输
@@ -46,14 +46,14 @@ Chat 与 Embedding 是两种能力,配置独立(可共用 key,架构不绑定):
 | `TRACEMIND_CHAT_BASE_URL` | 空 | 已配(百炼兼容端点) |
 | `TRACEMIND_CHAT_API_KEY` | 空 | .env.local(已配) |
 | `TRACEMIND_CHAT_MODEL` | `qwen3.7-plus` | 演示别名 |
-| `TRACEMIND_EVAL_CHAT_MODEL` | 空(=CHAT_MODEL) | 评测固定快照 `qwen3.7-plus-2026-05-26`(已实测) |
+| `TRACEMIND_EVAL_CHAT_MODEL` | 无(必填) | 评测固定快照 `qwen3.7-plus-2026-05-26`(已实测);**eval-real / e2e-scn001-real / smoke-real-llm 发现为空必须立即失败**;real_demo 才允许用 `TRACEMIND_CHAT_MODEL` 别名 |
 | `TRACEMIND_EMBEDDING_PROVIDER` | `bailian` | 与 Chat 独立 |
 | `TRACEMIND_EMBEDDING_BASE_URL` | 空 | 可与 Chat 共用端点 |
 | `TRACEMIND_EMBEDDING_API_KEY` | 空 | 可与 Chat 共用 key(架构不绑定) |
 | `TRACEMIND_EMBEDDING_MODEL` | `text-embedding-v4` | — |
 | `TRACEMIND_EMBEDDING_DIMENSIONS` | `1024` | 显式发送并校验 |
 
-- 共享一个 `httpx.AsyncClient` 连接池(不每次创建);
+- 每个 Provider 实例持有一个**应用生命周期内复用**的 `httpx.AsyncClient`(不每次创建);相同 Provider 与认证配置可共享,不同 Base URL 或 API Key 必须隔离(避免 Chat Key 发往 Embedding Provider);
 - **HTTP 策略**:最多 3 次总尝试(首次 + ≤2 重试);连接/读取超时、429、部分 5xx 可重试,429 优先 `Retry-After`,其余指数退避 + 随机抖动;400/401/403/404 **不重试**;JSON 格式错误用纠错 prompt 重试(**与网络重试独立计数**);所有调用设置连接/读取/总时限;token usage 缺失存 null,不编造;
 - **启动能力检查**(真实模式):模型可达、Structured Output 可用、Tool Calling 可用、固定快照模型存在;generic Provider 不支持 Tool Calling → 进入明确不可用状态;
 - **启动时模型不可用**:FastAPI 进程仍启动(UI 可显示错误),Readiness 返回失败;创建调查返回 `503 LLM_UNAVAILABLE`,**不创建注定失败的 AgentRun**;
@@ -62,7 +62,7 @@ Chat 与 Embedding 是两种能力,配置独立(可共用 key,架构不绑定):
 ### 2.4 安全边界(可执行化)
 
 - 模型输出**不能直接成为事实证据**;所有事实字段必须引用已落库 Evidence / FixExecution / RecoveryCheck,程序校验引用有效后才进入报告;
-- 报告输出带引用(按终态可选):`root_cause_summary(optional) + evidence_refs + fix_execution_ref(optional) + recovery_check_ref(optional) + approval_ref(optional) + termination_reason(optional)`;程序按终态决定必填字段(recovered 有 Diagnosis/FixExecution/RecoveryCheck;rejected 有 Diagnosis/Approval 无 FixExecution;needs_human 可能无 Confirmed Diagnosis;action_failed 有 FixExecution 无 RecoveryCheck);校验:Evidence ID 存在、属于当前 Incident、引用的根因与确定性 Diagnosis 一致、不新增系统不存在的指标;
+- 报告输出带引用(按终态可选):`root_cause_summary(optional) + evidence_refs + fix_execution_ref(optional) + recovery_check_ref(optional) + approval_ref(optional) + termination_reason(optional)`;程序按终态决定必填字段(recovered 有 Diagnosis/FixExecution/RecoveryCheck;rejected 有 Diagnosis/Approval 无 FixExecution;needs_human 可能无 Confirmed Diagnosis;**failed + termination_reason=action_failed 时存在 FixExecution,但可能没有 RecoveryCheck**);校验:Evidence ID 存在、属于当前 Incident、引用的根因与确定性 Diagnosis 一致、不新增系统不存在的指标;
 - 知识库片段只作 `knowledge_references`,**不能进入 evidence_refs**;
 - 修复动作白名单、参数程序固定、execute_fix/verify_recovery 永不暴露给 LLM。
 
@@ -139,7 +139,7 @@ diagnose 节点**重读已落库 Evidence、重新计算 E1~E5**,不信 collect_
 
 ### 3.8 real_demo 降级路径
 
-跳过已满足证据:E1 缺 → metrics;E2 缺且有 trace_id → trace;**E2 缺但无 trace_id → 回退 metrics 拿代表性 trace**;E3 缺 → digest;E4 缺且有 query_ref → plan;E5 缺 → index。降级仅发生在:Provider 重试耗尽 / Structured Output 修复重试耗尽 / Tool Calling 不可用。置 `incident.degraded=true` + `agent_run.degraded_reason`。
+跳过已满足证据:E1 缺 → metrics;E2 缺且有 trace_id → trace;**E2 缺但无 trace_id → 回退 metrics 拿代表性 trace**;E3 缺 → digest;E4 缺且有 query_ref → plan;E5 缺 → index。降级仅发生在:Provider 重试耗尽 / Structured Output 修复重试耗尽 / Tool Calling 不可用。置 `incident.degraded=true` + `agent_run.degraded=true` 且 `degradation_reasons` append 枚举(如 `llm_unavailable`)。
 
 ### 3.9 propose_fix(完全确定性,无 LLM)
 
@@ -234,7 +234,7 @@ Hypothesis 可带 `knowledge_reference_ids`,只进 `knowledge_references`;**永�
 
 ### 5.3 评测运行记录
 
-- `evaluation_run`(主键 id):eval_type/dataset_name+version/git_commit_sha/mode/provider/model/model_snapshot/prompt_version/tool_schema_version/rag_collection_version/temperature/top_p/repetitions/started_at/finished_at/status/metrics_json;
+- `evaluation_run`(主键 id):eval_type/dataset_name+version/git_commit_sha/mode/provider/model/model_snapshot/prompt_version/tool_schema_version/rag_collection_version/**rag_mode/retrieval_policy_version/rag_score_threshold**/temperature/top_p/repetitions/started_at/finished_at/status/metrics_json;
 - `evaluation_case_result`(主键 id):evaluation_run_id/case_id/repetition/expected_result/actual_result/terminal_status/root_cause/fix_proposed/evidence_gate_result/tool_decision_count/tool_execution_count/invalid_decision_count/input_tokens/output_tokens/latency_ms/passed/failure_reason;
 - 输出 `reports/evals/{evaluation_run_id}.json` + `.md`(Markdown 用于简历/人工阅读,JSON 用于回归对比);仓库保留一份**脱敏**真实评测报告样例(不含 API Key/完整敏感 prompt/DB 连接信息/Provider 错误中的敏感请求头)。
 
@@ -244,10 +244,10 @@ Hypothesis 可带 `knowledge_reference_ids`,只进 `knowledge_references`;**永�
 
 ## 6. 审计(model_call,逻辑调用维度)
 
-字段:id/incident_id/agent_run_id/node/mode/provider/model/model_snapshot/prompt_version/tool_schema_version/logical_call_id/attempts_json/finish_reason/structured_output_valid/tool_call_count/provider_request_id/fallback_executor/input_snapshot_json/attempt_count/latency_ms/input_tokens/output_tokens/status/error_code/degraded/git_commit_sha/knowledge_chunk_ids/created_at。
+字段:id/incident_id/agent_run_id/node/mode/provider/model/model_snapshot/prompt_version/prompt_hash/tool_schema_version/logical_call_id/attempts_json/finish_reason/structured_output_valid/tool_call_count/provider_request_id/fallback_executor/input_snapshot_json/attempt_count/latency_ms/input_tokens/output_tokens/status/error_code/degraded/git_commit_sha/knowledge_chunk_ids/created_at。
 
 - `attempts_json`:每尝试 {attempt, status, latency_ms, error_code}(如 SCHEMA_VALIDATION_FAILED → succeeded),脱敏;
-- 不存完整 prompt:存脱敏输入 + prompt hash + prompt 版本 + `input_snapshot_json`(脱敏结构化输入直接落库,不留无存储对象的悬挂引用);
+- 不存完整 prompt:存脱敏输入 + `prompt_hash`(基于最终渲染、脱敏后的 Prompt 计算,并记录 Hash 算法版本)+ prompt 版本 + `input_snapshot_json`(脱敏结构化输入直接落库,不留无存储对象的悬挂引用);
 - token 字段允许 null(Provider 未返回不猜测);评测模式额外记录 temperature/top_p/enable_thinking/response_format。
 
 ## 7. 验收分层(默认 pytest 不依赖真实模型/Qdrant/外网)
@@ -256,11 +256,12 @@ Hypothesis 可带 `knowledge_reference_ids`,只进 `knowledge_references`;**永�
 |---|---|---|
 | `pytest` | FakeLLM 单测 + Fixture 评测 + API 回归 | PASS |
 | `calibrate-retrieval` | 只跑校准集,人工确认后写入版本化 `evaluation_policy.yaml`(冻结阈值与相关/无关门槛) | 人工确认 |
-| `eval-retrieval` | 读取冻结阈值,只跑测试集,**不修改阈值**;报告记 retrieval_policy_version | Hit@3/MRR 达标 |
+| `eval-retrieval` | 读取冻结阈值,只跑测试集,**不修改阈值**;报告记 retrieval_policy_version | Hit@3/MRR/relevant_query_empty_rate/irrelevant_query_rejection_rate 达标(门槛由 evaluation_policy.yaml 冻结,正式只读) |
 | `eval-real` | real_strict 真实模型离线评测(`TRACEMIND_EVAL_FIXTURE_DIR/REPORT_DIR/REPETITIONS`) | 指标达标且 strict_mode_fallback_violation_count=0 |
 | `e2e-scn001-fake` | FakeLLM 全栈,验证 V1.0 回归 | PASS(普通测试) |
 | `e2e-scn001-real` | real_strict + 固定评测快照 + `RAG_MODE=required` + 禁止降级 + 专用 EvalApprover(仅 `TRACEMIND_EVAL_MODE=true` 启用)连续 3 轮 | 3/3(**V1.1 正式验收**) |
 | `smoke-real-llm` | Provider/固定模型/Structured Output/Tool Calling 冒烟 | 全部通过 |
+| `verify-m5` | V1.0 compose 全链路回归(与 V1.1 共用,确认兼容性) | PASS |
 
 最终验收:`pytest` PASS、fake offline eval 16/16、`calibrate-retrieval` 已冻结策略、`eval-retrieval` 达标、real strict eval 达标且无 fallback 违规、SCN-001 E2E real 3/3、verify-m5 PASS。真实模型评测不阻塞普通开发者单测;V1.1 发布前单独执行并保存报告。
 
