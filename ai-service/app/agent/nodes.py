@@ -6,7 +6,7 @@ from app.agent.llm import get_llm
 from app.agent.rules import EVIDENCE_TOOL_MAP, evaluate_evidence_gate
 from app.agent.state import IncidentState
 from app.repositories import approval_repo, evidence_repo, hypothesis_repo
-from app.repositories import incident_repo, postmortem_repo, proposal_repo
+from app.repositories import event_repo, incident_repo, postmortem_repo, proposal_repo
 from app.services import fix_service
 from app.tools.execute import execute_tool
 
@@ -24,6 +24,12 @@ def _call_tool(state: IncidentState, tool: str, **kwargs) -> dict:
     result = execute_tool(tool, incident_id=state.get("incident_id"), **kwargs)
     state["tool_call_count"] = state.get("tool_call_count", 0) + 1
     return result
+
+
+def _emit_status(state: IncidentState) -> None:
+    """状态变化事件落库(SSE 实时展示与审计)。"""
+    event_repo.append_event(state["incident_id"], "status_changed",
+                            {"status": state.get("status")})
 
 
 def _append_evidence(state: IncidentState, key: str, source: str, content: dict,
@@ -128,6 +134,7 @@ def diagnose(state: IncidentState) -> dict:
         # 证据不足:预算耗尽 -> needs_human;否则回到 collect_evidence(条件边)
         if state.get("termination_reason") == "evidence_budget_exhausted":
             state["status"] = "needs_human"
+            _emit_status(state)
         else:
             state["status"] = "investigating"  # 继续循环
     return state
@@ -140,6 +147,7 @@ def ingest(state: IncidentState) -> dict:
     state.setdefault("tool_call_count", 0)
     state.setdefault("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
     state["status"] = "investigating"
+    _emit_status(state)
     return state
 
 
@@ -188,6 +196,7 @@ def propose_fix(state: IncidentState) -> dict:
         "fix_proposal_id": proposal.id,
     }
     state["status"] = "awaiting_approval"
+    _emit_status(state)
     return state
 
 
@@ -197,6 +206,9 @@ def report(state: IncidentState) -> dict:
     content = llm.write_report(state)
     postmortem_repo.create_postmortem(incident_id=state["incident_id"], content=content)
     state["report"] = content
+    # 终态事件(SSE 前端据此关闭连接)
+    event_repo.append_event(state["incident_id"], "incident_finished",
+                            {"status": state.get("status")})
     # status 保持前序终态(recovered / needs_human / rejected 等)
     return state
 
@@ -220,6 +232,7 @@ def human_approval(state: IncidentState) -> dict:
         approval["status"] = decision.get("decision", "rejected")
         state["status"] = "rejected"
         state["termination_reason"] = decision.get("comment") or "rejected_by_approver"
+    _emit_status(state)
     return state
 
 
@@ -237,6 +250,7 @@ def execute_fix(state: IncidentState) -> dict:
     except ValueError as exc:
         state["status"] = "failed"
         state["error"] = str(exc)
+        _emit_status(state)
         return state
     state["fix_execution"] = {
         "fix_execution_id": result.get("fix_execution_id"),
@@ -263,4 +277,5 @@ def verify_recovery_node(state: IncidentState) -> dict:
         state["recovery"] = result.get("data") or {"status": "not_recovered"}
         state["status"] = "needs_human"
         state["termination_reason"] = "recovery_failed"
+    _emit_status(state)
     return state

@@ -12,6 +12,8 @@ router = APIRouter(prefix="/api/incidents")
 POLL_SECONDS = 2
 HEARTBEAT_SECONDS = 20
 
+TERMINAL_STATUSES = {"recovered", "needs_human", "rejected", "failed"}
+
 
 def _format_event(event) -> str:
     payload = json.dumps(event.payload, ensure_ascii=False) if event.payload else "{}"
@@ -32,6 +34,13 @@ async def _event_stream(incident_id: int, after: int):
             last = new_events[-1].sequence
         else:
             yield ": ping\n\n"
+        # Incident 进入终态:发最终事件并关闭连接(不再轮询)
+        inc = incident_repo.get_incident(incident_id)
+        if inc is not None and inc.status in TERMINAL_STATUSES:
+            yield (f"event: incident_finished\ndata: "
+                   f"{json.dumps({'status': inc.status}, ensure_ascii=False)}\n"
+                   f"id: {last}\n\n")
+            return
         await asyncio.sleep(POLL_SECONDS)
 
 
