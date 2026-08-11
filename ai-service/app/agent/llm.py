@@ -149,11 +149,11 @@ class OpenAICompatibleLLM:
         """真实模型:返回 tool_calls 列表;demo 降级:确定性规划器。
         TOOL_SCHEMAS 由 T5(tool_calling)提供;未落地时走降级分支。"""
         try:
-            from app.agent.tool_calling import TOOL_SCHEMAS
+            from app.mcp.contract import llm_tool_schemas
         except ImportError:
             self._degrade("select_tool")
             return self._planner.choose(state, eligible_tools)
-        schemas = [s for s in TOOL_SCHEMAS if s["function"]["name"] in eligible_tools]
+        schemas = [s for s in llm_tool_schemas() if s["function"]["name"] in eligible_tools]
         if not schemas:
             return []
         for attempt in range(self.MAX_RETRIES + 1):

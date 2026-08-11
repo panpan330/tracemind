@@ -73,3 +73,23 @@ def test_noop_two_rounds_sets_needs_human():
     state = base_state(consecutive_no_progress_count=1)
     out = collect_evidence(state, llm=StubLLM([[]]), tools=StubTools([]))
     assert out.get("status") == "needs_human"
+
+
+def test_call_tool_goes_through_mcp(monkeypatch):
+    from app.agent import nodes
+
+    calls = []
+
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            calls.append((name, incident_id, agent_run_id, business))
+            return {"success": True, "data": {"p95Ms": 120,
+                                              "representativeSlowTraceId": "t1"}}
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
+    state = {"incident_id": 7, "run_id": 3, "service_ref": "inventory-service"}
+    out = nodes._call_tool(state, "get_service_metrics", service_ref="inventory-service",
+                           window_seconds=300)
+    assert calls == [("get_service_metrics", 7, 3,
+                      {"service_ref": "inventory-service", "window_seconds": 300})]
+    assert out["success"] is True

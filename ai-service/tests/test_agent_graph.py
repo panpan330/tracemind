@@ -32,7 +32,11 @@ def test_full_evidence_path_reaches_awaiting_approval(monkeypatch):
     def fake_create_proposal(**kwargs):
         return FakeProposal()
 
-    monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            return fake_execute(name, incident_id=incident_id, **business)
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
     monkeypatch.setattr("app.agent.nodes.proposal_repo.create_proposal", fake_create_proposal)
     monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
                         lambda *a, **kw: {"id": 1})
@@ -67,7 +71,11 @@ def test_incomplete_evidence_keeps_collecting(monkeypatch):
                     "data": {"indexes": [{"index_name": "idx_sku_warehouse"}]}}
         return {"success": False, "data": None}
 
-    monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            return fake_execute(name, incident_id=incident_id, **business)
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
     monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
                         lambda *a, **kw: {"id": 1})
     monkeypatch.setattr("app.agent.nodes.evidence_repo.upsert_evidence",

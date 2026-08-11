@@ -14,6 +14,7 @@ from app.agent.state import IncidentState
 from app.repositories import approval_repo, evidence_repo, hypothesis_repo
 from app.repositories import event_repo, incident_repo, postmortem_repo, proposal_repo
 from app.services import fix_service
+from app.mcp.client import get_mcp_client
 from app.tools.execute import execute_tool
 
 # 固定探测参数(INVENTORY_LOOKUP 白名单模板)
@@ -29,8 +30,12 @@ FALLBACK_E1_P95_MS = 100
 
 
 def _call_tool(state: IncidentState, tool: str, **kwargs) -> dict:
-    kwargs.pop("incident_id", None)  # incident_id 由 execute_tool 统一注入/审计
-    result = execute_tool(tool, incident_id=state.get("incident_id"), **kwargs)
+    # 上下文(incident_id/agent_run_id)由 MCP Client 注入;kwargs 中出现的一律剔除(防伪造)
+    kwargs.pop("incident_id", None)
+    kwargs.pop("agent_run_id", None)
+    result = get_mcp_client().call_tool(
+        tool, incident_id=state.get("incident_id", 0),
+        agent_run_id=state.get("run_id", 0), **kwargs)
     state["tool_call_count"] = state.get("tool_call_count", 0) + 1
     return result
 

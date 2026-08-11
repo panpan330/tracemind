@@ -42,7 +42,11 @@ def _patch_node_deps(monkeypatch):
 
     monkeypatch.setattr("app.agent.nodes.approval_repo.create_approval", fake_create_approval)
     monkeypatch.setattr("app.agent.nodes.fix_service.execute_fix", fake_execute_fix)
-    monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            return fake_execute(name, incident_id=incident_id, **business)
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
     monkeypatch.setattr("app.agent.nodes.postmortem_repo.create_postmortem", fake_create_postmortem)
     monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
                         lambda *a, **kw: {"id": 1})
