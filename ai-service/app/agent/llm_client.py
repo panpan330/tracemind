@@ -46,11 +46,10 @@ class LLMClient:
     def __init__(self, base_url: str | None = None, api_key: str | None = None,
                  model: str | None = None, provider: str | None = None,
                  timeout: float = 30.0) -> None:
-        self.base_url = (base_url or settings.llm_base_url).rstrip("/")
-        self.api_key = api_key or settings.llm_api_key
-        self.model = model or settings.llm_model
-        # T2 配置迁移前先用 getattr 兼容(旧字段无 llm_provider)
-        self.provider = provider or getattr(settings, "llm_provider", "")
+        self.base_url = (base_url or settings.chat_base_url_resolved).rstrip("/")
+        self.api_key = api_key or settings.chat_api_key_resolved
+        self.model = model or settings.chat_model_resolved
+        self.provider = provider or settings.chat_provider
         self.timeout = timeout
 
     def _headers(self) -> dict:
