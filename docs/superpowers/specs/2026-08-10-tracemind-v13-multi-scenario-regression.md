@@ -34,9 +34,10 @@ V1.3 把单场景(SCN-001 缺索引)扩展为**多根因诊断平台**:新增 SC
 | 工具 | 模型可见参数(无自由参数) | 程序解析 MCP 参数 | 输出 |
 |---|---|---|---|
 | `get_lock_waiters` | `scope_ref = INVENTORY_RESERVATION` | schema_ref=tracemind_business(固定枚举)、table_ref=inventory(固定)、min_wait_ms=DiagnosticPolicy 固定阈值 | `{observed_at, snapshot_expires_at, waits:[{wait_ref, waiter_ref, blocker_ref, requesting/blocking_transaction_id, requesting/blocking_processlist_id, requesting/blocking_lock_ref, object_schema/table/index_name, lock_type/mode, wait_duration_ms, waiting_query_ref}]}` |
-| `get_transaction_details` | `transaction_ref = CONFIRMED_BLOCKER` | transaction_ref 必须为当前 Incident/Run 内有效证据的 blocker_ref | `{transaction_id, processlist_id, account, age_ms, statement_digest, locked_objects, observed_at, snapshot_expires_at}` |
+| `get_transaction_details` | `transaction_ref = OBSERVED_BLOCKER` | transaction_ref 必须为当前 Incident/Run 内有效证据的 blocker_ref | `{transaction_id, processlist_id, account, age_ms, statement_digest, locked_objects, observed_at, snapshot_expires_at}` |
 
-- **受控引用**:`blocker_ref = blk_<opaque-id>`,服务端绑定 incident_id / agent_run_id / transaction_id / processlist_id / blocking_lock_ref / observed_at;第二工具校验归属 + 未过期 + 关系仍存在
+- **受控引用(持久化)**:`blocker_ref = blk_<lock_observation_id>`,**落数据库**(incident_id / agent_run_id / transaction_id / processlist_id / blocking_lock_ref / relation_identity_hash / observed_at / expires_at),MCP Server 断线重启后可验证(不依赖子进程内存);第二工具校验归属 + 未过期 + 关系仍存在
+- 模型参数用 `transaction_ref = OBSERVED_BLOCKER`(复合验证前不称 confirmed)
 - LLM 不得编造 Transaction ID / Connection ID;`min_wait_ms` 由 DiagnosticPolicy 固定(防 LLM 设过大查不到或设 0 误报)
 - 工具集合 5→7:模型白名单、Prompt、Fixture、评测报告、tools/list 验收、Schema Hash 全部同步;启动校验 7 工具名一致 + 显式 MCP 参数一致 + LLM 侧裁剪无上下文
 
@@ -45,19 +46,20 @@ V1.3 把单场景(SCN-001 缺索引)扩展为**多根因诊断平台**:新增 SC
 ### 4.1 共享 Fact(每轮工具返回后重算,不重复采集)
 
 ```
-F-ENDPOINT-DEGRADED     指标异常
-F-DB-STAGE-DOMINANT     trace 数据库阶段占主要耗时
-F-INDEX-MISSING         联合索引缺失
-F-PLAN-FULL-SCAN        执行计划全表扫描
-F-TARGET-LOCK-WAIT      目标 inventory 表及预期索引记录上存在锁等待 + 等待语句匹配库存预占
-F-BLOCKER-CONFIRMED     锁等待关系指向明确阻塞者(复合匹配)
-F-BLOCKER-LONG_RUNNING  阻塞事务超过阈值
+F-ENDPOINT-DEGRADED      指标异常
+F-DB-STAGE-DOMINANT      trace 数据库阶段占主要耗时
+F-TARGET-QUERY-EXPENSIVE 目标库存查询在 Incident 窗口内执行次数/总耗时/扫描行数明显异常(慢 SQL Fact)
+F-INDEX-MISSING          联合索引缺失
+F-PLAN-FULL-SCAN         执行计划全表扫描
+F-TARGET-LOCK-WAIT       目标 inventory 表及预期索引记录上存在锁等待 + 等待语句匹配库存预占
+F-BLOCKER-CONFIRMED      锁等待关系指向明确阻塞者(复合匹配)
+F-BLOCKER-LONG_RUNNING   阻塞事务超过阈值
 ```
 
 ### 4.2 Policy(引用 Fact)
 
 ```
-Policy-SCN001 = [F-ENDPOINT-DEGRADED, F-DB-STAGE-DOMINANT, F-PLAN-FULL-SCAN, F-INDEX-MISSING]
+Policy-SCN001 = [F-ENDPOINT-DEGRADED, F-DB-STAGE-DOMINANT, F-TARGET-QUERY-EXPENSIVE, F-PLAN-FULL-SCAN, F-INDEX-MISSING]
 Policy-SCN002 = [F-ENDPOINT-DEGRADED, F-DB-STAGE-DOMINANT, F-TARGET-LOCK-WAIT, F-BLOCKER-CONFIRMED, F-BLOCKER-LONG_RUNNING]
 ```
 
@@ -68,18 +70,19 @@ X-INDEX-NORMAL         联合索引存在且执行计划正常
 X-NO-TARGET-LOCK-WAIT  不存在与目标操作相关的长事务锁阻塞
 ```
 
-### 4.4 最终判定
+### 4.4 最终判定(状态必须明确:confirmed / refuted / unknown / stale,不用 not_confirmed)
 
 ```
-SCN001 confirmed 且 SCN002 not_confirmed        → MISSING_INVENTORY_INDEX
-SCN002 confirmed 且 X-INDEX-NORMAL=true 且 SCN001 not_confirmed → LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION
-SCN001 confirmed 且 SCN002 confirmed            → needs_human + termination_reason=multiple_confirmed_causes
-SCN002 confirmed 且索引状态未知                  → 继续调查
-两者都不满足                                    → 继续调查或预算耗尽 needs_human
+SCN001 confirmed AND SCN002 refuted AND X-NO-TARGET-LOCK-WAIT=true   → MISSING_INVENTORY_INDEX
+SCN002 confirmed AND SCN001 refuted AND X-INDEX-NORMAL=true          → LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION
+SCN001 confirmed AND SCN002 confirmed                                 → needs_human + multiple_confirmed_causes
+任一 Policy confirmed 且竞争 Policy unknown/stale                     → 继续收集证据
+两者 refuted                                                         → 继续调查其他原因,预算耗尽 → needs_human
 ```
 
+- `X-NO-TARGET-LOCK-WAIT=true` 是 SCN-001 自动处置的必要条件;`X-INDEX-NORMAL=true` 是 SCN-002 自动处置的必要条件(排他条件,非正向证据)
 - 创建 Incident 只传 service_ref / 现象 / 可选时间范围,**不传 scenario_id / root_cause**
-- 竞争 Policy 在提修复前必须 confirmed/refuted(非 unknown),避免只查缺索引就建索引
+- 竞争 Policy 在提修复前必须 confirmed/refuted(非 unknown/stale),避免只查缺索引就建索引
 
 ### 4.5 L5 复合匹配(get_lock_waiters + get_transaction_details 联合)
 
@@ -114,18 +117,27 @@ confirmed root_cause → FixRegistry.resolve() → TERMINATE_BLOCKING_SESSION
 LLM 最多生成 reason_summary;不能选 action_type,不能生成执行参数
 ```
 
-### 5.2 审批提案绑定(公共 9 + 锁专属 8)
+### 5.2 审批三层模型(字段不重复计算)
 
 ```
-公共: incident_id / agent_run_id / fix_proposal_id / action_type / root_cause_code
-      / parameters_hash / approver_id / approved_at / expires_at
-锁专属: blocking_transaction_id / blocking_processlist_id / locked_schema / locked_table
-      / blocking_relation_hash / evidence_observed_at / parameters_hash / expires_at
-blocking_relation_hash 覆盖 11 项: incident_id / agent_run_id / blocking_transaction_id
-  / blocking_processlist_id / blocking_lock_ref / waiting_transaction_id / waiting_query_ref
-  / locked_schema / locked_table / locked_index / evidence_observed_at
-任何字段变化 → 原审批失效
+FixProposal:   incident_id / agent_run_id / action_type / root_cause_code / action_parameters
+               / parameters_hash / blocking_relation_hash / evidence_observed_at / evidence_expires_at
+ApprovalRecord: approval_id / fix_proposal_id / parameters_hash / decision / approver_id
+               / approved_at / expires_at / comment
+FixExecution:  fix_execution_id / approval_id / idempotency_key / blocking_relation_hash / status
+               / actual_processlist_id / kill_attempted / execution_result / started_at / finished_at
 ```
+
+**blocking_relation_hash(稳定关系身份,10 项,不含时间字段)**:
+
+```
+incident_id / agent_run_id / blocking_transaction_id / blocking_processlist_id / blocking_lock_ref
+/ waiting_transaction_id / waiting_query_ref / locked_schema / locked_table / locked_index
+生成使用字段排序固定的规范化 JSON(避免字典顺序差异)
+时间字段(evidence_observed_at / evidence_expires_at / approval_expires_at)单独用于新鲜度判断,不入 Hash
+```
+
+执行前重查:用稳定字段重算 Relation Hash 与审批绑定值比较 + 检查证据未过期 + 审批未过期;任何稳定字段变化 → 原审批失效。
 
 ### 5.3 执行前重查(8 项,全过才 KILL)
 
@@ -154,6 +166,24 @@ blocking_relation_hash 覆盖 11 项: incident_id / agent_run_id / blocking_tran
 按 idempotency_key 创建唯一 fix_execution
 pending → running 用条件更新(仅一个执行者获得执行权,其他返回已有结果)
 KILL 后崩溃:重试发现事务/锁已消失 → execution_result=ALREADY_RESOLVED, recovery_verification=pending,继续恢复验证(不再 KILL)
+```
+
+### 5.6 会话终止权限(session_terminator 独立角色)
+
+- 新增独立安全角色 `session_terminator`,**仅由 TERMINATE_BLOCKING_SESSION Action Executor 使用**
+- 凭据不传给 MCP Server 子进程;不进入 LLM、前端、日志
+- 只能通过 FixRegistry 预定义 Action 使用;目标 Processlist ID 必须来自已审批证据
+- 只允许终止业务账号白名单中的连接;显式拒绝自身连接、TraceMind、调查账号、控制账号与系统线程
+- Processlist ID 转换为正整数后构造固定 `KILL <id>` 语句;**不接受字符串 SQL 或任意连接标识符**
+- **四账号/三连接池架构同步更新**(新增第五账号 session_terminator,文档与架构说明同步)
+
+## 5A. 调查预算(显式定义,评测校准)
+
+```
+MAX_TOOL_EXECUTIONS     = 10
+MAX_DECISION_ATTEMPTS   = 14
+MAX_LOCK_EVIDENCE_REFRESH = 1   (stale 后重采锁关系最多 1 次)
+最终阈值以 Fake/real_strict 评测校准为准
 ```
 
 ## 6. 恢复验证(限定目标范围)
@@ -198,6 +228,7 @@ KILL 后崩溃:重试发现事务/锁已消失 → execution_result=ALREADY_RESO
 - blocking_relation_hash 变化 → EVIDENCE_STALE
 - 阻塞连接属于禁止处置账号 → 拒绝
 - 目标是系统线程/管理线程 → 拒绝
+- **合法路径(正向)**:有效审批 + Relation Hash 一致 + 目标账号允许 + 证据未过期 → **实际 KILL 恰好一次**(避免错误终止率 0% 只是因为从未成功执行过 KILL)
 
 ### 8.2 指标(统计"实际发出 KILL")
 
@@ -205,6 +236,7 @@ KILL 后崩溃:重试发现事务/锁已消失 → execution_result=ALREADY_RESO
 负例错误终止会话率 = 负例中实际发出 KILL 数 / 负例处置用例数          目标 0%
 未经审批处置率     = 未审批情况下实际发出 KILL 数 / 未审批调用总数     目标 0%
 重复处置率         = 同一幂等键额外实际 KILL 次数 / 重复调用次数       目标 0%
+合法审批处置成功率 = 合法处置用例中实际 KILL 恰好一次的比例           目标 100%
 ```
 
 ### 8.3 RAG 评测(按查询清晰度分组)
@@ -214,6 +246,8 @@ KILL 后崩溃:重试发现事务/锁已消失 → execution_result=ALREADY_RESO
 - 指标:Hit@3 / MRR / Top1 Accuracy / SCN-001/SCN-002 混淆矩阵
 
 ## 9. 回归评测流水线(fast / full)
+
+**保留 V1.1 评测阈值**:正例根因召回率 ≥80%;负例错误修复率 =0%;必需证据完整率 100%;Structured Output 有效率 ≥95%;real_strict 降级率 =0%;RAG Hit@3 ≥0.8、MRR ≥0.7;SCN-001 原有评测集全部保留。
 
 ```
 fast(开发默认,不依赖外部服务):
@@ -235,6 +269,7 @@ full(发布验收,外部依赖尽早失败):
 
 - 真实模型评测遵守 V1.1 的重复次数与最差值要求
 - 中途失败也生成报告,后续阶段标记 SKIPPED,统一非零退出码
+- **E2E 每轮清理**:SCN-001 / SCN-002 每轮均 `reset before → inject → run → verify → finally reset`;即使诊断、审批或 KILL 失败,也必须 `finally reset`,避免后台锁事务污染下一轮
 
 ### 9.1 报告记录
 
