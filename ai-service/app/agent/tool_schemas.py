@@ -27,6 +27,16 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {
             "table_ref": {"type": "string", "enum": ["inventory"]}},
             "required": ["table_ref"]}}},
+    {"type": "function", "function": {"name": "get_lock_waiters",
+        "description": "查询目标库存记录的锁等待关系(仅用于锁阻塞调查)",
+        "parameters": {"type": "object", "properties": {
+            "scope_ref": {"type": "string", "enum": ["INVENTORY_RESERVATION"]}},
+            "required": ["scope_ref"]}}},
+    {"type": "function", "function": {"name": "get_transaction_details",
+        "description": "查询已观测阻塞事务的详情(需先调用 get_lock_waiters 获得引用)",
+        "parameters": {"type": "object", "properties": {
+            "transaction_ref": {"type": "string", "enum": ["OBSERVED_BLOCKER"]}},
+            "required": ["transaction_ref"]}}},
 ]
 
 ALLOWED_TOOLS = {t["function"]["name"] for t in TOOL_SCHEMAS}

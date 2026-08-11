@@ -45,6 +45,14 @@ class GetIndexInfoIn(BaseModel):
     table_ref: str = Field(pattern="^(inventory)$")
 
 
+class GetLockWaitersIn(BaseModel):
+    scope_ref: str = Field(default="INVENTORY_RESERVATION", pattern="^(INVENTORY_RESERVATION)$")
+
+
+class GetTransactionDetailsIn(BaseModel):
+    transaction_ref: str = Field(default="OBSERVED_BLOCKER", pattern="^(OBSERVED_BLOCKER)$")
+
+
 class ExecuteFixIn(BaseModel):
     incident_id: int = Field(gt=0)
     fix_proposal_id: int = Field(gt=0)
