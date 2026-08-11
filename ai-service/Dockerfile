@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
     "pydantic-settings>=2.3" \
     "langgraph>=0.2" \
     "langgraph-checkpoint-sqlite>=3.1" \
-    "langchain-core>=0.3"
+    "langchain-core>=0.3" \
+    "mcp>=1.28,<2"
 
 # 应用代码
 COPY app ./app

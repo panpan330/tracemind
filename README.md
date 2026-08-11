@@ -196,3 +196,20 @@ uv run python ../scripts/smoke_llm.py               # 真实模型冒烟(Structu
 `TRACEMIND_QDRANT_URL/READ_API_KEY/WRITE_API_KEY/COLLECTION_ALIAS` ·
 `TRACEMIND_RAG_MODE(off|optional|required)/RAG_CANDIDATE_TOP_K/RAG_FINAL_TOP_K/RAG_SCORE_THRESHOLD` ·
 `TRACEMIND_EVAL_MODE`(EvalApprover 自动审批门控)
+
+## V1.2:MCP 工具服务(stdio)
+
+将五个只读调查工具(`get_service_metrics` / `get_trace` / `list_expensive_query_digests` / `get_query_plan` / `get_index_info`)封装为基于官方 SDK 的 **stdio MCP Server**。LangGraph Agent 通过持久化 MCP Client 会话完成工具发现和调用,**消除调查工具进程内 direct 路径**;`execute_fix` / `verify_recovery` 属确定性安全控制节点,不纳入 MCP。
+
+- **生命周期**:FastAPI lifespan 启动时 spawn MCP Server → initialize → 契约校验(serverInfo / 工具集合 / inputSchema 签名)→ readiness;关闭时有序终止;启动失败即应用启动失败
+- **上下文注入**:`incident_id` / `agent_run_id` 由 MCP Client 注入,LLM 侧 Schema 隐藏,不参与 Fixture 哈希,仅审计
+- **审计**:`tool_call` 表新增 `agent_run_id` / `transport`(`mcp_stdio` / `internal_control` / `legacy_direct`)/ `mcp_invocation_id` / `mcp_attempt`(版本化迁移 `scripts/sql/05-v12-mcp-migration.sql`)
+- **错误码**:`MCP_START_FAILED / MCP_SCHEMA_MISMATCH / MCP_TIMEOUT / MCP_DISCONNECTED / MCP_PROTOCOL_ERROR / MCP_TOOL_ERROR / MCP_RESULT_INVALID`;业务失败保留原始 error_code(`TRACE_NOT_FOUND` 等);重启最多一次,不降级 direct
+- **离线评测**:每条 case 启动真实 stdio MCP Server + `--fixture-file`(仅 `TRACEMIND_EVAL_MODE=true`),评测报告记录 MCP 证据
+- **测试**:协议集成(真实 stdio + stdout 纯净)、故障注入(主动终止不 direct fallback)、全栈回归断言 `transport=mcp_stdio`
+
+```bash
+cd ai-service && uv run pytest                       # 含协议集成/故障注入
+TRACEMIND_LLM_MODE=fake TRACEMIND_EVAL_MODE=true uv run python ../scripts/eval_agent.py --mode offline --llm fake --runs 1   # 真实 stdio + Fixture
+python scripts/verify-m3.py --base http://localhost:8000   # 全栈闭环 + transport 断言
+```
