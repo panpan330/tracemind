@@ -64,7 +64,7 @@ def test_valid_execution_increments_execution():
 
 
 def test_budget_exhausted_sets_needs_human():
-    state = base_state(decision_attempt_count=10)
+    state = base_state(decision_attempt_count=14)  # V1.3:MAX_DECISION_ATTEMPTS=14
     out = collect_evidence(state, llm=StubLLM([[]]), tools=StubTools([]))
     assert out.get("status") == "needs_human"
 

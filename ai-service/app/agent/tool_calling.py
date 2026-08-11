@@ -4,9 +4,10 @@ import json
 
 from app.agent.tool_schemas import ALLOWED_TOOLS, TOOL_SCHEMAS
 
-# ---- 预算(定稿,消除数学矛盾)----
-MAX_DECISION_ATTEMPTS = 10
-MAX_TOOL_EXECUTIONS = 8
+# ---- 预算(V1.3 定稿,设计 §5A;以 Fake/real_strict 评测校准为准)----
+MAX_DECISION_ATTEMPTS = 14
+MAX_TOOL_EXECUTIONS = 10
+MAX_LOCK_EVIDENCE_REFRESH = 1
 MAX_CONSECUTIVE_INVALID = 2
 MAX_CONSECUTIVE_NO_PROGRESS = 2
 MAX_DURATION_SECONDS = 180
@@ -44,6 +45,18 @@ def compute_eligible_tools(state: dict) -> set[str]:
             eligible.add("get_query_plan")
     if not satisfied("e5"):
         eligible.add("get_index_info")
+    # 锁调查工具资格(V1.3,独立判断,不退化为固定顺序)
+    if not satisfied("l1"):
+        eligible.add("get_lock_waiters")
+    if not satisfied("l2"):
+        l1_ev = (evidence.get("l1") or {}).get("content") or {}
+        lock_observed = any(
+            w.get("object_schema") == "tracemind_business"
+            and w.get("object_table") == "inventory"
+            and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"
+            for w in (l1_ev.get("waits") or []))
+        if lock_observed:
+            eligible.add("get_transaction_details")
     return eligible
 
 
@@ -94,6 +107,17 @@ def resolve_arguments(name: str, raw_args: dict, state: dict) -> dict:
                                        "warehouseId": sp.get("warehouseId", 7)}}
     if name == "get_index_info":
         return {"table_ref": "inventory"}
+    if name == "get_lock_waiters":
+        return {"scope_ref": raw_args.get("scope_ref", "INVENTORY_RESERVATION")}
+    if name == "get_transaction_details":
+        # 受控引用:程序从当前 Incident/Run 的有效锁等待证据取 blocker_ref(LLM 不得编造)
+        waits = ((evidence.get("l1") or {}).get("content") or {}).get("waits") or []
+        target = [w for w in waits if w.get("object_schema") == "tracemind_business"
+                  and w.get("object_table") == "inventory"
+                  and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
+        if not target:
+            raise ArgumentResolutionError("无有效 blocker_ref,无法调用 get_transaction_details")
+        return {"transaction_ref": target[0].get("blocker_ref")}
     raise ArgumentResolutionError(f"未知工具 {name}")
 
 

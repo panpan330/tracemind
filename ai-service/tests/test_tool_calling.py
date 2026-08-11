@@ -4,6 +4,7 @@ import pytest
 from app.agent.tool_calling import (MAX_CONSECUTIVE_INVALID, DuplicateGuard,
                                     compute_eligible_tools, resolve_arguments,
                                     validate_tool_call)
+from app.agent import tool_calling
 from app.agent.tool_schemas import ALLOWED_TOOLS, TOOL_SCHEMAS
 
 
@@ -27,7 +28,9 @@ def test_schemas_exclude_write_tools():
 
 def test_eligible_all_missing():
     tools = compute_eligible_tools(base_state())
-    assert tools == {"get_service_metrics", "list_expensive_query_digests", "get_index_info"}
+    # V1.3:锁证据未采时 get_lock_waiters 也 eligible;transaction_details 需 blocker_ref
+    assert tools == {"get_service_metrics", "list_expensive_query_digests",
+                     "get_index_info", "get_lock_waiters"}
 
 
 def test_eligible_with_trace_id_adds_trace():
@@ -91,3 +94,40 @@ def test_duplicate_guard_blocks_same_key():
 
 def test_max_consecutive_invalid_constant():
     assert MAX_CONSECUTIVE_INVALID == 2
+
+
+# ---- V1.3:预算与锁工具资格 ----
+
+def test_budget_v13():
+    assert tool_calling.MAX_DECISION_ATTEMPTS == 14
+    assert tool_calling.MAX_TOOL_EXECUTIONS == 10
+    assert tool_calling.MAX_LOCK_EVIDENCE_REFRESH == 1
+
+
+def test_eligible_includes_lock_tools_when_lock_facts_unknown():
+    state = {"evidence_gate": {}, "evidence": []}
+    eligible = tool_calling.compute_eligible_tools(state)
+    assert "get_lock_waiters" in eligible
+    assert "get_transaction_details" not in eligible  # 需先有 blocker_ref
+
+
+def test_transaction_details_eligible_after_lock_waiters():
+    state = {"evidence_gate": {},
+             "evidence": [{"key": "l1", "content": {"waits": [{"blocker_ref": "blk_1",
+                       "object_schema": "tracemind_business", "object_table": "inventory",
+                       "waiting_query_ref": "INVENTORY_RESERVATION"}]}, "passed": True}]}
+    eligible = tool_calling.compute_eligible_tools(state)
+    assert "get_transaction_details" in eligible
+
+
+def test_resolve_lock_tools_parameters():
+    state = {"service_ref": "inventory-service",
+             "evidence": [{"key": "l1", "content": {"waits": [{"blocker_ref": "blk_1",
+                       "object_schema": "tracemind_business", "object_table": "inventory",
+                       "waiting_query_ref": "INVENTORY_RESERVATION"}]}, "passed": True}]}
+    args = tool_calling.resolve_arguments("get_lock_waiters", {}, state)
+    assert args["scope_ref"] == "INVENTORY_RESERVATION"
+    args2 = tool_calling.resolve_arguments("get_transaction_details",
+                                           {"transaction_ref": "OBSERVED_BLOCKER"}, state)
+    # 受控引用:程序从有效 l1 证据解析 blocker_ref(非 LLM 编造)
+    assert args2["transaction_ref"] == "blk_1"
