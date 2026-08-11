@@ -6,14 +6,16 @@ CASES_DIR = Path(__file__).resolve().parents[2] / "data" / "eval_cases"
 
 
 def test_16_cases_schema():
+    """V1.3:动态 N/N(24 条 = 16 SCN-001 + 8 SCN-002),双根因 expected。"""
     files = sorted(CASES_DIR.glob("*.json"))
-    assert len(files) == 16
+    assert len(files) == 24
     expected_set = set()
     for f in files:
         case = json.loads(f.read_text(encoding="utf-8"))
         for field in ("case_id", "title", "description", "expected", "severity", "tool_fixtures"):
             assert case.get(field), f"{f.name} 缺 {field}"
-        assert case["expected"] in {"missing_index", "needs_human"}
+        assert case["expected"] in {"MISSING_INVENTORY_INDEX", "needs_human",
+                                    "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION"}
         assert case["severity"] in {"low", "medium", "high"}
         # fixture key = tool_name:canonical_args_hash 格式(至少一个)
         assert len(case["tool_fixtures"]) >= 1
@@ -25,10 +27,11 @@ def test_coverage_matrix():
     files = sorted(CASES_DIR.glob("*.json"))
     cases = [json.loads(f.read_text(encoding="utf-8")) for f in files]
     by_expected = {c["expected"] for c in cases}
-    assert "missing_index" in by_expected and "needs_human" in by_expected
-    pos = sum(1 for c in cases if c["expected"] == "missing_index")
+    assert "MISSING_INVENTORY_INDEX" in by_expected and "needs_human" in by_expected
+    assert "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION" in by_expected
+    pos = sum(1 for c in cases if c["expected"] != "needs_human")
     neg = sum(1 for c in cases if c["expected"] == "needs_human")
-    assert pos == 4 and neg == 12      # 4 正例 + 12 负例(缺证据 5 + 三类负例 3 + 索引存在 + 超时 + 矛盾 + 下游超时)
+    assert pos == 7 and neg == 17   # 7 正例(4 SCN-001 + 2 锁 + 1 INDEX-ONLY)+ 17 负例
 
 
 RAG_CAL = Path(__file__).resolve().parents[2] / "data" / "retrieval_calibration_cases.json"
