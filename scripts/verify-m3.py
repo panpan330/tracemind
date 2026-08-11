@@ -101,6 +101,13 @@ def main() -> None:
         fail(f"假设缺失: {hyps}")
     if inc.get("degraded"):
         fail(f"发生降级(degraded),真实模式验收不通过: {inc.get('degradation_reasons')}")
+    # V1.2 传输断言:五个调查工具 transport=mcp_stdio;verify_recovery internal_control
+    tool_calls = inc.get("tool_calls") or []
+    mcp_tools = [tc for tc in tool_calls if tc.get("tool_name") in {
+        "get_service_metrics", "get_trace", "list_expensive_query_digests",
+        "get_query_plan", "get_index_info"}]
+    if not mcp_tools or any(tc.get("transport") != "mcp_stdio" for tc in mcp_tools):
+        fail(f"调查工具 transport 断言失败: {tool_calls}")
     evidence = inc.get("evidence") or []
     passed_keys = {e["key"] for e in evidence if e.get("passed")}
     for k in ("E1", "E2", "E3", "E4", "E5"):

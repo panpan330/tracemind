@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.engine import get_control_engine
 from app.db.models import Approval, FixExecution, Postmortem, RecoveryCheck
 from app.repositories import evidence_repo, hypothesis_repo, incident_repo
+from app.repositories.tool_repo import list_tool_calls
 from app.services.health_baseline_service import capture_health_baseline
 
 router = APIRouter(prefix="/api/incidents")
@@ -53,6 +54,7 @@ def get_incident(incident_id: int):
             RecoveryCheck.incident_id == incident_id).order_by(RecoveryCheck.id.desc())).all())
         pms = list(session.scalars(select(Postmortem).filter(
             Postmortem.incident_id == incident_id).order_by(Postmortem.id.desc())).all())
+    tool_calls = list_tool_calls(incident_id)
     return {
         "id": inc.id, "title": inc.title, "status": inc.status,
         "severity": inc.severity, "service_ref": inc.service_ref,
@@ -84,4 +86,7 @@ def get_incident(incident_id: int):
             "estimated_rows_after": checks[0].estimated_rows_after,
         } if checks else None),
         "report": (pms[0].content or {}) if pms else None,
+        "tool_calls": [{"tool_name": tc.tool_name, "transport": tc.transport,
+                        "agent_run_id": tc.agent_run_id,
+                        "status": tc.status} for tc in (tool_calls or [])],
     }
