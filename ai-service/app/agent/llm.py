@@ -45,14 +45,8 @@ class FakeLLM:
         }]
 
     def propose_fix(self, state: dict) -> dict:
-        parameters = dict(FIX_PARAMETERS)
-        return {
-            "action_type": FIX_ACTION,
-            "risk_level": "medium",
-            "parameters": parameters,
-            "parameters_hash": _sha256(parameters),
-            "reason": "E1~E5 证据齐备:慢查询、trace 耗时集中于数据库阶段、全表扫描、联合索引缺失",
-        }
+        from app.agent.fix_registry import build_proposal
+        return build_proposal(state)
 
     def write_report(self, state: dict) -> dict:
         evidence_lines = []

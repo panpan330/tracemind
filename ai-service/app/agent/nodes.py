@@ -307,9 +307,10 @@ def hypothesize(state: IncidentState) -> dict:
 
 
 def propose_fix(state: IncidentState) -> dict:
-    """根因确认后生成修复提案并落库,同时创建待审批记录,状态进入 awaiting_approval。"""
-    llm = get_llm()
-    fix = llm.propose_fix(state)
+    """根因确认后生成修复提案并落库,同时创建待审批记录,状态进入 awaiting_approval。
+    V1.1:提案完全确定性(fix_registry.build_proposal),零 LLM 调用。"""
+    from app.agent.fix_registry import build_proposal
+    fix = build_proposal(state)
     proposal = proposal_repo.create_proposal(
         incident_id=state["incident_id"],
         action_type=fix["action_type"],
