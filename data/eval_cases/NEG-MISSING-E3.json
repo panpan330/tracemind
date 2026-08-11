@@ -1,0 +1,67 @@
+{
+  "case_id": "NEG-MISSING-E3",
+  "title": "无慢查询 digest 增量",
+  "description": "P95 异常且全表扫描,但 digest 增量很小。",
+  "expected": "needs_human",
+  "severity": "medium",
+  "tool_fixtures": {
+    "get_service_metrics:0da4e0513f47": {
+      "ok": true,
+      "data": {
+        "p95Ms": 117,
+        "representativeSlowTraceId": "t1"
+      }
+    },
+    "get_trace:680c57fead83": {
+      "ok": true,
+      "data": {
+        "inventory_service": [
+          {
+            "stage": "database",
+            "durationMs": 110
+          },
+          {
+            "stage": "total",
+            "durationMs": 120
+          }
+        ]
+      }
+    },
+    "list_expensive_query_digests:f96458c068e0": {
+      "ok": true,
+      "data": [
+        {
+          "query_ref": "INVENTORY_LOOKUP",
+          "rows_examined_delta": 50,
+          "count_delta": 1
+        }
+      ]
+    },
+    "get_query_plan:fd000bb90389": {
+      "ok": true,
+      "data": {
+        "explain": {
+          "query_block": {
+            "table": {
+              "access_type": "ALL"
+            }
+          }
+        }
+      }
+    },
+    "get_index_info:4da3506338b9": {
+      "ok": true,
+      "data": {
+        "indexes": []
+      }
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
+      }
+    }
+  }
+}

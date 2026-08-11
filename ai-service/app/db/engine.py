@@ -24,3 +24,8 @@ def get_executor_engine() -> Engine:
         "tracemind_control_app:control_app_pwd", "fix_executor:fix_executor_pwd"
     ).replace("tracemind_control", "tracemind_business")
     return create_engine(executor_url, pool_pre_ping=True)
+
+
+def get_engine_from_url(url: str) -> Engine:
+    """按 URL 创建独立连接(不缓存);供 session_terminator 等按需连接使用。"""
+    return create_engine(url, pool_pre_ping=True, pool_recycle=1800)

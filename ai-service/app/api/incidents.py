@@ -4,8 +4,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.engine import get_control_engine
-from app.db.models import Approval, FixExecution, Postmortem, RecoveryCheck
+from app.db.models import (Approval, FixDefinition, FixExecution, FixProposal,
+                           Postmortem, RecoveryCheck)
 from app.repositories import evidence_repo, hypothesis_repo, incident_repo
+from app.repositories.tool_repo import list_tool_calls
 from app.services.health_baseline_service import capture_health_baseline
 
 router = APIRouter(prefix="/api/incidents")
@@ -47,17 +49,27 @@ def get_incident(incident_id: int):
     with Session(get_control_engine()) as session:
         approvals = list(session.scalars(select(Approval).filter(
             Approval.incident_id == incident_id).order_by(Approval.id.desc())).all())
+        proposals = list(session.scalars(select(FixProposal).filter(
+            FixProposal.incident_id == incident_id).order_by(FixProposal.id.desc())).all())
         fix_execs = list(session.scalars(select(FixExecution).filter(
             FixExecution.incident_id == incident_id).order_by(FixExecution.id.desc())).all())
         checks = list(session.scalars(select(RecoveryCheck).filter(
             RecoveryCheck.incident_id == incident_id).order_by(RecoveryCheck.id.desc())).all())
+        definitions = list(session.scalars(select(FixDefinition)).all())
         pms = list(session.scalars(select(Postmortem).filter(
             Postmortem.incident_id == incident_id).order_by(Postmortem.id.desc())).all())
+    defn_by_id = {d.id: d for d in definitions}
+    prop = proposals[0] if proposals else None
+    tool_calls = list_tool_calls(incident_id)
     return {
         "id": inc.id, "title": inc.title, "status": inc.status,
         "severity": inc.severity, "service_ref": inc.service_ref,
         "created_at": str(inc.created_at),
         "finished_at": str(inc.finished_at) if inc.finished_at else None,
+        "degraded": bool(inc.degraded),
+        "degradation_reasons": (inc.degradation_reasons.split(",")
+                                if inc.degradation_reasons else []),
+        "termination_reason": inc.termination_reason,
         "hypotheses": [{"id": h.id, "description": h.description, "status": h.status}
                        for h in hypotheses],
         "evidence": [{"id": e.id, "source": e.source,
@@ -69,6 +81,15 @@ def get_incident(incident_id: int):
                        "comment": a.comment,
                        "expires_at": str(a.expires_at) if a.expires_at else None}
                       for a in approvals],
+        "fix_proposal": ({
+            "id": prop.id,
+            "action_type": (defn_by_id.get(prop.fix_definition_id).action_name
+                            if defn_by_id.get(prop.fix_definition_id) else None),
+            "risk_level": prop.risk_level,
+            "parameters_hash": prop.parameters_hash,
+            "status": prop.status,
+            "blocking_relation_hash": prop.blocking_relation_hash,
+        } if prop else None),
         "fix_execution": ({
             "id": fix_execs[0].id, "fix_proposal_id": fix_execs[0].fix_proposal_id,
             "status": fix_execs[0].status,
@@ -80,4 +101,7 @@ def get_incident(incident_id: int):
             "estimated_rows_after": checks[0].estimated_rows_after,
         } if checks else None),
         "report": (pms[0].content or {}) if pms else None,
+        "tool_calls": [{"tool_name": tc.tool_name, "transport": tc.transport,
+                        "agent_run_id": tc.agent_run_id,
+                        "status": tc.status} for tc in (tool_calls or [])],
     }

@@ -61,10 +61,19 @@ export interface IncidentDetail {
   fix_execution: FixExecution | null
   recovery: RecoveryCheck | null
   report: Record<string, unknown> | null
+  degraded?: boolean
+  degradation_reasons?: string[]
+  termination_reason?: string | null
+  root_cause_code?: string | null
+  policy?: Record<string, string>
+  facts?: Record<string, boolean>
+  tool_calls?: Array<{ tool_name: string; transport?: string; arguments?: Record<string, unknown> }>
 }
 
 export interface ScenarioStatus {
   indexPresent: boolean
+  lockHeld?: boolean
+  activeScenario?: 'SCN-001' | 'SCN-002' | null
 }
 
 export interface CreateIncidentInput {

@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS incident (
   healthy_metrics_baseline JSON NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'created',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  finished_at DATETIME NULL
+  finished_at DATETIME NULL,
+  termination_reason VARCHAR(64) NULL,
+  degraded TINYINT NOT NULL DEFAULT 0,
+  degradation_reasons VARCHAR(500) NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS agent_run (
@@ -140,3 +143,93 @@ CREATE TABLE IF NOT EXISTS incident_event (
   UNIQUE KEY uq_incident_seq (incident_id, sequence),
   KEY idx_event_incident (incident_id, id)
 ) ENGINE=InnoDB;
+
+-- model_call:LLM 逻辑调用审计(含每次尝试)
+CREATE TABLE tracemind_control.model_call (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  incident_id BIGINT NOT NULL,
+  agent_run_id BIGINT NOT NULL,
+  node VARCHAR(50) NOT NULL,
+  mode VARCHAR(20) NOT NULL,
+  provider VARCHAR(20) NOT NULL,
+  model VARCHAR(100) NOT NULL,
+  model_snapshot VARCHAR(100) DEFAULT '',
+  prompt_version VARCHAR(20) DEFAULT '',
+  prompt_hash CHAR(16) DEFAULT '',
+  tool_schema_version VARCHAR(20) DEFAULT '',
+  logical_call_id VARCHAR(64) DEFAULT '',
+  attempts_json TEXT,
+  finish_reason VARCHAR(30) DEFAULT '',
+  structured_output_valid TINYINT DEFAULT 0,
+  tool_call_count INT DEFAULT 0,
+  provider_request_id VARCHAR(64) DEFAULT '',
+  fallback_executor VARCHAR(50) DEFAULT '',
+  input_snapshot_json TEXT,
+  latency_ms INT DEFAULT 0,
+  input_tokens INT,
+  output_tokens INT,
+  status VARCHAR(20) NOT NULL,
+  error_code VARCHAR(100) DEFAULT '',
+  degraded TINYINT DEFAULT 0,
+  git_commit_sha CHAR(40) DEFAULT '',
+  knowledge_chunk_ids VARCHAR(500) DEFAULT '',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_model_call_incident (incident_id),
+  INDEX idx_model_call_run (agent_run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- retrieval_record:RAG 检索审计(知识参考,不参与 E 闸门)
+CREATE TABLE tracemind_control.retrieval_record (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  incident_id BIGINT NOT NULL,
+  agent_run_id BIGINT NOT NULL,
+  node VARCHAR(50) NOT NULL,
+  query_text_hash CHAR(16) DEFAULT '',
+  collection_alias VARCHAR(100) DEFAULT '',
+  collection_version VARCHAR(50) DEFAULT '',
+  embedding_model VARCHAR(50) DEFAULT '',
+  embedding_dimensions INT DEFAULT 0,
+  candidate_top_k INT DEFAULT 0,
+  final_chunk_ids VARCHAR(500) DEFAULT '',
+  scores VARCHAR(500) DEFAULT '',
+  latency_ms INT DEFAULT 0,
+  status VARCHAR(20) NOT NULL,
+  error_code VARCHAR(100) DEFAULT '',
+  degraded TINYINT DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_retrieval_incident (incident_id),
+  INDEX idx_retrieval_run (agent_run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- V1.1 幂等迁移:为已存在的 incident 表补充状态属性列(信息 schema 判断,MySQL 8 兼容)
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='incident'
+                    AND COLUMN_NAME='termination_reason');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.incident ADD COLUMN termination_reason VARCHAR(64) NULL AFTER finished_at',
+  'SELECT 1');
+PREPARE stmt_t FROM @ddl; EXECUTE stmt_t; DEALLOCATE PREPARE stmt_t;
+
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='incident'
+                    AND COLUMN_NAME='degraded');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.incident ADD COLUMN degraded TINYINT NOT NULL DEFAULT 0 AFTER termination_reason',
+  'SELECT 1');
+PREPARE stmt_d FROM @ddl; EXECUTE stmt_d; DEALLOCATE PREPARE stmt_d;
+
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='incident'
+                    AND COLUMN_NAME='degradation_reasons');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.incident ADD COLUMN degradation_reasons VARCHAR(500) NULL AFTER degraded',
+  'SELECT 1');
+PREPARE stmt_r FROM @ddl; EXECUTE stmt_r; DEALLOCATE PREPARE stmt_r;
+
+-- fix_definition 种子(幂等):两条预定义动作
+INSERT INTO fix_definition (action_name, risk_level, description)
+SELECT 'CREATE_INVENTORY_INDEX', 'medium', '创建 idx_sku_warehouse(sku_id, warehouse_id) 联合索引'
+WHERE NOT EXISTS (SELECT 1 FROM fix_definition WHERE action_name = 'CREATE_INVENTORY_INDEX');
+INSERT INTO fix_definition (action_name, risk_level, description)
+SELECT 'TERMINATE_BLOCKING_SESSION', 'high', '终止持有库存目标记录排他锁的阻塞会话'
+WHERE NOT EXISTS (SELECT 1 FROM fix_definition WHERE action_name = 'TERMINATE_BLOCKING_SESSION');

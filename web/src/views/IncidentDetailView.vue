@@ -33,6 +33,21 @@
         description="证据不足或恢复验证未通过,系统已暂停,请人工检查。"
       />
 
+      <!-- 降级横幅:模型/RAG 降级时显示,说明报告可能不完整 -->
+      <el-alert
+        v-if="detail.degraded"
+        type="warning"
+        :closable="false"
+        data-testid="degraded-banner"
+        :title="'模型降级: ' + (detail.degradation_reasons || []).join(', ')"
+        description="部分步骤由确定性程序执行,复盘报告可能不完整。"
+        show-icon
+        class="alert"
+      />
+      <div v-if="detail.termination_reason" class="termination-reason">
+        终止原因:{{ detail.termination_reason }}
+      </div>
+
       <el-card shadow="never" class="section">
         <template #header>根因假设</template>
         <HypothesisList :hypotheses="detail.hypotheses" />
@@ -154,4 +169,5 @@ onBeforeUnmount(() => {
 .header-actions { display: flex; gap: 8px; }
 .alert { margin-top: 16px; }
 .section { margin-top: 16px; }
+.termination-reason { margin-top: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
 </style>

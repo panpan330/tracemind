@@ -26,6 +26,12 @@ dist/
 
 # 运行时产物
 ai-service/data/
-web/*.tsbuildinfo
-ai-service/data/
 ai-service/.eval_fixtures/
+web/*.tsbuildinfo
+
+# VM 部署密钥环境(不进 git)
+.env.vm
+
+# 评测临时目录/本地 checkpoint
+ai-service/.eval_fixtures/
+ai-service/data/checkpoints.sqlite

@@ -30,9 +30,16 @@ def _patch_graph_deps(monkeypatch, tmp_path):
                     "data": {"explain": {"query_block": {"table": {"access_type": "ALL"}}}}}
         if tool == "get_index_info":
             return {"success": True, "data": {"indexes": [{"index_name": "PRIMARY"}]}}
+        if tool == "get_lock_waiters":
+            return {"success": True, "data": {"observed_at": "2026-08-11T00:00:00Z",
+                "snapshot_expires_at": "2026-08-11T00:00:20Z", "waits": []}}
         return {"success": False, "data": None}
 
-    monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            return fake_execute(name, incident_id=incident_id, **business)
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
     monkeypatch.setattr("app.agent.nodes.proposal_repo.create_proposal",
                         lambda **kw: type("P", (), {"id": 1})())
     monkeypatch.setattr("app.agent.nodes.approval_repo.create_approval",

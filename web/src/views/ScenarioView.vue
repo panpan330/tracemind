@@ -5,15 +5,19 @@
         <el-card shadow="never">
           <template #header>
             <div class="card-header">
-              <span>演示场景 SCN-001(库存查询缺联合索引)</span>
+              <span>演示场景</span>
+              <el-select v-model="activeScenario" data-testid="scenario-select" style="width: 140px">
+                <el-option label="SCN-001 缺索引" value="SCN-001" />
+                <el-option label="SCN-002 锁阻塞" value="SCN-002" />
+              </el-select>
               <el-tag :type="scenarioHealthy ? 'success' : 'danger'" data-testid="scenario-tag">
                 {{ scenarioHealthy ? '健康' : '故障' }}
               </el-tag>
             </div>
           </template>
           <div class="scenario-actions">
-            <el-button type="danger" plain data-testid="inject-fault" @click="inject">注入故障</el-button>
-            <el-button type="success" plain data-testid="reset-scenario" @click="reset">重置环境</el-button>
+            <el-button type="danger" plain data-testid="inject-fault" :loading="scenarioStatus === 'INJECTING'" @click="inject">注入故障</el-button>
+            <el-button type="success" plain data-testid="reset-scenario" :loading="scenarioStatus === 'RESETTING'" @click="reset">重置环境</el-button>
           </div>
         </el-card>
       </el-col>
@@ -83,9 +87,11 @@ import { useRouter } from 'vue-router'
 import * as client from '@/api/client'
 import type { IncidentListItem, IncidentStatus } from '@/api/types'
 import StatusTag from '@/components/StatusTag.vue'
+import { useScenario } from '@/composables/useScenario'
 import { STATUS_META } from '@/utils/status'
 
 const router = useRouter()
+const { scenario: activeScenario, status: scenarioStatus, inject: scenarioInject, reset: scenarioReset, refreshStatus } = useScenario()
 const scenarioHealthy = ref(true)
 const incidents = ref<IncidentListItem[]>([])
 const filterStatus = ref<IncidentStatus | ''>('')
@@ -98,8 +104,9 @@ const filteredIncidents = computed(() =>
 
 async function refresh() {
   try {
-    const status = await client.getScenarioStatus()
-    scenarioHealthy.value = status.indexPresent
+    await refreshStatus()
+    const status = await client.getScenarioStatus(activeScenario.value)
+    scenarioHealthy.value = status.indexPresent || !!status.lockHeld
   } catch {
     scenarioHealthy.value = false
   }
@@ -111,13 +118,18 @@ async function refresh() {
 }
 
 async function inject() {
-  await client.injectScenario()
-  ElMessage.success('故障已注入')
+  try {
+    await scenarioInject(activeScenario.value)
+    ElMessage.success('故障已注入')
+  } catch (e) {
+    const msg = (e as Error).message
+    ElMessage.error(msg.includes('409') ? '请先重置当前场景(场景互斥)' : `注入失败: ${msg}`)
+  }
   await refresh()
 }
 
 async function reset() {
-  await client.resetScenario()
+  await scenarioReset()
   ElMessage.success('环境已重置')
   await refresh()
 }

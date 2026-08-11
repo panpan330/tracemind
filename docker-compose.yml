@@ -97,6 +97,9 @@ services:
     build:
       context: ./ai-service
     container_name: tracemind-ai
+    # 密钥(LLM/Embedding API Key)走 VM 本地 .env.vm,不进 git
+    env_file:
+      - .env.vm
     environment:
       TRACEMIND_CONTROL_DB_URL: "mysql+pymysql://tracemind_control_app:control_app_pwd@mysql:3306/tracemind_control"
       TRACEMIND_READONLY_DB_URL: "mysql+pymysql://ai_investigator:investigator_pwd@mysql:3306/tracemind_business"
@@ -104,7 +107,13 @@ services:
       TRACEMIND_INVENTORY_SERVICE_URL: "http://inventory-service:8082"
       TRACEMIND_DEMO_MODE: "true"
       TRACEMIND_DEMO_KEY: demo-secret-2026
-      TRACEMIND_LLM_MODE: fake
+      TRACEMIND_LLM_MODE: real_strict
+      TRACEMIND_EVAL_CHAT_MODEL: qwen3.7-plus-2026-05-26
+      TRACEMIND_RAG_MODE: required
+      TRACEMIND_EVAL_MODE: "true"
+      TRACEMIND_QDRANT_URL: "http://qdrant:6333"
+      TRACEMIND_EMBEDDING_MODEL: text-embedding-v4
+      TRACEMIND_EMBEDDING_DIMENSIONS: "1024"
     ports:
       - "8000:8000"
     volumes:

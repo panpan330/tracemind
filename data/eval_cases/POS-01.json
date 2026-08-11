@@ -1,0 +1,67 @@
+{
+  "case_id": "POS-01",
+  "title": "库存查询接口变慢(标准描述)",
+  "description": "inventory-service 按 sku_id+warehouse_id 查询接口 P95 从 2ms 升到 117ms。",
+  "expected": "MISSING_INVENTORY_INDEX",
+  "severity": "medium",
+  "tool_fixtures": {
+    "get_service_metrics:0da4e0513f47": {
+      "ok": true,
+      "data": {
+        "p95Ms": 117,
+        "representativeSlowTraceId": "t1"
+      }
+    },
+    "get_trace:680c57fead83": {
+      "ok": true,
+      "data": {
+        "inventory_service": [
+          {
+            "stage": "database",
+            "durationMs": 110
+          },
+          {
+            "stage": "total",
+            "durationMs": 120
+          }
+        ]
+      }
+    },
+    "list_expensive_query_digests:f96458c068e0": {
+      "ok": true,
+      "data": [
+        {
+          "query_ref": "INVENTORY_LOOKUP",
+          "rows_examined_delta": 498250,
+          "count_delta": 10
+        }
+      ]
+    },
+    "get_query_plan:fd000bb90389": {
+      "ok": true,
+      "data": {
+        "explain": {
+          "query_block": {
+            "table": {
+              "access_type": "ALL"
+            }
+          }
+        }
+      }
+    },
+    "get_index_info:4da3506338b9": {
+      "ok": true,
+      "data": {
+        "indexes": []
+      }
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
+      }
+    }
+  }
+}

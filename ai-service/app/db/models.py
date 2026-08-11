@@ -27,6 +27,10 @@ class Incident(Base):
     status: Mapped[str] = mapped_column(String(32), default="created")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # V1.1 状态属性(degraded 是属性不是主状态)
+    termination_reason: Mapped[Optional[str]] = mapped_column(String(64))
+    degraded: Mapped[bool] = mapped_column(default=False)
+    degradation_reasons: Mapped[Optional[str]] = mapped_column(String(500))
 
 
 class AgentRun(Base):
@@ -74,11 +78,15 @@ class ToolCall(Base):
     __tablename__ = "tool_call"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    agent_run_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     tool_name: Mapped[str] = mapped_column(String(64))
     input: Mapped[Optional[dict]] = mapped_column(JSON)
     output: Mapped[Optional[dict]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(16), default="success")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    transport: Mapped[str] = mapped_column(String(32), default="legacy_direct")
+    mcp_invocation_id: Mapped[Optional[str]] = mapped_column(String(64))
+    mcp_attempt: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -97,6 +105,7 @@ class FixProposal(Base):
     fix_definition_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     parameters_json: Mapped[Optional[dict]] = mapped_column(JSON)
     parameters_hash: Mapped[str] = mapped_column(String(64))
+    blocking_relation_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     risk_level: Mapped[str] = mapped_column(String(16), default="medium")
     reason: Mapped[Optional[str]] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(16), default="proposed")

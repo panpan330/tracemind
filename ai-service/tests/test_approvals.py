@@ -33,6 +33,11 @@ def _patch_node_deps(monkeypatch):
                     "data": {"explain": {"query_block": {"table": {"access_type": "ALL"}}}}}
         if tool == "get_index_info":
             return {"success": True, "data": {"indexes": [{"index_name": "PRIMARY"}]}}
+        if tool == "get_lock_waiters":
+            return {"success": True, "data": {"observed_at": "2026-08-11T00:00:00Z",
+                "snapshot_expires_at": "2026-08-11T00:00:20Z", "waits": []}}
+        if tool == "get_transaction_details":
+            return {"success": False, "data": None, "error_message": "TRX_NOT_FOUND"}
         if tool == "verify_recovery":
             return {"success": True, "data": {"status": "recovered", "latency_p95_after": 3}}
         return {"success": False, "data": None}
@@ -42,6 +47,12 @@ def _patch_node_deps(monkeypatch):
 
     monkeypatch.setattr("app.agent.nodes.approval_repo.create_approval", fake_create_approval)
     monkeypatch.setattr("app.agent.nodes.fix_service.execute_fix", fake_execute_fix)
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            return fake_execute(name, incident_id=incident_id, **business)
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
+    # verify_recovery 属确定性安全控制节点(不纳入 MCP),直接调 execute_tool
     monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
     monkeypatch.setattr("app.agent.nodes.postmortem_repo.create_postmortem", fake_create_postmortem)
     monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",

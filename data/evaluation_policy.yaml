@@ -1,0 +1,4 @@
+retrieval_policy_version: "1"
+score_threshold: 0.5        # 校准集(5 相关/3 无关)冻结:相关 p50=0.712,无关 max=0.230
+relevant_query_empty_rate_max: 0.0
+irrelevant_query_rejection_rate_min: 1.0

@@ -39,14 +39,14 @@ export function decideApproval(incidentId: number, approvalId: number, decision:
   })
 }
 
-export function injectScenario(): Promise<unknown> {
-  return request('/api/demo/scenarios/SCN-001/inject', { method: 'POST' })
+export function injectScenario(scenario = 'SCN-001'): Promise<unknown> {
+  return request(`/api/demo/scenarios/${scenario}/inject`, { method: 'POST' })
 }
 
-export function resetScenario(): Promise<unknown> {
-  return request('/api/demo/scenarios/SCN-001/reset', { method: 'POST' })
+export function resetScenario(scenario = 'SCN-001'): Promise<unknown> {
+  return request(`/api/demo/scenarios/${scenario}/reset`, { method: 'POST' })
 }
 
-export function getScenarioStatus(): Promise<ScenarioStatus> {
-  return request('/api/demo/scenarios/SCN-001/status')
+export function getScenarioStatus(scenario = 'SCN-001'): Promise<ScenarioStatus> {
+  return request(`/api/demo/scenarios/${scenario}/status`)
 }
