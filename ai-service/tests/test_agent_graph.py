@@ -27,6 +27,10 @@ def test_full_evidence_path_reaches_awaiting_approval(monkeypatch):
                     "data": {"explain": {"query_block": {"table": {"access_type": "ALL"}}}}}
         if tool == "get_index_info":
             return {"success": True, "data": {"indexes": [{"index_name": "PRIMARY"}]}}
+        if tool == "get_lock_waiters":
+            # 有效否定结论:无目标锁等待(成功返回空列表)
+            return {"success": True, "data": {"observed_at": "2026-08-11T00:00:00Z",
+                "snapshot_expires_at": "2026-08-11T00:00:20Z", "waits": []}}
         return {"success": False, "data": None}
 
     def fake_create_proposal(**kwargs):
@@ -111,3 +115,66 @@ def test_report_node_writes_postmortem(monkeypatch):
     result = report(state)
     assert result["status"] == "recovered"
     assert "根因" in result["report"]["content"]
+
+
+def test_lock_wait_graph_reaches_confirmed(monkeypatch):
+    """SCN-002 锁证据齐全 → 根因 LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION。"""
+    from app.agent.graph import build_graph
+
+    calls = []
+
+    def fake_execute(tool, incident_id=None, **kwargs):
+        calls.append(tool)
+        if tool == "get_service_metrics":
+            return {"success": True, "data": {"p95Ms": 117, "representativeSlowTraceId": "t1"}}
+        if tool == "get_trace":
+            return {"success": True, "data": {"inventory_service": [
+                {"stage": "database", "durationMs": 110}, {"stage": "total", "durationMs": 120}]}}
+        if tool == "list_expensive_query_digests":
+            return {"success": True, "data": [{"query_ref": "INVENTORY_LOOKUP",
+                                               "rows_examined_delta": 500}]}
+        if tool == "get_query_plan":
+            return {"success": True, "data": {"explain": {
+                "query_block": {"table": {"access_type": "ref"}}}}}
+        if tool == "get_index_info":
+            return {"success": True, "data": {"indexes": [
+                {"index_name": "idx_sku_warehouse"}]}}
+        if tool == "get_lock_waiters":
+            return {"success": True, "data": {"observed_at": "2026-08-11T00:00:00Z",
+                "snapshot_expires_at": "2026-08-11T00:00:20Z",
+                "waits": [{"blocker_ref": "blk_1", "blocking_transaction_id": 88,
+                           "blocking_processlist_id": 88,
+                           "object_schema": "tracemind_business", "object_table": "inventory",
+                           "index_name": "idx_sku_warehouse", "lock_type": "RECORD",
+                           "lock_mode": "X", "wait_duration_ms": 5200,
+                           "waiting_query_ref": "INVENTORY_RESERVATION"}]}}
+        if tool == "get_transaction_details":
+            return {"success": True, "data": {"transaction_id": 88, "processlist_id": 88,
+                "account": "app_business", "age_ms": 12000,
+                "statement_digest": "UPDATE inventory SET quantity=...",
+                "locked_objects": [{"schema": "tracemind_business", "table": "inventory",
+                                    "lock_ref": "lr2"}],
+                "observed_at": "2026-08-11T00:00:00Z",
+                "snapshot_expires_at": "2026-08-11T00:00:20Z"}}
+        return {"success": False, "data": None}
+
+    class FakeMCP:
+        def call_tool(self, name, incident_id, agent_run_id, **business):
+            return fake_execute(name, incident_id=incident_id, **business)
+
+    monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
+    monkeypatch.setattr("app.agent.nodes.proposal_repo.create_proposal",
+                        lambda **kw: type("P", (), {"id": 7})())
+    monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
+                        lambda *a, **kw: {"id": 1})
+    monkeypatch.setattr("app.agent.nodes.evidence_repo.upsert_evidence",
+                        lambda *a, **kw: {"id": 1})
+
+    state = {"incident_id": 9, "run_id": 9, "service_ref": "inventory-service",
+             "severity": "high", "max_investigation_rounds": 5, "max_tool_calls": 25,
+             "policy": {}, "facts": {}}
+    graph = build_graph()
+    result = graph.invoke(state)
+    assert result["root_cause_code"] == (
+        "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION")
+    assert result.get("confirmed_hypothesis_id") == "h1"

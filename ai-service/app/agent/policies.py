@@ -11,27 +11,27 @@ POLICY_SCN002 = ("F_ENDPOINT_DEGRADED", "F_DB_STAGE_DOMINANT",
 
 
 def evaluate_policies(facts_dict: dict[str, bool]) -> dict[str, str]:
-    """每项 Fact 必须已知(True/False);任一未知 → 该 Policy unknown。
-    任一必需 Fact 为 False → refuted;全部 True → confirmed。"""
+    """优先级:任一必需 Fact 已知且为 False → refuted;全部已知且全 True → confirmed;
+    否则(存在未采集键且已知键无 False)→ unknown。"""
     out: dict[str, str] = {}
     for name, keys in (("scn001", POLICY_SCN001), ("scn002", POLICY_SCN002)):
-        unknown = [k for k in keys if k not in facts_dict]
-        if unknown:
-            out[name] = "unknown"
-        elif all(facts_dict.get(k) is True for k in keys):
+        known = [k for k in keys if k in facts_dict]
+        if any(facts_dict.get(k) is False for k in known):
+            out[name] = "refuted"
+        elif len(known) == len(keys) and all(facts_dict[k] for k in keys):
             out[name] = "confirmed"
         else:
-            out[name] = "refuted"  # 任一必需 Fact 为 False 即 refuted
+            out[name] = "unknown"
     return out
 
 
 def evaluate_exclusions(facts_dict: dict[str, bool]) -> dict[str, bool]:
     """自动处置排他条件(非正向证据,设计 §4.3)。
-    索引 Fact 未知时视为 False(不允许自动终止)。"""
+    索引 Fact 未知时视为 False(不允许自动终止)。
+    无锁阻塞判定:F_TARGET_LOCK_WAIT 已采集且为 False(未采集=None → False,不允许自动处置)。"""
     idx_ok = (facts_dict.get("F_INDEX_MISSING") is False
               and facts_dict.get("F_PLAN_FULL_SCAN") is False)
-    lock_absent = (facts_dict.get("F_TARGET_LOCK_WAIT") is False
-                   and facts_dict.get("F_BLOCKER_CONFIRMED") is False)
+    lock_absent = facts_dict.get("F_TARGET_LOCK_WAIT") is False
     return {"x_index_normal": bool(idx_ok), "x_no_target_lock_wait": bool(lock_absent)}
 
 

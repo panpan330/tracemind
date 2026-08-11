@@ -27,10 +27,15 @@ class IncidentState(TypedDict, total=False):
     max_investigation_rounds: int
     tool_call_count: int
     max_tool_calls: int
-    evidence_gate: dict  # E1~E5 布尔判定(collect_evidence 产出)
+    evidence_gate: dict  # E1~E5 布尔判定(collect_evidence 产出);V1.3 含 L1/L2
     termination_reason: str | None
     hypotheses: Annotated[list[dict], dedup_by_id]
     evidence: Annotated[list[dict], dedup_by_id]
+    # V1.3 双 Policy 与共享 Fact
+    policy: dict          # {"scn001": "confirmed|refuted|unknown|stale", "scn002": ...}
+    facts: dict           # 共享 Fact 布尔(见 facts.evaluate_facts)
+    root_cause_code: str | None
+    lock_evidence_refresh_count: int   # stale 后重采锁关系次数(≤ MAX_LOCK_EVIDENCE_REFRESH)
     # V1.1 降级属性:degraded 是属性不是主状态
     degraded: bool
     degradation_reasons: list[str]

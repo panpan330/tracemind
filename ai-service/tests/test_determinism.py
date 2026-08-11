@@ -43,8 +43,10 @@ def test_planner_e2_without_trace_id_falls_back_to_metrics():
 
 
 def test_planner_e2_with_trace_id_picks_trace():
-    # E2 缺失且有合法 trace_id → 选 get_trace
+    # E2 缺失且有合法 trace_id → 选 get_trace(E1 已采集入 evidence)
     state = base_state(trigger_trace_id="t1",
+                       evidence=[{"key": "e1", "content": {"p95Ms": 150},
+                                  "passed": True}],
                        evidence_gate={"e1": True, "e2": False, "e3": True, "e4": True, "e5": True})
     calls = DeterministicEvidencePlanner().choose(state, eligible_tools={"get_trace", "get_service_metrics"})
     assert calls[0]["name"] == "get_trace"
@@ -80,4 +82,4 @@ def test_planner_transaction_details_after_lock():
     eligible = {"get_transaction_details"}
     calls = planner.choose(state, eligible)
     assert calls and calls[0]["name"] == "get_transaction_details"
-    assert calls[0]["arguments"]["transaction_ref"] == "blk_1"
+    assert calls[0]["arguments"]["transaction_ref"] == "OBSERVED_BLOCKER"  # 占位,resolve 解析

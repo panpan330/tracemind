@@ -33,6 +33,11 @@ def _patch_node_deps(monkeypatch):
                     "data": {"explain": {"query_block": {"table": {"access_type": "ALL"}}}}}
         if tool == "get_index_info":
             return {"success": True, "data": {"indexes": [{"index_name": "PRIMARY"}]}}
+        if tool == "get_lock_waiters":
+            return {"success": True, "data": {"observed_at": "2026-08-11T00:00:00Z",
+                "snapshot_expires_at": "2026-08-11T00:00:20Z", "waits": []}}
+        if tool == "get_transaction_details":
+            return {"success": False, "data": None, "error_message": "TRX_NOT_FOUND"}
         if tool == "verify_recovery":
             return {"success": True, "data": {"status": "recovered", "latency_p95_after": 3}}
         return {"success": False, "data": None}

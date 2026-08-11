@@ -88,7 +88,14 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
         _emit_degradation(state, "llm_degraded")
 
     gate = state.get("evidence_gate") or {}
-    if evaluate_evidence_gate(gate):
+    # V1.3:双 policy 终止条件(设计 §4.4)——已可判定根因或需转人工时停止收集;
+    # 仅 E1~E5 齐不代表收集完成(锁证据可能仍未知)
+    from app.agent import policies as policies_mod
+    pol = state.get("policy") or {}
+    facts_dict = state.get("facts") or {}
+    _root_cause, _reason = policies_mod.decide_root_cause(
+        pol, policies_mod.evaluate_exclusions(facts_dict))
+    if _root_cause or _reason:
         return {}
 
     now = _time.time()
@@ -183,6 +190,17 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
             evidence_repo.upsert_evidence(state["incident_id"], ev.get("id") or ev.get("key"),
                                           ev["source"], ev.get("content"),
                                           bool(ev.get("passed")))
+        # V1.3:每次工具返回后重算共享 Fact 与双 Policy(设计 §4.1/4.2)
+        # 注意:必须基于全部已收集证据(含历史轮次),否则 policy 永远 unknown
+        from app.agent import facts as facts_mod, policies as policies_mod
+        all_evidence = list(state.get("evidence") or []) + list(new_evidence)
+        ev_map = {str(e.get("key") or e.get("id")).lower():
+                  {"content": e.get("content"), "passed": e.get("passed")}
+                  for e in all_evidence}
+        new_facts = facts_mod.evaluate_facts(ev_map)
+        new_policy = policies_mod.evaluate_policies(new_facts)
+        out["facts"] = new_facts
+        out["policy"] = new_policy
         return {**out, "evidence": new_evidence, "evidence_gate": new_gate,
                 "tool_calls_record": [record], "consecutive_no_progress_count": 0}
 
@@ -266,12 +284,35 @@ def _evaluate_index(result: dict, state: dict) -> list[dict]:
              "content": {"indexes": names}, "passed": e5}]
 
 
+def _evaluate_lock_waiters(result: dict, state: dict) -> list[dict]:
+    """L1:目标 inventory 记录上的锁等待(等待语句匹配库存预占,wait_duration ≥ 3s)。"""
+    data = result.get("data") or {}
+    waits = data.get("waits") or []
+    target = [w for w in waits
+              if w.get("object_schema") == "tracemind_business"
+              and w.get("object_table") == "inventory"
+              and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
+    passed = bool(target and any((w.get("wait_duration_ms") or 0) >= 3000 for w in target))
+    return [{"id": "L1", "key": "l1", "source": "get_lock_waiters",
+             "content": data, "passed": passed}]
+
+
+def _evaluate_transaction_details(result: dict, state: dict) -> list[dict]:
+    """L2:阻塞事务详情(复合匹配见 facts/policies;此处只判定存在长事务)。"""
+    data = result.get("data") or {}
+    passed = bool(data.get("transaction_id") and (data.get("age_ms") or 0) >= 5000)
+    return [{"id": "L2", "key": "l2", "source": "get_transaction_details",
+             "content": data, "passed": passed}]
+
+
 _EVALUATORS = {
     "get_service_metrics": _evaluate_metrics,
     "get_trace": _evaluate_trace,
     "list_expensive_query_digests": _evaluate_digests,
     "get_query_plan": _evaluate_plan,
     "get_index_info": _evaluate_index,
+    "get_lock_waiters": _evaluate_lock_waiters,
+    "get_transaction_details": _evaluate_transaction_details,
 }
 
 
@@ -288,30 +329,42 @@ def _execute_with_evidence(state: dict, name: str, args: dict) -> dict:
 
 
 def diagnose(state: IncidentState) -> dict:
-    """汇总证据 E1~E5,规则闸门决定是否确认根因。"""
+    """V1.3:按双 Policy 四分支判定(设计 §4.4)。"""
     if state.get("status") == "needs_human":
         # collect_evidence 已决定转人工(预算/无效决策/去重/超时),保留并补发事件
         _emit_status(state)
         incident_repo.update_state(state["incident_id"], status="needs_human",
                                    termination_reason=state.get("termination_reason"))
         return state
-    gate = state.get("evidence_gate") or {}
-    if evaluate_evidence_gate(gate):
+    from app.agent import policies as policies_mod
+    facts_dict = state.get("facts") or {}
+    pol = state.get("policy") or policies_mod.evaluate_policies(facts_dict)
+    exclusions = policies_mod.evaluate_exclusions(facts_dict)
+    root_cause, reason = policies_mod.decide_root_cause(pol, exclusions)
+    if root_cause:
         state["confirmed_hypothesis_id"] = "h1"
+        state["root_cause_code"] = root_cause
         state["status"] = "investigating"
         state["termination_reason"] = None
         for h in state.get("hypotheses", []):
             hypothesis_repo.upsert_hypothesis(state["incident_id"],
                                               h.get("description", ""), "confirmed")
+        return state
+    if reason:
+        state["status"] = "needs_human"
+        state["termination_reason"] = reason
+        _emit_status(state)
+        incident_repo.update_state(state["incident_id"], status="needs_human",
+                                   termination_reason=reason)
+        return state
+    # 继续收集:预算耗尽才转 needs_human
+    if state.get("termination_reason") == "evidence_budget_exhausted":
+        state["status"] = "needs_human"
+        _emit_status(state)
+        incident_repo.update_state(state["incident_id"], status="needs_human",
+                                   termination_reason=state.get("termination_reason"))
     else:
-        # 证据不足:预算耗尽 -> needs_human;否则回到 collect_evidence(条件边)
-        if state.get("termination_reason") == "evidence_budget_exhausted":
-            state["status"] = "needs_human"
-            _emit_status(state)
-            incident_repo.update_state(state["incident_id"], status="needs_human",
-                                       termination_reason=state.get("termination_reason"))
-        else:
-            state["status"] = "investigating"  # 继续循环
+        state["status"] = "investigating"  # 继续循环
     return state
 
 

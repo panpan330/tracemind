@@ -28,9 +28,12 @@ class DeterministicEvidencePlanner:
 
     def choose(self, state: dict, eligible_tools: set[str]) -> list[dict]:
         gate = state.get("evidence_gate") or {}
+        # 已采集证据集合(无论通过与否)——采集过即视为"已知",不重采(防 duplicate 死循环)
+        collected = {str(e.get("key", e.get("id"))).lower()
+                     for e in state.get("evidence") or []}
         trace_id = self._find_trace_id(state)
         for key in EVIDENCE_ORDER:
-            if gate.get(key, gate.get(key.upper(), False)):
+            if key in collected:
                 continue
             if key == "e2" and not trace_id:
                 # 无 trace_id:回退到 metrics 重新取代表性 trace
@@ -47,7 +50,7 @@ class DeterministicEvidencePlanner:
             return [{"id": f"d{key}", "name": tool, "arguments": args}]
         # 锁链(L1→L2):索引链已齐或证据不足时补锁证据
         for key in LOCK_EVIDENCE_ORDER:
-            if gate.get(key, gate.get(key.upper(), False)):
+            if key in collected:
                 continue
             if key == "l2" and not self._find_blocker_ref(state):
                 continue  # 无 blocker_ref,无法调用事务详情
@@ -91,7 +94,8 @@ class DeterministicEvidencePlanner:
         if tool == "get_lock_waiters":
             return {"scope_ref": "INVENTORY_RESERVATION"}
         if tool == "get_transaction_details":
-            return {"transaction_ref": DeterministicEvidencePlanner._find_blocker_ref(state)}
+            # 占位引用:validate 校验 enum 白名单,resolve_arguments 再解析为真实 blocker_ref
+            return {"transaction_ref": "OBSERVED_BLOCKER"}
         if tool == "list_expensive_query_digests":
             return {"window_seconds": 300}
         if tool == "get_query_plan":
