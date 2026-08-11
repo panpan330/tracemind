@@ -66,3 +66,39 @@ def test_get_llm_unknown_mode_raises(monkeypatch):
     monkeypatch.setattr(settings, "llm_mode", "bogus")
     with pytest.raises(ValueError):
         get_llm()
+
+
+class StubRetriever:
+    def __init__(self, hits):
+        self._hits = hits
+        self.queries = []
+
+    def search(self, query, top_k=3):
+        self.queries.append(query)
+        return self._hits
+
+
+def test_hypothesize_includes_rag_context(monkeypatch):
+    # 审计写入隔离:不触真实 DB
+    monkeypatch.setattr("app.agent.llm.retrieval_repo.insert", lambda **kw: None)
+    client = StubClient([{"hypotheses": [{"description": "缺索引"}]}])
+    retriever = StubRetriever([{"text": "EXPLAIN 显示全表扫描", "score": 0.9,
+                                "doc_id": "runbook-mysql-missing-index", "title": "缺索引"}])
+    llm = OpenAICompatibleLLM(client=client, retriever=retriever, strict=False)
+    llm.hypothesize({"description": "库存查询变慢", "run_id": 1, "incident_id": 1})
+    content = client.calls[0][0][0]["content"]
+    assert "全表扫描" in content
+    assert "<knowledge_reference" in content
+
+
+def test_hypothesize_survives_retriever_failure(monkeypatch):
+    monkeypatch.setattr("app.agent.llm.retrieval_repo.insert", lambda **kw: None)
+
+    class BoomRetriever:
+        def search(self, query, top_k=3):
+            raise RuntimeError("qdrant down")
+
+    client = StubClient([{"hypotheses": [{"description": "缺索引"}]}])
+    llm = OpenAICompatibleLLM(client=client, retriever=BoomRetriever(), strict=False)
+    hyps = llm.hypothesize({"description": "x", "run_id": 1, "incident_id": 1})
+    assert hyps[0]["description"] == "缺索引"

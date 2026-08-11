@@ -13,6 +13,10 @@ from app.agent.determinism import (DeterministicEvidencePlanner,
                                    TemplatePostmortemRenderer)
 from app.agent.llm_client import LLMClient
 from app.config import settings
+from app.rag.embedder import Embedder
+from app.rag.retriever import Retriever
+from app.rag.runbook_store import RunbookStore
+from app.repositories import retrieval_repo
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +93,30 @@ class OpenAICompatibleLLM:
     def _rag_context(self, state: dict) -> str:
         if self.retriever is None:
             return ""
+        import time as _t
+        start = _t.monotonic()
         try:
             hits = self.retriever.search(state.get("description", ""),
                                          top_k=settings.rag_final_top_k)
+            status = "ok" if hits else "no_result"
+            degraded = False
         except Exception as exc:  # noqa: BLE001 检索失败不阻塞
-            logger.warning("RAG 检索失败,忽略知识库上下文: %s", exc)
-            return ""
+            logger.warning("RAG 检索失败: %s", exc)
+            hits, status, degraded = [], "failed", True
+        latency_ms = int((_t.monotonic() - start) * 1000)
+        try:
+            retrieval_repo.insert(
+                incident_id=state.get("incident_id", 0), run_id=state.get("run_id", 0),
+                node="hypothesize", query_text_hash="",
+                collection_alias=settings.qdrant_collection_alias,
+                collection_version="v1", embedding_model=settings.embedding_model,
+                dimensions=settings.embedding_dimensions,
+                candidate_top_k=settings.rag_candidate_top_k,
+                final_chunk_ids=",".join(h.get("doc_id", "") for h in hits),
+                scores=",".join(str(h.get("score", 0.0)) for h in hits),
+                latency_ms=latency_ms, status=status, error_code="", degraded=degraded)
+        except Exception:  # noqa: BLE001 审计失败不影响主流程
+            logger.warning("retrieval_record 写入失败", exc_info=True)
         blocks = []
         for h in hits:
             blocks.append(
@@ -167,10 +189,24 @@ class OpenAICompatibleLLM:
         return self._report_renderer.render(state)
 
 
+def _build_retriever():
+    if settings.rag_mode == "off":
+        return None
+    try:
+        store = RunbookStore(embedder=Embedder())
+        if store.embedder.embed("探活") is None:
+            return None
+        return Retriever(store)
+    except Exception as exc:  # noqa: BLE001 初始化失败不阻塞
+        logger.warning("RAG retriever 初始化失败,降级无知识库: %s", exc)
+        return None
+
+
 def get_llm():
     mode = settings.llm_mode
     if mode == "fake":
         return FakeLLM()
     if mode in ("real_strict", "real_demo"):
-        return OpenAICompatibleLLM(strict=(mode == "real_strict"))
+        return OpenAICompatibleLLM(strict=(mode == "real_strict"),
+                                   retriever=_build_retriever())
     raise ValueError(f"未知 LLM_MODE: {mode}")
