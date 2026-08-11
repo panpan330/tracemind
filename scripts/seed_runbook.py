@@ -5,12 +5,15 @@ import argparse
 import sys
 from pathlib import Path
 
-from app.rag.embedder import Embedder
-from app.rag.runbook_data import (chunk_text, content_hash, load_all_runbooks,
-                                  point_id)
-from app.rag.runbook_store import RagUnavailableError, RunbookStore
-
 ROOT = Path(__file__).resolve().parents[1]
+
+# 让 `uv run python ../scripts/seed_runbook.py` 能 import ai-service 的 app 包
+sys.path.insert(0, str(ROOT / "ai-service"))
+
+from app.rag.embedder import Embedder  # noqa: E402
+from app.rag.runbook_data import (chunk_text, content_hash, load_all_runbooks,
+                                  point_id)  # noqa: E402
+from app.rag.runbook_store import RagUnavailableError, RunbookStore  # noqa: E402
 
 
 def main() -> int:

@@ -58,7 +58,9 @@ class RunbookStore:
                               json={"vector": vector, "limit": top_k, "with_payload": True},
                               timeout=self.timeout)
             resp.raise_for_status()
-            points = resp.json()["result"]["points"]
+            res = resp.json()["result"]
+            # Qdrant 版本差异:1.18 直接返回数组,标准格式为 {"points": [...]},两者兼容
+            points = res if isinstance(res, list) else res.get("points", [])
             return [{"text": p["payload"].get("text", ""), "score": p.get("score", 0.0),
                      "doc_id": p["payload"].get("doc_id", ""),
                      "title": p["payload"].get("title", "")}
@@ -68,11 +70,12 @@ class RunbookStore:
 
     def upsert(self, point_id: int, vector: list[float], payload: dict) -> None:
         try:
-            resp = httpx.post(f"{self.base_url}/collections/{self.collection}/points?wait=true",
-                              headers=self._headers(write=True),
-                              json={"points": [{"id": point_id, "vector": vector,
+            # Qdrant upsert 标准端点为 PUT /points;POST 会走旧 batch API(报 missing ids)
+            resp = httpx.put(f"{self.base_url}/collections/{self.collection}/points?wait=true",
+                             headers=self._headers(write=True),
+                             json={"points": [{"id": point_id, "vector": vector,
                                                 "payload": payload}]},
-                              timeout=self.timeout)
+                             timeout=self.timeout)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise RagUnavailableError(f"Qdrant upsert 失败: {exc}") from exc

@@ -74,8 +74,8 @@ def content_hash(text: str) -> str:
 
 
 def point_id(doc_id: str, section: str, idx: int) -> int:
-    """稳定 Point ID:相同输入幂等(uuid5 取 int)。"""
-    return uuid.uuid5(NAMESPACE, f"{doc_id}|{section}|{idx}").int
+    """稳定 Point ID:相同输入幂等(uuid5 取 int,截断到 uint64 供 Qdrant 使用)。"""
+    return uuid.uuid5(NAMESPACE, f"{doc_id}|{section}|{idx}").int & ((1 << 64) - 1)
 
 
 def load_all_runbooks(directory: Path = RUNBOOKS_DIR) -> list[dict]:
