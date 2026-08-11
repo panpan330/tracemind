@@ -69,8 +69,10 @@ def main() -> int:
 
     # 必须在 import app.* 之前设置:settings 模块级单例读取一次 env
     os.environ["TRACEMIND_LLM_MODE"] = args.llm
-    if args.llm == "real_strict" and not os.environ.get("TRACEMIND_EVAL_CHAT_MODEL"):
-        print("--llm real_strict 需要 TRACEMIND_EVAL_CHAT_MODEL 环境变量", file=sys.stderr)
+    os.environ["TRACEMIND_RAG_MODE"] = "off"  # 离线评测使用 Fixture,不依赖 RAG/Qdrant
+    from app.config import settings  # noqa: E402 读 .env.local(TRACEMIND_EVAL_CHAT_MODEL)
+    if args.llm == "real_strict" and not settings.eval_chat_model:
+        print("--llm real_strict 需要 TRACEMIND_EVAL_CHAT_MODEL(在 .env.local 配置)", file=sys.stderr)
         return 1
 
     cases = [json.loads(f.read_text(encoding="utf-8")) for f in sorted(CASES_DIR.glob("*.json"))]

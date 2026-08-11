@@ -61,7 +61,7 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     """混合循环:LLM 选工具(或确定性规划器)→ 程序校验/解析/去重/执行 → 更新闸门。
     返回增量 dict 由 LangGraph reducer 合并;llm/tools 以参数注入便于单测。"""
     from app.agent.determinism import DeterministicEvidencePlanner
-    from app.agent.llm import get_llm
+    from app.agent.llm import ModelDegradedError, get_llm
     from app.agent.tool_calling import (MAX_CONSECUTIVE_INVALID, MAX_CONSECUTIVE_NO_PROGRESS,
                                         MAX_DECISION_ATTEMPTS, MAX_DURATION_SECONDS,
                                         MAX_TOOL_EXECUTIONS, ArgumentResolutionError,
@@ -91,11 +91,16 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
 
     eligible = compute_eligible_tools(state)
     prompt = _build_collect_prompt(state, eligible)
-    if hasattr(llm, "select_tool"):
-        calls = llm.select_tool(state, prompt, eligible)
-    else:
-        # FakeLLM/确定性路径:规划器按 E1→E5 顺序补缺失证据(不伪装成模型)
-        calls = planner.choose(state, eligible)
+    try:
+        if hasattr(llm, "select_tool"):
+            calls = llm.select_tool(state, prompt, eligible)
+        else:
+            # FakeLLM/确定性路径:规划器按 E1→E5 顺序补缺失证据(不伪装成模型)
+            calls = planner.choose(state, eligible)
+    except ModelDegradedError:
+        # real_strict 模型失败:优雅转 needs_human,不让调查崩溃
+        return {"status": "needs_human", "termination_reason": "llm_unavailable",
+                "investigation_started_at": state.get("investigation_started_at")}
 
     out = {"decision_attempt_count": decision,
            "investigation_started_at": started,
@@ -309,9 +314,17 @@ def ingest(state: IncidentState) -> dict:
 
 
 def hypothesize(state: IncidentState) -> dict:
-    """调用 LLM 生成初始假设列表,写入 hypotheses 并进入调查。"""
+    """调用 LLM 生成初始假设列表,写入 hypotheses 并进入调查。
+    real_strict 模型失败:优雅转 needs_human(llm_unavailable),不让调查崩溃。"""
+    from app.agent.llm import ModelDegradedError
     llm = get_llm()
-    hyps = llm.hypothesize(state)
+    try:
+        hyps = llm.hypothesize(state)
+    except ModelDegradedError:
+        state["status"] = "needs_human"
+        state["termination_reason"] = "llm_unavailable"
+        _emit_status(state)
+        return state
     state["hypotheses"] = hyps
     # 审计落库:假设写 hypothesis 表(幂等)
     for h in hyps:

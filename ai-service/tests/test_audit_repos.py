@@ -33,7 +33,7 @@ def test_model_call_insert_sql(monkeypatch):
                output_tokens=3, status="ok", error_code="", degraded=False,
                git_commit_sha="abc", knowledge_chunk_ids="[]")
     sql, params = engine.sqls[0]
-    assert "INSERT INTO model_call" in sql
+    assert "INSERT INTO model_call" in str(sql)
     assert params[0] == 1
 
 
@@ -46,4 +46,4 @@ def test_retrieval_insert_sql(monkeypatch):
                candidate_top_k=6, final_chunk_ids="[]", scores="[]",
                latency_ms=5, status="ok", error_code="", degraded=False)
     sql, params = engine.sqls[0]
-    assert "INSERT INTO retrieval_record" in sql
+    assert "INSERT INTO retrieval_record" in str(sql)
