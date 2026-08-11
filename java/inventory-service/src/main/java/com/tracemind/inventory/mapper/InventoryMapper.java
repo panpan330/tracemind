@@ -9,7 +9,7 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface InventoryMapper extends BaseMapper<Inventory> {
     @Select("SELECT id, sku_id, warehouse_id, quantity, version FROM inventory " +
-            "WHERE sku_id = #{skuId} AND warehouse_id = #{warehouseId}")
+            "WHERE sku_id = #{skuId} AND warehouse_id = #{warehouseId} FOR SHARE")
     Inventory selectBySkuAndWarehouse(@Param("skuId") long skuId,
                                       @Param("warehouseId") long warehouseId);
 }

@@ -26,7 +26,7 @@ class ScenarioServiceTest {
     @Test
     void injectDropsIndex() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class))).thenReturn(1);
-        ScenarioService.InjectResult result = scenarioService.inject();
+        ScenarioService.InjectResult result = scenarioService.inject("SCN-001");
         assertThat(result.status()).isEqualTo("FAULTY");
         verify(jdbcTemplate).execute("DROP INDEX idx_sku_warehouse ON inventory");
     }
@@ -34,7 +34,7 @@ class ScenarioServiceTest {
     @Test
     void injectIsIdempotent_whenAlreadyFaulty() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class))).thenReturn(0);
-        ScenarioService.InjectResult result = scenarioService.inject();
+        ScenarioService.InjectResult result = scenarioService.inject("SCN-001");
         assertThat(result.status()).isEqualTo("FAULTY");
         assertThat(result.detail()).isEqualTo("already_faulty");
     }
@@ -42,7 +42,7 @@ class ScenarioServiceTest {
     @Test
     void resetRecreatesIndex_whenMissing() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class))).thenReturn(0);
-        ScenarioService.ResetResult result = scenarioService.reset();
+        ScenarioService.ResetResult result = scenarioService.reset("SCN-001");
         assertThat(result.status()).isEqualTo("HEALTHY");
         verify(jdbcTemplate).execute("CREATE INDEX idx_sku_warehouse ON inventory (sku_id, warehouse_id)");
     }

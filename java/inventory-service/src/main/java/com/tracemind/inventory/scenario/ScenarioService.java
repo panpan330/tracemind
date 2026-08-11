@@ -55,6 +55,16 @@ public class ScenarioService {
         return new InjectResult("UNKNOWN_SCENARIO", scenario);
     }
 
+    private void ensureLockTarget() {
+        Integer cnt = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM inventory WHERE sku_id=? AND warehouse_id=?",
+                Integer.class, LOCK_SKU, LOCK_WAREHOUSE);
+        if (cnt == null || cnt == 0) {
+            jdbcTemplate.update("INSERT INTO inventory (sku_id, warehouse_id, quantity) VALUES (?, ?, ?)",
+                                LOCK_SKU, LOCK_WAREHOUSE, 100);
+        }
+    }
+
     private boolean indexInjected() {
         Integer present = jdbcTemplate.queryForObject(INDEX_EXISTS_SQL, Integer.class);
         return present == null || present == 0;
@@ -79,6 +89,8 @@ public class ScenarioService {
             if (ds == null) {
                 return new InjectResult("FAULTY", "no_datasource");
             }
+            ensureLockTarget();   // 保证 42/7 记录存在(不存在则插入),幂等
+            observationStore.clear();   // 清除健康样本,故障指标不被稀释
             Connection conn = ds.getConnection();
             conn.setAutoCommit(false);
             lockConnection = conn;
@@ -132,8 +144,12 @@ public class ScenarioService {
         Future<?> task = lockTask;
         if (task != null) {
             task.cancel(true);
+            try {
+                task.get(3, TimeUnit.SECONDS);   // 等待持锁线程中断并回滚关闭
+            } catch (Exception ignored) {
+                // 线程未及时退出:连接由 finally 兜底关闭
+            }
         }
-        lockExecutor.shutdownNow();
         lockTask = null;
         lockHeld = false;
         lockConnection = null;

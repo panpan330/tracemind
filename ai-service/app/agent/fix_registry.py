@@ -45,8 +45,11 @@ def _extract_lock_parameters(state: dict) -> dict:
         raise ValueError("无有效锁等待证据,无法构造 TERMINATE_BLOCKING_SESSION 参数")
     w = target[0]
     tx = ev.get("l2") or {}
+    # blocking_transaction_id 取 L2 证据的真实 innodb_trx.trx_id(与执行前重查的 trx_id 同一 ID 空间,
+    # 用于防连接复用误杀);L2 缺失时降级用 L1 的 ENGINE id(仅信息)。
+    blocking_tx_id = tx.get("transaction_id") or w.get("blocking_transaction_id")
     return {
-        "blocking_transaction_id": w.get("blocking_transaction_id"),
+        "blocking_transaction_id": blocking_tx_id,
         "blocking_processlist_id": w.get("blocking_processlist_id"),
         "blocking_lock_ref": w.get("blocking_lock_ref"),
         "locked_schema": w.get("object_schema"),

@@ -37,7 +37,13 @@ def test_transaction_details_shapes():
     assert r["data"]["processlist_id"] == 88
 
 
-def test_no_fixture_returns_failure():
-    # 未注入 fixture 且真实查询连不上(测试环境无 MySQL/只读连接)→ 明确失败而非伪数据
+def test_no_fixture_returns_explicit_result():
+    # 未注入 fixture → 真实查询:本地 MySQL 在线则成功(明确数据),否则明确失败;
+    # 绝不返回 fixture 伪数据,也不静默伪造。
     r = lock_queries.get_lock_waiters("tracemind_business", "inventory", 3000)
-    assert r["ok"] is False
+    assert isinstance(r.get("ok"), bool)
+    assert "data" in r
+    if r["ok"]:
+        assert "observed_at" in r["data"] and "snapshot_expires_at" in r["data"]
+    else:
+        assert "error_message" in r

@@ -50,7 +50,8 @@ class GetLockWaitersIn(BaseModel):
 
 
 class GetTransactionDetailsIn(BaseModel):
-    transaction_ref: str = Field(pattern="^(OBSERVED_BLOCKER)$")
+    # 受控引用:占位符 OBSERVED_BLOCKER(planner 规划)或程序解析后的 blk_<processlist_id>
+    transaction_ref: str = Field(pattern=r"^(OBSERVED_BLOCKER|blk_\d+)$")
 
 
 class ExecuteFixIn(BaseModel):

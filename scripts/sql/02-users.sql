@@ -13,6 +13,7 @@ GRANT CREATE TEMPORARY TABLES ON tracemind_control.* TO 'tracemind_control_app'@
 GRANT SELECT ON tracemind_business.* TO 'ai_investigator'@'%';
 GRANT SELECT ON tracemind_business_test.* TO 'ai_investigator'@'%';
 GRANT SELECT ON performance_schema.* TO 'ai_investigator'@'%';
+GRANT PROCESS ON *.* TO 'ai_investigator'@'%';
 -- fix_executor:仅 INDEX 权限,execute_fix 唯一写路径
 GRANT INDEX ON tracemind_business.* TO 'fix_executor'@'%';
 FLUSH PRIVILEGES;
@@ -22,3 +23,4 @@ CREATE USER IF NOT EXISTS 'session_terminator'@'%' IDENTIFIED BY 'terminator_pwd
 GRANT SELECT ON information_schema.* TO 'session_terminator'@'%';
 GRANT SELECT ON performance_schema.* TO 'session_terminator'@'%';
 GRANT PROCESS ON *.* TO 'session_terminator'@'%';
+GRANT CONNECTION_ADMIN ON *.* TO 'session_terminator'@'%';

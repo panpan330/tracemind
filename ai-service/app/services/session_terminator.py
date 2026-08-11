@@ -15,13 +15,14 @@ _engine = None
 
 
 def get_terminator_engine():
-    """独立连接池,凭据仅此处持有;默认回退只读引擎(生产由 TRACEMIND_SESSION_TERMINATOR_DB_URL 提供)。"""
+    """独立连接池,凭据仅此处持有;默认回退只读引擎(生产由 TRACEMIND_SESSION_TERMINATOR_DB_URL 提供)。
+    返回 SqlEngine 封装(提供 query_blocking/execute_kill)。"""
     global _engine
     if _engine is None:
         from app.db.engine import get_engine_from_url
         from app.config import settings
         url = getattr(settings, "session_terminator_db_url", "") or settings.readonly_db_url
-        _engine = get_engine_from_url(url)
+        _engine = SqlEngine(get_engine_from_url(url))
     return _engine
 
 
@@ -32,24 +33,40 @@ class SqlEngine:
         self._engine = engine
 
     def query_blocking(self, processlist_id: int) -> dict | None:
+        from sqlalchemy import text
         with self._engine.connect() as conn:
             rows = conn.execute(
-                "SELECT trx_id, trx_mysql_thread_id, trx_started, trx_state, "
-                "TIMESTAMPDIFF(MILLISECOND, trx_started, NOW(3)) AS age_ms "
-                "FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = %s",
-                (processlist_id,)).mappings().all()
+                text("SELECT trx.trx_id, trx.trx_mysql_thread_id, trx.trx_started, "
+                     "TIMESTAMPDIFF(MICROSECOND, trx.trx_started, NOW(3)) / 1000 AS age_ms, "
+                     "p.user AS account "
+                     "FROM information_schema.innodb_trx trx "
+                     "JOIN performance_schema.threads t "
+                     "  ON t.PROCESSLIST_ID = trx.trx_mysql_thread_id "
+                     "JOIN performance_schema.processlist p "
+                     "  ON p.ID = trx.trx_mysql_thread_id "
+                     "WHERE trx.trx_mysql_thread_id = :pid"),
+                {"pid": processlist_id}).mappings().all()
+            # holds_lock:该 processlist 是否仍作为阻塞者出现在锁等待中(实时关系重查)
+            n = conn.execute(
+                text("SELECT COUNT(*) FROM performance_schema.data_lock_waits lw "
+                     "JOIN performance_schema.threads bt "
+                     "  ON lw.BLOCKING_THREAD_ID = bt.THREAD_ID "
+                     "WHERE bt.PROCESSLIST_ID = :pid"),
+                {"pid": processlist_id}).scalar()
         if not rows:
             return None
         r = rows[0]
-        # account/系统线程需结合 processlist 查询(Task 10 联调时补全真实字段)
+        account = r.get("account") or ""
         return {"transaction_id": r.get("trx_id"),
                 "processlist_id": processlist_id,
-                "account": "", "age_ms": int(r.get("age_ms") or 0),
-                "holds_lock": True, "is_system": False}
+                "account": account, "age_ms": int(r.get("age_ms") or 0),
+                "holds_lock": bool(n),
+                "is_system": account in ("system user", "event_scheduler")}
 
     def execute_kill(self, processlist_id: int) -> None:
+        from sqlalchemy import text
         with self._engine.connect() as conn:
-            conn.execute(f"KILL {processlist_id}")  # pid 已通过 _to_positive_int 校验
+            conn.execute(text(f"KILL {processlist_id}"))  # pid 已通过 _to_positive_int 校验
 
 
 def _to_positive_int(value) -> int | None:
@@ -82,11 +99,12 @@ def execute(proposal: dict, approval: dict, engine=None) -> dict:
         if blocking is None:
             # 原事务消失且原等待关系消失 → ALREADY_RESOLVED(安全无操作,防连接复用误杀)
             return {"execution_result": "already_resolved", "kill_attempted": False}
-        if blocking.get("transaction_id") != expected_tx:
+        # blocking_transaction_id 取 L2 证据的真实 innodb_trx.trx_id(与 query_blocking 同 ID 空间)
+        if expected_tx is not None and str(blocking.get("transaction_id")) != str(expected_tx):
             # 原事务消失但 processlist 已属另一事务 → TARGET_CHANGED,禁止 KILL
             return {"execution_result": "target_changed", "kill_attempted": False}
         if not blocking.get("holds_lock"):
-            # 关系存在但事务/锁与审批不一致 → EVIDENCE_STALE,禁止 KILL,重新调查
+            # 该 processlist 已不再作为阻塞者持锁 → EVIDENCE_STALE,禁止 KILL,重新调查
             return {"execution_result": "evidence_stale", "kill_attempted": False}
         account = blocking.get("account") or ""
         if account in FORBIDDEN_ACCOUNTS or account not in ALLOWED_ACCOUNTS:

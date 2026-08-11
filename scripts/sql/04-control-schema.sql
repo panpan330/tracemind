@@ -225,3 +225,11 @@ SET @ddl := IF(@have_col = 0,
   'ALTER TABLE tracemind_control.incident ADD COLUMN degradation_reasons VARCHAR(500) NULL AFTER degraded',
   'SELECT 1');
 PREPARE stmt_r FROM @ddl; EXECUTE stmt_r; DEALLOCATE PREPARE stmt_r;
+
+-- fix_definition 种子(幂等):两条预定义动作
+INSERT INTO fix_definition (action_name, risk_level, description)
+SELECT 'CREATE_INVENTORY_INDEX', 'medium', '创建 idx_sku_warehouse(sku_id, warehouse_id) 联合索引'
+WHERE NOT EXISTS (SELECT 1 FROM fix_definition WHERE action_name = 'CREATE_INVENTORY_INDEX');
+INSERT INTO fix_definition (action_name, risk_level, description)
+SELECT 'TERMINATE_BLOCKING_SESSION', 'high', '终止持有库存目标记录排他锁的阻塞会话'
+WHERE NOT EXISTS (SELECT 1 FROM fix_definition WHERE action_name = 'TERMINATE_BLOCKING_SESSION');

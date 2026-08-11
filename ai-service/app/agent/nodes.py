@@ -154,7 +154,7 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
 
     try:
         resolved = resolve_arguments(name, raw_args, state)
-    except ArgumentResolutionError:
+    except ArgumentResolutionError as e:
         inv = (state.get("consecutive_invalid_count") or 0) + 1
         if inv >= MAX_CONSECUTIVE_INVALID:
             return {**out, "status": "needs_human", "termination_reason": "argument_resolution_failed",
@@ -164,6 +164,7 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     guard = DuplicateGuard()
     for rec in state.get("tool_calls_record") or []:
         guard.seed(rec)
+    unique_hist = sorted({(r.get("tool_name"), str(r.get("arguments"))[:30]) for r in (state.get("tool_calls_record") or [])})
     dup, _ = guard.check(name, resolved)
     if dup:
         inv = (state.get("consecutive_invalid_count") or 0) + 1

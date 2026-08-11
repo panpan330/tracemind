@@ -11,12 +11,19 @@ from app.tools.schemas import (ExecuteFixIn, GetIndexInfoIn, GetLockWaitersIn,
 
 
 def _get_lock_waiters(scope_ref: str) -> dict:
-    """scope_ref 枚举白名单;schema/table/min_wait_ms 由程序固定(LLM 无自由参数)。"""
-    return lock_queries.get_lock_waiters("tracemind_business", "inventory", 3000)
+    """scope_ref 枚举白名单;schema/table/min_wait_ms 由程序固定(LLM 无自由参数)。
+    返回纯净 data(execute_tool 负责 ToolResult 包装);失败抛 ValueError。"""
+    r = lock_queries.get_lock_waiters("tracemind_business", "inventory", 3000)
+    if not r.get("ok"):
+        raise ValueError(r.get("error_message") or "lock_waiters_query_failed")
+    return r["data"]
 
 
 def _get_transaction_details(transaction_ref: str) -> dict:
-    return lock_queries.get_transaction_details(transaction_ref)
+    r = lock_queries.get_transaction_details(transaction_ref)
+    if not r.get("ok"):
+        raise ValueError(r.get("error_message") or "trx_query_failed")
+    return r["data"]
 
 
 TOOL_REGISTRY.update({
