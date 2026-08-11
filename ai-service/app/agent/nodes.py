@@ -499,10 +499,34 @@ def human_approval(state: IncidentState) -> dict:
 
 
 def execute_fix(state: IncidentState) -> dict:
-    """执行审批后的预定义修复(唯一业务写路径,含六项校验)。"""
+    """执行审批后的预定义修复(唯一业务写路径)。按 action_type 分发:
+    CREATE_INVENTORY_INDEX → fix_service(六项校验);TERMINATE_BLOCKING_SESSION → session_terminator(8 项重查)。"""
     proposal = state.get("fix_proposal") or {}
     approval = state.get("approval") or {}
     state["status"] = "executing"
+    if proposal.get("action_type") == "TERMINATE_BLOCKING_SESSION":
+        from app.services import session_terminator as st
+        result = st.execute(proposal, approval)
+        if result["execution_result"] == "executed":
+            fix_status = "succeeded"
+        elif result["execution_result"] in ("already_resolved", "already_executed"):
+            fix_status = "no_op"   # 安全无操作(事务已结束/幂等)
+        elif result["execution_result"] in ("target_changed", "evidence_stale",
+                                            "rejected_not_approved", "rejected_expired",
+                                            "rejected_forbidden_account",
+                                            "rejected_system_thread", "invalid_target"):
+            fix_status = "failed"
+        else:
+            fix_status = "failed"
+        state["fix_execution"] = {
+            "status": fix_status,
+            "execution_result": result["execution_result"],
+            "actual_processlist_id": result.get("actual_processlist_id"),
+            "idempotency_key": proposal.get("parameters_hash"),
+        }
+        # 审计落库:fix_execution 表(Task 9 落库;此处 stub 兼容测试)
+        _record_fix_execution(state, proposal, approval, fix_status, result)
+        return state
     try:
         result = fix_service.execute_fix(
             incident_id=state["incident_id"],
@@ -520,6 +544,25 @@ def execute_fix(state: IncidentState) -> dict:
     }
     state["status"] = "executing"
     return state
+
+
+def _record_fix_execution(state: IncidentState, proposal: dict, approval: dict,
+                          fix_status: str, result: dict) -> None:
+    """fix_execution 审计落库(表在 Task 9;此处 try/except 保证不阻塞处置闭环)。"""
+    try:
+        from app.repositories import fix_execution_repo
+        fix_execution_repo.create_execution(
+            incident_id=state["incident_id"],
+            fix_proposal_id=proposal.get("fix_proposal_id"),
+            approval_id=approval.get("approval_id"),
+            idempotency_key=proposal.get("parameters_hash"),
+            blocking_relation_hash=proposal.get("blocking_relation_hash") or "",
+            status=fix_status,
+            execution_result=result.get("execution_result"),
+            kill_attempted=bool(result.get("kill_attempted")),
+            actual_processlist_id=result.get("actual_processlist_id"))
+    except Exception:  # noqa: BLE001  审计失败不阻塞处置
+        pass
 
 
 def verify_recovery_node(state: IncidentState) -> dict:

@@ -16,3 +16,9 @@ GRANT SELECT ON performance_schema.* TO 'ai_investigator'@'%';
 -- fix_executor:仅 INDEX 权限,execute_fix 唯一写路径
 GRANT INDEX ON tracemind_business.* TO 'fix_executor'@'%';
 FLUSH PRIVILEGES;
+
+-- 第五账号:会话终止专用(session_terminator)
+CREATE USER IF NOT EXISTS 'session_terminator'@'%' IDENTIFIED BY 'terminator_pwd';
+GRANT SELECT ON information_schema.* TO 'session_terminator'@'%';
+GRANT SELECT ON performance_schema.* TO 'session_terminator'@'%';
+GRANT PROCESS ON *.* TO 'session_terminator'@'%';
