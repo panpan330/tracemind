@@ -35,6 +35,41 @@ def llm_tool_schemas() -> list[dict[str, Any]]:
     return schemas
 
 
+def mcp_tool_schemas() -> dict[str, dict[str, Any]]:
+    """MCP Server 应暴露的完整工具 Schema(含 incident_id/agent_run_id 上下文)。
+    契约校验的本地预期源(属性名 + 类型 + required)。"""
+    out: dict[str, dict[str, Any]] = {}
+    for name in sorted(TOOL_NAMES):
+        spec = TOOL_REGISTRY[name]
+        schema = spec.input_schema.model_json_schema()
+        props: dict[str, Any] = {"incident_id": {"type": "integer"},
+                                 "agent_run_id": {"type": "integer"}}
+        props.update(schema.get("properties", {}))
+        if name == "list_expensive_query_digests":
+            # 兼容参数(调用方传,工具内部用默认窗口),可选不入 required
+            props["window_seconds"] = {"type": "integer"}
+        required = ["incident_id", "agent_run_id"] + list(schema.get("required", []))
+        out[name] = {"properties": props, "required": required}
+    return out
+
+
+def _signature(schema: dict) -> dict:
+    """归一化签名:属性名→类型映射 + required 集合(忽略 title/枚举/边界;
+    兼容 anyOf 可选参数,取第一个非 null 类型)。"""
+    def sig_type(v: Any) -> str | None:
+        if not isinstance(v, dict):
+            return None
+        if "type" in v:
+            return v["type"]
+        for item in v.get("anyOf", []):
+            if isinstance(item, dict) and item.get("type") != "null":
+                return item.get("type")
+        return None
+
+    props = {k: sig_type(v) for k, v in schema.get("properties", {}).items()}
+    return {"props": props, "required": sorted(set(schema.get("required", [])))}
+
+
 def schema_sha256(schema: dict) -> str:
     """标准化 JSON Schema 的 SHA-256(契约校验用)。"""
     blob = json.dumps(schema, sort_keys=True, ensure_ascii=False, default=str)
@@ -55,12 +90,11 @@ def verify_contract(server_info: dict, tools: list[dict]) -> None:
     names = {t.get("name") for t in tools}
     if names != set(TOOL_NAMES):
         raise MCPContractError(f"工具名称集合不一致: {sorted(names)} vs {sorted(TOOL_NAMES)}")
-    expected = {s["function"]["name"]: s["function"]["parameters"]
-                for s in llm_tool_schemas()}
+    expected = mcp_tool_schemas()
     for t in tools:
         if t["name"] in ("execute_fix", "verify_recovery"):
             raise MCPContractError(f"控制节点不应出现在 MCP 工具集: {t['name']}")
         if t["name"] not in expected:
             continue
-        if schema_sha256(t.get("inputSchema", {})) != schema_sha256(expected[t["name"]]):
-            raise MCPContractError(f"inputSchema 漂移: {t['name']}")
+        if _signature(t.get("inputSchema", {})) != _signature(expected[t["name"]]):
+            raise MCPContractError(f"inputSchema 不一致: {t['name']}")

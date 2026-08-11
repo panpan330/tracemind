@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -57,20 +58,29 @@ class McpClientManager:
         self._stdio_ctx = None
         self._sem = threading.Semaphore(1)
         self.is_ready = False
+        self.protocol_version: str | None = None
+        self._failed: Exception | None = None
         self._timeout = settings.mcp_timeout_seconds
         self.max_restart = settings.mcp_max_restart
         self._invocation_id = 0
 
-    async def _run_loop(self, ready: asyncio.Event) -> None:
+    def _run_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
-            await self._start_session(ready)
-            await self._loop.run_forever()
+            self._loop.run_until_complete(self._start_session())
+            self.is_ready = True
+            settings.mcp_ready = True
+            self._loop.run_forever()
+        except Exception as exc:  # noqa: BLE001 启动失败记录,由 start() 轮询发现
+            self._failed = exc
         finally:
-            await self._close_session()
+            try:
+                self._loop.run_until_complete(self._close_session())
+            except Exception:  # noqa: BLE001
+                pass
 
-    async def _start_session(self, ready: asyncio.Event) -> None:
+    async def _start_session(self) -> None:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -86,22 +96,21 @@ class McpClientManager:
                 self._stdio_ctx = stdio_client(params)
                 self._read, self._write = await self._stdio_ctx.__aenter__()
                 self._session = await ClientSession(self._read, self._write).__aenter__()
-                await self._session.initialize()
-                server_info = self._session.get_server_info() or {}
+                init_result = await self._session.initialize()
+                server_info = {"name": init_result.serverInfo.name,
+                               "version": init_result.serverInfo.version}
+                self.protocol_version = init_result.protocolVersion
                 tools = (await self._session.list_tools()).tools
                 verify_contract(server_info, [{"name": t.name, "inputSchema": t.inputSchema}
                                               for t in tools])
-                self.is_ready = True
-                settings.mcp_ready = True
-                ready.set()
-                logger.info("MCP Server 就绪,contract %s", MCP_TOOL_CONTRACT_VERSION)
+                logger.info("MCP Server 就绪,contract %s,protocol %s",
+                            MCP_TOOL_CONTRACT_VERSION, self.protocol_version)
                 return
             except Exception as exc:  # noqa: BLE001 启动/初始化/契约失败按策略重试
                 logger.warning("MCP Server 启动失败(第 %d/%d 次): %s", attempts,
                                self.max_restart + 1, exc)
                 await self._close_session()
                 if attempts > self.max_restart:
-                    settings.mcp_ready = False
                     raise MCPError(MCP_START_FAILED, str(exc)) from exc
                 await asyncio.sleep(0.5)
 
@@ -122,10 +131,17 @@ class McpClientManager:
         settings.mcp_ready = False
 
     async def start(self) -> None:
-        ready = asyncio.Event()
-        self._thread = threading.Thread(target=self._run_loop, args=(ready,), daemon=True)
+        self._failed = None
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
-        await asyncio.wait_for(ready.wait(), timeout=30)
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            if self._failed:
+                raise MCPError(MCP_START_FAILED, str(self._failed))
+            if self.is_ready:
+                return
+            await asyncio.sleep(0.1)
+        raise MCPError(MCP_START_FAILED, "MCP 启动超时")
 
     async def stop(self) -> None:
         if self._loop:
@@ -176,6 +192,12 @@ class McpClientManager:
 
 
 _client: McpClientManager | None = None
+
+
+def set_mcp_client(mgr: McpClientManager | None) -> None:
+    """注册/注销当前生效的 MCP Client(lifespan 与离线评测显式管理)。"""
+    global _client
+    _client = mgr
 
 
 def get_mcp_client() -> McpClientManager:

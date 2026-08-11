@@ -14,7 +14,12 @@ def run_server(fixture_file: str | None = None) -> None:
     """构造并注册 FastMCP;fixture_file 非空时进程内加载 fixture(仅 EVAL_MODE)。"""
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP(SERVER_NAME, version=SERVER_VERSION)
+    mcp = FastMCP(SERVER_NAME)
+    try:
+        # SDK 的 FastMCP 不暴露 version 参数,直接设置底层 server 的 version(契约校验用)
+        mcp._mcp_server.version = SERVER_VERSION
+    except AttributeError:
+        pass
 
     if fixture_file:
         from app.config import settings
@@ -47,7 +52,9 @@ def run_server(fixture_file: str | None = None) -> None:
 
     @mcp.tool()
     def list_expensive_query_digests(incident_id: int, agent_run_id: int,
-                                     window_seconds: int) -> dict:
+                                     window_seconds: int | None = None) -> dict:
+        # window_seconds 为兼容参数:传给 execute_tool 以匹配 fixture key
+        # (ListDigestsIn 忽略未知字段,工具内部使用默认窗口)
         return _delegate("list_expensive_query_digests", incident_id, agent_run_id,
                          window_seconds=window_seconds)
 
