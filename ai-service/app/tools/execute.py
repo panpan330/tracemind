@@ -21,11 +21,16 @@ def set_eval_fixture(fixture: dict | None) -> None:
     _EVAL_FIXTURE = fixture or {}
 
 
-def execute_tool(tool_name: str, incident_id: int | None = None, **kwargs: Any) -> dict:
+def execute_tool(tool_name: str, incident_id: int | None = None,
+                 agent_run_id: int | None = None, transport: str = "legacy_direct",
+                 mcp_invocation_id: str | None = None,
+                 mcp_attempt: int | None = None, **kwargs: Any) -> dict:
     """统一工具执行:参数校验、计时、成功/失败封装、审计落库。
 
     incident_id 由调用方显式传入(路径参数),kwargs 中出现的 incident_id
     一律剔除(防伪造);工具 schema 需要 incident_id 时自动注入。
+    agent_run_id/transport/mcp_invocation_id/mcp_attempt 为审计上下文,由调用方
+    (MCP Client 或安全控制节点)注入,不参与 Fixture 参数哈希。
     """
     # 离线评测 Fixture 命中优先;fixture 非空时不再补真实数据
     args = {k: v for k, v in kwargs.items() if k != "incident_id"}
@@ -69,7 +74,9 @@ def execute_tool(tool_name: str, incident_id: int | None = None, **kwargs: Any) 
                             duration_ms=int((time.monotonic() - start) * 1000),
                             error_code="TOOL_ERROR", error_message=str(e))
     if incident_id is not None:
-        record_tool_call(incident_id, tool_name, kwargs, result.model_dump())
+        record_tool_call(incident_id, tool_name, kwargs, result.model_dump(),
+                         agent_run_id=agent_run_id, transport=transport,
+                         mcp_invocation_id=mcp_invocation_id, mcp_attempt=mcp_attempt)
         append_event(incident_id, "tool_call",
                      {"tool": tool_name, "result": result.model_dump()})
     return result.model_dump()

@@ -78,11 +78,15 @@ class ToolCall(Base):
     __tablename__ = "tool_call"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    agent_run_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     tool_name: Mapped[str] = mapped_column(String(64))
     input: Mapped[Optional[dict]] = mapped_column(JSON)
     output: Mapped[Optional[dict]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(16), default="success")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    transport: Mapped[str] = mapped_column(String(32), default="legacy_direct")
+    mcp_invocation_id: Mapped[Optional[str]] = mapped_column(String(64))
+    mcp_attempt: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

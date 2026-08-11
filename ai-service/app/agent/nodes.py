@@ -30,12 +30,20 @@ FALLBACK_E1_P95_MS = 100
 
 
 def _call_tool(state: IncidentState, tool: str, **kwargs) -> dict:
-    # 上下文(incident_id/agent_run_id)由 MCP Client 注入;kwargs 中出现的一律剔除(防伪造)
+    # 上下文(incident_id/agent_run_id)由调用方注入;kwargs 中出现的一律剔除(防伪造)
     kwargs.pop("incident_id", None)
     kwargs.pop("agent_run_id", None)
-    result = get_mcp_client().call_tool(
-        tool, incident_id=state.get("incident_id", 0),
-        agent_run_id=state.get("run_id", 0), **kwargs)
+    incident_id = state.get("incident_id", 0)
+    agent_run_id = state.get("run_id", 0)
+    from app.mcp.contract import TOOL_NAMES
+    if tool in TOOL_NAMES:
+        # 五个调查工具:完全走 MCP
+        result = get_mcp_client().call_tool(tool, incident_id=incident_id,
+                                            agent_run_id=agent_run_id, **kwargs)
+    else:
+        # 确定性安全控制节点(verify_recovery):内部直接调用,审计 internal_control
+        result = execute_tool(tool, incident_id=incident_id, agent_run_id=agent_run_id,
+                              transport="internal_control", **kwargs)
     state["tool_call_count"] = state.get("tool_call_count", 0) + 1
     return result
 

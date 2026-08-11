@@ -47,3 +47,14 @@ def test_retrieval_insert_sql(monkeypatch):
                latency_ms=5, status="ok", error_code="", degraded=False)
     sql, params = engine.sqls[0]
     assert "INSERT INTO retrieval_record" in str(sql)
+
+
+def test_toolcall_model_has_mcp_fields():
+    from app.db import models
+    tc = models.ToolCall(incident_id=1, tool_name="get_trace", input={}, output={},
+                         agent_run_id=2, transport="mcp_stdio",
+                         mcp_invocation_id="mcp-1-abc", mcp_attempt=1)
+    assert tc.transport == "mcp_stdio"
+    assert tc.agent_run_id == 2
+    assert tc.mcp_invocation_id == "mcp-1-abc"
+    assert tc.mcp_attempt == 1

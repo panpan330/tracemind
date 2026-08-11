@@ -33,7 +33,7 @@ def run_server(fixture_file: str | None = None) -> None:
     def _delegate(name: str, incident_id: int, agent_run_id: int, **business):
         # Fixture 模式 synthetic context:不校验 Incident/AgentRun 存在
         return execute_tool(name, incident_id=incident_id, agent_run_id=agent_run_id,
-                            **business)
+                            transport="mcp_stdio", **business)
 
     @mcp.tool()
     def get_service_metrics(incident_id: int, agent_run_id: int,

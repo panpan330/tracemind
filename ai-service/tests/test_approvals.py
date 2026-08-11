@@ -47,6 +47,8 @@ def _patch_node_deps(monkeypatch):
             return fake_execute(name, incident_id=incident_id, **business)
 
     monkeypatch.setattr("app.agent.nodes.get_mcp_client", lambda: FakeMCP())
+    # verify_recovery 属确定性安全控制节点(不纳入 MCP),直接调 execute_tool
+    monkeypatch.setattr("app.agent.nodes.execute_tool", fake_execute)
     monkeypatch.setattr("app.agent.nodes.postmortem_repo.create_postmortem", fake_create_postmortem)
     monkeypatch.setattr("app.agent.nodes.hypothesis_repo.upsert_hypothesis",
                         lambda *a, **kw: {"id": 1})
