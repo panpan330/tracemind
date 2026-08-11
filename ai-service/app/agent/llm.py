@@ -156,11 +156,14 @@ class OpenAICompatibleLLM:
         schemas = [s for s in TOOL_SCHEMAS if s["function"]["name"] in eligible_tools]
         if not schemas:
             return []
-        result = self.client.chat([{"role": "user", "content": prompt}],
-                                  tools=schemas, max_tokens=300)
-        if result and result.tool_calls:
-            return [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                    for tc in result.tool_calls]
+        for attempt in range(self.MAX_RETRIES + 1):
+            result = self.client.chat([{"role": "user", "content": prompt}],
+                                      tools=schemas, max_tokens=300)
+            if result and result.tool_calls:
+                return [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                        for tc in result.tool_calls]
+            logger.warning("select_tool 未返回 tool_calls(第 %d/%d 次)", attempt + 1,
+                           self.MAX_RETRIES + 1)
         self._degrade("select_tool")
         return self._planner.choose(state, eligible_tools)
 

@@ -183,9 +183,10 @@ def _build_collect_prompt(state: dict, eligible: set[str]) -> str:
                          for e in state.get("evidence") or []) or "(无)"
     return (
         "你是故障调查 Agent。根据当前假设和已有证据,从可用工具中选择**一个**下一步要调用的工具。\n"
+        "你必须选择一个可用工具并调用它;禁止输出文字解释或放弃调用。仅当证据已完全足够时才不做调用。\n"
         f"当前假设:\n{hyps}\n已有证据:\n{evidence}\n"
         f"可用工具(只能选这些):{', '.join(sorted(eligible))}\n"
-        "只输出一个 tool_call;若证据已足够则不做任何调用。"
+        "只输出一个 tool_call。"
     )
 
 

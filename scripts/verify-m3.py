@@ -3,6 +3,7 @@
 前置:inventory-service(DEMO_MODE)、order-service、AI 服务(DEMO_MODE)已启动。
 用法: python scripts/verify-m3.py
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -10,15 +11,22 @@ import time
 
 import requests
 
-AI = "http://localhost:8000"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--base", default="http://localhost:8000", help="AI 服务地址")
+_parser.add_argument("--order", default="http://localhost:8081", help="order-service 地址(负载)")
+_args = _parser.parse_args()
+
+AI = _args.base
 DEMO_KEY = "demo-secret-2026"
 HEADERS = {"x-demo-key": DEMO_KEY}
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run_load(seconds: int = 8, qps: int = 15) -> None:
     """制造故障态负载:让指标与 performance_schema digest 产生数据。"""
-    env = {**os.environ, "LOAD_DURATION_SECONDS": str(seconds), "LOAD_QPS": str(qps)}
+    env = {**os.environ, "LOAD_DURATION_SECONDS": str(seconds), "LOAD_QPS": str(qps),
+           "ORDER_SERVICE_URL": _args.order}
     subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "loadgen.py")],
                    env=env, cwd=ROOT, check=True, timeout=60)
 
@@ -46,6 +54,10 @@ def main() -> None:
     if r.status_code >= 400:
         fail(f"reset 失败: {r.status_code} {r.text[:200]}")
     print(f"[{time.time()-t0:5.1f}s] reset 完成")
+
+    # 1.5) 健康态负载:创建 incident 前让观测窗口有健康数据(基线采集有值)
+    run_load(seconds=8, qps=15)
+    print(f"[{time.time()-t0:5.1f}s] 健康态负载完成")
 
     # 2) 健康态创建 Incident(此时采集健康指标基线)
     r = requests.post(f"{AI}/api/incidents", json={
@@ -80,10 +92,15 @@ def main() -> None:
     inc = wait_status(incident_id, "awaiting_approval")
     print(f"[{time.time()-t0:5.1f}s] 到达 awaiting_approval")
 
-    # 4) 断言:假设 / E1~E5 证据 / approval pending
+    # 4) 断言:假设 / E1~E5 证据 / approval pending / 无降级
     hyps = inc.get("hypotheses") or []
-    if not any("缺少联合索引" in (h.get("description") or "") for h in hyps):
+    # 真实模型措辞可能为"缺失复合索引/未创建联合索引"等,放宽为"索引 + 缺失语义"
+    if not any("索引" in (h.get("description") or "")
+               and any(w in (h.get("description") or "") for w in ("缺失", "缺少", "未建", "未创建"))
+               for h in hyps):
         fail(f"假设缺失: {hyps}")
+    if inc.get("degraded"):
+        fail(f"发生降级(degraded),真实模式验收不通过: {inc.get('degradation_reasons')}")
     evidence = inc.get("evidence") or []
     passed_keys = {e["key"] for e in evidence if e.get("passed")}
     for k in ("E1", "E2", "E3", "E4", "E5"):
