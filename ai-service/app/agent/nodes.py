@@ -566,7 +566,10 @@ def _record_fix_execution(state: IncidentState, proposal: dict, approval: dict,
 
 
 def verify_recovery_node(state: IncidentState) -> dict:
-    """调用 verify_recovery 工具并按规则判定恢复(骨架,完整三批探测在 Task 3.4 后接)。"""
+    """恢复验证。按根因分发:锁根因 → 目标范围六项验证(设计 V1.3 §6);
+    其他 → 原有 verify_recovery 工具路径。"""
+    if state.get("root_cause_code") == "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION":
+        return _verify_lock_recovery(state)
     fix_execution_id = (state.get("fix_execution") or {}).get("fix_execution_id")
     if not fix_execution_id:
         state["status"] = "failed"
@@ -584,3 +587,59 @@ def verify_recovery_node(state: IncidentState) -> dict:
         state["termination_reason"] = "recovery_failed"
     _emit_status(state)
     return state
+
+
+def _verify_lock_recovery(state: IncidentState) -> dict:
+    """锁根因恢复验证(六项目标范围,设计 §6):
+    轮询目标锁等待关系消失(≤60s)→ 连续三批库存预占探测 → recovered / needs_human(recovery_timeout)。"""
+    import time
+    from app.tools import lock_queries
+    deadline = _time.time() + 60  # 轮询截止 N=60s
+    target_gone = False
+    while _time.time() < deadline:
+        r = lock_queries.get_lock_waiters("tracemind_business", "inventory", 3000)
+        waits = (r.get("data") or {}).get("waits") or []
+        target = [w for w in waits
+                  if w.get("object_schema") == "tracemind_business"
+                  and w.get("object_table") == "inventory"
+                  and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
+        if not target:
+            target_gone = True
+            break
+        time.sleep(5)
+    if not target_gone:
+        state["recovery"] = {"status": "needs_human",
+                             "termination_reason": "recovery_timeout"}
+        state["status"] = "needs_human"
+        _emit_status(state)
+        return state
+    # 目标关系已消失:连续三批库存预占探测(复用 order check-stock 探测逻辑)
+    probes = _run_probe_batches(state, batches=3)
+    ok = all(p.get("success") for p in probes)
+    state["recovery"] = {"status": "recovered" if ok else "needs_human",
+                         "probes": probes,
+                         "termination_reason": None if ok else "recovery_probe_failed"}
+    state["status"] = state["recovery"]["status"]
+    _emit_status(state)
+    return state
+
+
+def _run_probe_batches(state: IncidentState, batches: int = 3) -> list[dict]:
+    """三批固定探测请求(与健康基线采集相同参数),每批记录 success。"""
+    import httpx
+    probes = []
+    order_url = _order_service_base()
+    for _ in range(batches):
+        try:
+            resp = httpx.post(
+                f"{order_url}/api/orders/1/check-stock",
+                json={"skuId": 42, "warehouseId": 7, "quantity": 1}, timeout=10)
+            probes.append({"success": resp.status_code < 500})
+        except Exception:  # noqa: BLE001
+            probes.append({"success": False})
+    return probes
+
+
+def _order_service_base() -> str:
+    from app.config import settings
+    return settings.order_service_url

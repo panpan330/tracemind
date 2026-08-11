@@ -178,3 +178,49 @@ def test_lock_wait_graph_reaches_confirmed(monkeypatch):
     assert result["root_cause_code"] == (
         "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION")
     assert result.get("confirmed_hypothesis_id") == "h1"
+
+
+def test_lock_recovery_checks_target_scope(monkeypatch):
+    """锁根因恢复:目标锁关系消失 → 三批探测通过 → recovered(不要求全库无锁)。"""
+    from app.agent import nodes
+
+    class FakeLockQueries:
+        def get_lock_waiters(self, *a, **kw):
+            return {"ok": True, "data": {"waits": []}}  # 目标锁关系已消失
+
+    monkeypatch.setattr("app.tools.lock_queries.get_lock_waiters",
+                        FakeLockQueries().get_lock_waiters)
+    monkeypatch.setattr(nodes, "_run_probe_batches",
+                        lambda state, batches=3: [{"success": True}] * batches)
+
+    state = {"incident_id": 9, "run_id": 9, "status": "executing",
+             "root_cause_code": "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION",
+             "fix_execution": {"status": "succeeded"}}
+    out = nodes.verify_recovery_node(state)
+    assert out.get("recovery", {}).get("status") == "recovered"
+    assert state["status"] == "recovered"
+
+
+def test_lock_recovery_timeout_when_lock_persists(monkeypatch):
+    """锁关系持续存在超过截止 → needs_human(recovery_timeout)。"""
+    from app.agent import nodes
+
+    class FakeLockQueries:
+        def get_lock_waiters(self, *a, **kw):
+            return {"ok": True, "data": {"waits": [{"blocker_ref": "blk_1",
+                "object_schema": "tracemind_business", "object_table": "inventory",
+                "waiting_query_ref": "INVENTORY_RESERVATION", "wait_duration_ms": 5200}]}}
+
+    monkeypatch.setattr("app.tools.lock_queries.get_lock_waiters",
+                        FakeLockQueries().get_lock_waiters)
+    monkeypatch.setattr(nodes, "_time", __import__("time"))
+
+    state = {"incident_id": 9, "run_id": 9, "status": "executing",
+             "root_cause_code": "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION",
+             "fix_execution": {"status": "succeeded"}}
+    # 用真实 time 会让 60s 轮询卡住 → 用短截止:直接调用内部判定逻辑
+    import types
+    fake_time = types.SimpleNamespace(time=lambda: __import__("time").time() + 120)
+    monkeypatch.setattr(nodes, "_time", fake_time)
+    out = nodes._verify_lock_recovery(state)
+    assert out.get("recovery", {}).get("termination_reason") == "recovery_timeout"
