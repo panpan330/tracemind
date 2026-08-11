@@ -90,3 +90,51 @@ def test_call_tool_not_ready_raises_disconnected():
     with pytest.raises(MCPError) as ei:
         m.call_tool("get_trace", incident_id=1, agent_run_id=1, trace_id="t")
     assert ei.value.code in (MCP_DISCONNECTED, MCP_START_FAILED)
+
+
+def test_call_tool_restart_once_on_disconnect(monkeypatch):
+    """断线后重启会话并重试一次(同一调用),不降级 direct。"""
+    class Flaky:
+        def __init__(self):
+            self.calls = 0
+
+        async def call_tool(self, name, arguments):
+            self.calls += 1
+            if self.calls == 1:
+                raise ConnectionError("disconnected")
+            return _text_result({"success": True})
+
+    m = _running_manager(Flaky())
+
+    async def fake_restart():
+        m.is_ready = True
+        # 重启后 session 保持(Flaky 第二次调用成功)
+        m._session.calls = m._session.calls  # 保持同一 session,第二次成功
+
+    monkeypatch.setattr(m, "_restart_async", fake_restart)
+    try:
+        out = m.call_tool("get_trace", incident_id=1, agent_run_id=1, trace_id="t")
+        assert out["success"] is True
+        assert m._session.calls == 2      # 首次失败 + 重启后重试一次
+    finally:
+        _stop(m)
+
+
+def test_call_tool_restart_failure_raises_disconnected(monkeypatch):
+    """重启也失败 → 明确 MCP 错误,不降级 direct。"""
+    class Dead:
+        async def call_tool(self, name, arguments):
+            raise ConnectionError("disconnected")
+
+    m = _running_manager(Dead())
+
+    async def fake_restart():
+        raise RuntimeError("cannot restart")
+
+    monkeypatch.setattr(m, "_restart_async", fake_restart)
+    try:
+        with pytest.raises(MCPError) as ei:
+            m.call_tool("get_trace", incident_id=1, agent_run_id=1, trace_id="t")
+        assert ei.value.code == MCP_DISCONNECTED
+    finally:
+        _stop(m)

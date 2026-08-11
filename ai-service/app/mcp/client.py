@@ -152,23 +152,60 @@ class McpClientManager:
 
     def call_tool(self, name: str, incident_id: int, agent_run_id: int,
                   **business: Any) -> dict:
-        """同步工具调用:注入上下文 + 桥接到后台 loop,单会话串行。"""
+        """同步工具调用:注入上下文 + 桥接到后台 loop,单会话串行。
+        断线/超时/协议错误:重启会话后重试一次(同一 mcp_invocation_id),不降级 direct。"""
         self._invocation_id += 1
         mcp_invocation_id = f"mcp-{self._invocation_id}-{uuid.uuid4().hex[:8]}"
         args: dict = {"incident_id": incident_id, "agent_run_id": agent_run_id, **business}
-        with self._sem:
-            if self._session is None or self._loop is None:
-                raise MCPError(MCP_DISCONNECTED, "MCP 会话未就绪")
-            future = asyncio.run_coroutine_threadsafe(
-                self._call_async(name, args), self._loop)
+        for attempt in (1, 2):
             try:
-                result = future.result(timeout=self._timeout)
-            except asyncio.TimeoutError as exc:
-                future.cancel()   # 取消挂起的协程,避免 loop 关闭时 Task 泄漏
-                raise MCPError(MCP_TIMEOUT, str(exc)) from exc
-            except Exception as exc:  # noqa: BLE001
-                raise MCPError(MCP_TOOL_ERROR, str(exc)) from exc
-        return self._parse_result(result, mcp_invocation_id)
+                with self._sem:
+                    if self._session is None or self._loop is None:
+                        raise MCPError(MCP_DISCONNECTED, "MCP 会话未就绪")
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._call_async(name, args), self._loop)
+                    try:
+                        result = future.result(timeout=self._timeout)
+                    except asyncio.TimeoutError as exc:
+                        future.cancel()   # 取消挂起的协程,避免 loop 关闭时 Task 泄漏
+                        raise MCPError(MCP_TIMEOUT, str(exc)) from exc
+                    except Exception as exc:  # noqa: BLE001
+                        raise MCPError(MCP_TOOL_ERROR, str(exc)) from exc
+                return self._parse_result(result, mcp_invocation_id)
+            except MCPError as exc:
+                # 基础设施级失败:重启会话后重试一次(仅一次);业务错误码不重试
+                if attempt == 1 and exc.code in (MCP_DISCONNECTED, MCP_TIMEOUT,
+                                                 MCP_TOOL_ERROR, MCP_PROTOCOL_ERROR):
+                    if self._restart_session(timeout=10.0):
+                        continue
+                    raise MCPError(MCP_DISCONNECTED,
+                                   f"MCP 重启失败,不降级 direct: {exc}") from exc
+                raise
+
+    def _restart_session(self, timeout: float = 10.0) -> bool:
+        """在后台 loop 重建 MCP 会话(供断线重试);成功返回 True。"""
+        if self._loop is None:
+            return False
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._restart_async(), self._loop)
+            future.result(timeout=timeout)
+            return self.is_ready
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MCP 会话重启失败: %s", exc)
+            return False
+
+    async def _restart_async(self) -> None:
+        await self._close_session()
+        self._failed = None
+        try:
+            await self._start_session()
+            self.is_ready = True
+            settings.mcp_ready = True
+            logger.info("MCP 会话已重启")
+        except Exception as exc:  # noqa: BLE001
+            self._failed = exc
+            self.is_ready = False
+            raise
 
     async def _call_async(self, name: str, args: dict) -> Any:
         return await self._session.call_tool(name, args)
