@@ -118,9 +118,19 @@ class LLMClient:
         result = self.chat(messages, max_tokens=max_tokens, model=model)
         if result is None or not result.content:
             return None
+        return self._extract_json(result.content)
+
+    @staticmethod
+    def _extract_json(text: str) -> dict | None:
+        """健壮 JSON 提取:容忍 markdown fence / 前后说明文字(真实模型常见行为)。"""
+        import re
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            logger.warning("LLM 返回无 JSON 对象: %.200s", text)
+            return None
         try:
-            parsed = json.loads(result.content)
+            parsed = json.loads(m.group(0))
             return parsed if isinstance(parsed, dict) else None
         except json.JSONDecodeError:
-            logger.warning("LLM 返回非 JSON: %.200s", result.content)
+            logger.warning("LLM 返回 JSON 解析失败: %.200s", text)
             return None

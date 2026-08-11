@@ -130,3 +130,15 @@ def test_prompt_hash_stable_and_short():
     h1 = prompt_hash("库存查询变慢" * 10)
     h2 = prompt_hash("库存查询变慢" * 10)
     assert h1 == h2 and len(h1) == 16 and h1 != prompt_hash("other")
+
+
+def test_extract_json_tolerates_markdown_fence():
+    from app.agent.llm_client import LLMClient
+    text = '```json\n{"ok": true}\n```'
+    assert LLMClient._extract_json(text) == {"ok": True}
+
+
+def test_extract_json_tolerates_prefix_text():
+    from app.agent.llm_client import LLMClient
+    text = '好的,结果如下: {"a": 1} 请查收。'
+    assert LLMClient._extract_json(text) == {"a": 1}

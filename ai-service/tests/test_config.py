@@ -17,8 +17,10 @@ def test_chat_fields_override_legacy():
 
 
 def test_eval_chat_model_required_flag():
-    s = Settings()
+    # 显式排除 .env.local:默认空(评测固定快照必填)
+    s = Settings(_env_file=None)
     assert s.eval_chat_model == ""
+    assert s.chat_model_resolved == ""
 
 
 def test_embedding_defaults():

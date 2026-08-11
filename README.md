@@ -155,3 +155,44 @@ Java 21 / Spring Boot 3.3 / MyBatis-Plus · FastAPI / LangGraph / SQLAlchemy 2.0
 - 将**人工审批(human-in-the-loop)**嵌入 Agent 状态机,唯一写路径 + 六项前置校验 + 过期自动拒绝,形成可对外宣讲的安全闭环。
 - 工具层以**最小权限隔离**落地(四账号/三连接池/白名单参数),每次工具调用与决策全量审计,支持复盘回放。
 - 所有证据来自**真实系统**:MySQL 执行计划、performance_schema 慢查询、真实 P95 指标,演示可重复、可量化。
+
+## V1.1:真实 LLM + Tool Calling + RAG + 评测体系
+
+### 三模式 LLM
+
+| 模式 | 行为 | 用途 |
+|---|---|---|
+| `TRACEMIND_LLM_MODE=fake` | FakeLLM(确定性,不触网) | 测试 / CI / 显式回归 |
+| `real_strict` | 模型失败即转 needs_human,禁止降级 | 正式评测 / 验收 |
+| `real_demo` | 模型失败降级到确定性组件并标记 `degraded` | 演示兜底 |
+
+真实模型走 OpenAI 兼容端点(百炼),`hypothesize` 用结构化输出(容忍 markdown fence),
+工具选择走 **真实 Tool Calling**(`collect_evidence` 混合循环:LLM 选工具 → 程序校验/白名单/去重/预算),
+`propose_fix` 完全确定性(`FixRegistry`,零 LLM 调用,参数 hash 固定)。
+
+### RAG 知识库
+
+- 10 篇 Runbook(`knowledge/runbooks/`,frontmatter 元数据)经 embedding 写入 Qdrant(Collection Alias + 读写 Key 分离)。
+- 入库:`python ../scripts/seed_runbook.py [--recreate]`(幂等;AI 服务目录执行)。
+- `hypothesize` 检索 top-k 片段注入 prompt(指令隔离:知识参考不可被当作指令执行),并写 `retrieval_record` 审计。
+- 失败降级:检索失败 → `rag_degraded` 事件 → 无知识上下文继续,`TRACEMIND_RAG_MODE=required` 时该次验收判失败。
+
+### 评测命令分层
+
+```bash
+cd ai-service && uv run pytest                      # FakeLLM 单测 + API 回归(118)
+TRACEMIND_LLM_MODE=fake uv run python ../scripts/eval_agent.py --mode offline --llm fake --runs 1   # 16 条 Fixture(4 正 + 12 负)
+uv run python ../scripts/eval_rag.py --phase calibrate   # 校准集 → 冻结阈值(evaluation_policy.yaml)
+uv run python ../scripts/eval_rag.py --phase eval        # 测试集 Hit@3/MRR(读冻结阈值)
+uv run python ../scripts/eval_agent.py --mode offline --llm real_strict --runs 3  # 真实模型离线评测(需 TRACEMIND_EVAL_CHAT_MODEL)
+uv run python ../scripts/smoke_llm.py               # 真实模型冒烟(Structured Output + Tool Calling,禁止假通过)
+# e2e-scn001-real:全栈真实模型 3 轮闭环(compose 环境,TRACEMIND_EVAL_MODE=true)
+```
+
+### 配置表(V1.1 新增)
+
+`TRACEMIND_CHAT_PROVIDER/CHAT_BASE_URL/CHAT_API_KEY/CHAT_MODEL`(空则回退 `LLM_*`)·
+`TRACEMIND_EVAL_CHAT_MODEL`(评测固定快照,必填)· `TRACEMIND_EMBEDDING_MODEL/DIMENSIONS` ·
+`TRACEMIND_QDRANT_URL/READ_API_KEY/WRITE_API_KEY/COLLECTION_ALIAS` ·
+`TRACEMIND_RAG_MODE(off|optional|required)/RAG_CANDIDATE_TOP_K/RAG_FINAL_TOP_K/RAG_SCORE_THRESHOLD` ·
+`TRACEMIND_EVAL_MODE`(EvalApprover 自动审批门控)
