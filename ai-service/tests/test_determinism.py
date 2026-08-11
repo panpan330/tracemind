@@ -61,14 +61,14 @@ def test_template_report_uses_facts_only():
 
 def test_planner_collects_lock_chain():
     planner = DeterministicEvidencePlanner()
-    state = {"evidence_gate": {}, "evidence": [],
+    # 索引链已齐(证据不足时才进锁链补采)
+    state = {"evidence_gate": {"E1": True, "E2": True, "E3": True, "E4": True, "E5": True},
+             "evidence": [],
              "service_ref": "inventory-service",
              "policy": {"scn001": "unknown", "scn002": "unknown"}}
-    eligible = {"get_service_metrics", "get_trace", "list_expensive_query_digests",
-                "get_query_plan", "get_index_info", "get_lock_waiters"}
+    eligible = {"get_lock_waiters"}
     calls = planner.choose(state, eligible)
-    names = [c["name"] for c in calls]
-    assert "get_lock_waiters" in names  # 锁证据缺失 → 补采
+    assert calls and calls[0]["name"] == "get_lock_waiters"  # 锁证据缺失 → 补采
 
 
 def test_planner_transaction_details_after_lock():
