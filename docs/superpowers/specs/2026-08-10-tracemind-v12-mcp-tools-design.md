@@ -42,13 +42,15 @@ V1.1 的 Agent 通过**进程内直接调用**(`execute_tool`)执行五个只读
 - 用官方 SDK `FastMCP("tracemind-tools")`
 - 暴露 5 个只读调查工具(与 V1.1 LLM 可调用集合一致):
 
-| MCP tool 名 | 参数(显式类型签名,FastMCP 生成 JSON Schema) |
+| MCP tool 名 | 参数(显式类型签名,FastMCP 生成 JSON Schema;两上下文字段由 Client 注入) |
 |---|---|
-| `get_service_metrics` | `incident_id: int, service_ref: str, window_seconds: int` |
-| `get_trace` | `incident_id: int, trace_id: str` |
-| `list_expensive_query_digests` | `incident_id: int, window_seconds: int` |
-| `get_query_plan` | `incident_id: int, query_ref: str, sample_parameters: dict` |
-| `get_index_info` | `incident_id: int, table_ref: str` |
+| `get_service_metrics` | `incident_id: int, agent_run_id: int, service_ref: str, window_seconds: int` |
+| `get_trace` | `incident_id: int, agent_run_id: int, trace_id: str` |
+| `list_expensive_query_digests` | `incident_id: int, agent_run_id: int, window_seconds: int` |
+| `get_query_plan` | `incident_id: int, agent_run_id: int, query_ref: str, sample_parameters: dict` |
+| `get_index_info` | `incident_id: int, agent_run_id: int, table_ref: str` |
+
+> **tools/list 仅用于 MCP 契约校验;模型侧继续使用经过裁剪的五工具 Schema(隐藏 `incident_id` / `agent_run_id` 两个上下文字段),不将完整 MCP Schema 原样提交给 LLM。**
 
 - **每个工具用显式参数签名**(不用 `**params`,FastMCP 需可生成 JSON Schema),内部一行委托:`return execute_tool(name, incident_id=incident_id, agent_run_id=agent_run_id, **business_params)`
 - **上下文与业务参数分离**:`incident_id` / `agent_run_id` 由 MCP Client 注入,不传给 LLM、不参与 Fixture 参数哈希、不传给具体业务 Tool Handler,仅用于审计与关联
@@ -84,7 +86,32 @@ McpClientManager
 
 ### 5.4 契约校验(tools/list)
 
-校验工具名称集合**完全一致**、不包含 `execute_fix` / `verify_recovery`、每个工具必需参数/类型/枚举/边界一致、`tool_schema_version` 一致——防止 Schema 漂移通过启动检查。
+`tool_schema_version` 是**应用级契约字段,MCP 协议不天然提供**:
+
+```
+MCP_TOOL_CONTRACT_VERSION = "1.0"
+```
+
+启动校验包含(全部一致才算通过):
+- `serverInfo.name` / `serverInfo.version`
+- 工具名称集合**完全一致**,不包含 `execute_fix` / `verify_recovery`
+- 每个工具必需参数/类型/枚举/边界一致
+- **标准化后 inputSchema 的 SHA-256** 与本地预期一致
+- 本地预期的 Contract Version(`MCP_TOOL_CONTRACT_VERSION`)一致
+
+### 5.5 并发策略
+
+V1.2 不考虑高并发:`McpClientManager` 对工具调用设置**单会话串行锁(Semaphore(1))**,避免多个 Incident 并发调用时影响审计、重启与 Fixture 状态;以后需要并发时再提高限制。
+
+### 5.6 子进程最小权限环境
+
+- McpClientManager 使用**固定** `sys.executable -m app.mcp.server` 命令启动子进程,命令与参数不可由模型或用户控制
+- 传给子进程的环境变量采用**显式白名单**:仅控制库、只读调查库、Java 服务地址、MCP 配置;不传递 `fix_executor` 凭据、LLM/Embedding API Key、Qdrant Write Key
+- **Fixture 模式不传真实调查库凭据**
+
+### 5.7 启动失败策略
+
+MCP Server 初始化或契约校验失败时,**ai-service 启动失败或 readiness=false**;不得以"AI 服务正常、调查时再报错"的方式继续提供调查能力。
 
 ## 6. 执行上下文与审计
 
@@ -112,13 +139,18 @@ McpClientManager
 | `MCP_TIMEOUT` | 工具调用超时 |
 | `MCP_DISCONNECTED` | 会话断开 |
 | `MCP_PROTOCOL_ERROR` | 非法协议响应 |
-| `MCP_TOOL_ERROR` | 工具自身失败(业务) |
+| `MCP_TOOL_ERROR` | Server 未捕获异常或返回 MCP isError |
+| `MCP_RESULT_INVALID` | 返回结果无法通过 ToolResult 校验 |
+
+**错误归属分层**(Agent 需区分"基础设施坏了"与"调查工具正常执行但无数据"):
+- MCP 启动、连接、协议问题 → 转换为 `MCP_*` 基础设施错误
+- `execute_tool` 正常返回 `success=false` → **保留原始业务 error_code**(如 `TRACE_NOT_FOUND` / `FIXTURE_NOT_FOUND` / `VALIDATION_ERROR` / `QUERY_PLAN_FAILED`)
 
 **重试规则**:
 - Server 启动失败:重启一次
 - 初始化失败:重启一次
 - 会话在调用前断开:重启后重试一次
-- 请求已发送但结果未知(只读工具可重试):使用同一 `mcp_invocation_id` 关联两次执行记录
+- 请求已发送但结果未知(只读工具可重试):使用同一 `mcp_invocation_id` 关联两次执行记录(`mcp_attempt` 分别为 1、2;`mcp_invocation_id` 代表 TraceMind 一次逻辑工具调用,不一定等于 SDK 内部 JSON-RPC Request ID)
 - 第二次仍失败:返回结构化失败,**不降级 direct**
 
 ## 9. 数据库迁移(版本化 SQL)
@@ -129,7 +161,7 @@ McpClientManager
 |---|---|
 | `agent_run_id` | `BIGINT NULL`(建索引;按现有数据关系决定外键) |
 | `transport` | `VARCHAR(32) NOT NULL DEFAULT 'legacy_direct'` |
-| `mcp_request_id` | `VARCHAR(64) NULL` |
+| `mcp_invocation_id` | `VARCHAR(64) NULL` |
 | `mcp_attempt` | `INT NULL` |
 
 **transport 取值**:
@@ -138,7 +170,7 @@ McpClientManager
 - `internal_control`:execute_fix / verify_recovery(确定性安全控制节点)
 - `fixture_mcp_stdio`:可选,仅评测报告使用,不一定落业务库
 
-`mcp_request_id` 用于关联断线重试产生的多次执行尝试。
+`mcp_invocation_id` 用于关联断线重试产生的多次执行尝试(一次逻辑调用即使发生重试也保持同一 id,`mcp_attempt` 分别记录 1、2)。
 
 ## 10. 测试策略(分层)
 
@@ -164,7 +196,7 @@ McpClientManager
 
 - `pytest` 全绿(Server/Client/协议集成/Agent 单测)
 - fake 离线评测 16/16,**无 MCP 基础设施错误**
-- real_strict 评测无 MCP 基础设施错误
+- real_strict 评测无 MCP 基础设施错误,**且保留 V1.1 指标**:正例根因召回率 ≥80%、负例错误修复率 0%、E1~E5 完整率 100%、Structured Output 有效率 ≥95%、真实模型降级率 0%;V1.1 所有回归测试继续通过
 - e2e-scn001-real 3/3 无 MCP 基础设施错误
 - **禁止静默回退 direct**
 
@@ -177,14 +209,19 @@ McpClientManager
 | 工具调用超时 | `MCP_TIMEOUT` |
 | 子进程中断 | `MCP_DISCONNECTED` |
 | 非法协议响应 | `MCP_PROTOCOL_ERROR` |
-| 工具自身失败 | `MCP_TOOL_ERROR` |
+| 工具自身失败 | `MCP_TOOL_ERROR` / 保留业务 error_code |
+| 返回结果非法 | `MCP_RESULT_INVALID` |
 | 重启超过一次 | 明确失败 |
+
+### 故障注入验收(最能证明消除 direct fallback)
+
+调查过程中**主动终止 MCP Server**:当前调用返回明确 MCP 错误;系统最多重启一次;任何情况下都**不能通过旧的 direct 路径继续获得调查结果**。
 
 ### 传输断言
 
-- 五个调查工具:`transport=mcp_stdio`
-- `execute_fix`:`transport=internal_control`
-- `verify_recovery`:`transport=internal_control`
+- 五个调查工具:`tool_call.transport = mcp_stdio`
+- `verify_recovery`:若继续通过 execute_tool 调用,则 `tool_call.transport = internal_control`
+- `execute_fix`:**不要求产生 tool_call**(审计位于 approval / fix_proposal / fix_execution),必须在 `fix_execution` 保留审批、参数哈希、幂等键与执行结果审计——不为了出现 transport 字段把 execute_fix 塞进工具调用体系
 - 消除五个调查工具的 direct 路径;安全控制节点继续使用内部确定性调用
 
 ### 评测报告需证明真的走过 MCP
