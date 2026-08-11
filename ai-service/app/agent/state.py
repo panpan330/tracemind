@@ -31,6 +31,9 @@ class IncidentState(TypedDict, total=False):
     termination_reason: str | None
     hypotheses: Annotated[list[dict], dedup_by_id]
     evidence: Annotated[list[dict], dedup_by_id]
+    # V1.1 降级属性:degraded 是属性不是主状态
+    degraded: bool
+    degradation_reasons: list[str]
     # V1.1 混合循环预算与记录
     decision_attempt_count: int
     tool_execution_count: int

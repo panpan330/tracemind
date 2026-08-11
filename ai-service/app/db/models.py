@@ -27,6 +27,10 @@ class Incident(Base):
     status: Mapped[str] = mapped_column(String(32), default="created")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # V1.1 状态属性(degraded 是属性不是主状态)
+    termination_reason: Mapped[Optional[str]] = mapped_column(String(64))
+    degraded: Mapped[bool] = mapped_column(default=False)
+    degradation_reasons: Mapped[Optional[str]] = mapped_column(String(500))
 
 
 class AgentRun(Base):

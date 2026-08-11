@@ -58,6 +58,10 @@ def get_incident(incident_id: int):
         "severity": inc.severity, "service_ref": inc.service_ref,
         "created_at": str(inc.created_at),
         "finished_at": str(inc.finished_at) if inc.finished_at else None,
+        "degraded": bool(inc.degraded),
+        "degradation_reasons": (inc.degradation_reasons.split(",")
+                                if inc.degradation_reasons else []),
+        "termination_reason": inc.termination_reason,
         "hypotheses": [{"id": h.id, "description": h.description, "status": h.status}
                        for h in hypotheses],
         "evidence": [{"id": e.id, "source": e.source,

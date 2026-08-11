@@ -1,5 +1,8 @@
 import json
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 _time = time  # 混合循环内部使用,避免与函数参数名冲突
 
@@ -270,6 +273,8 @@ def diagnose(state: IncidentState) -> dict:
     if state.get("status") == "needs_human":
         # collect_evidence 已决定转人工(预算/无效决策/去重/超时),保留并补发事件
         _emit_status(state)
+        incident_repo.update_state(state["incident_id"], status="needs_human",
+                                   termination_reason=state.get("termination_reason"))
         return state
     gate = state.get("evidence_gate") or {}
     if evaluate_evidence_gate(gate):
@@ -284,6 +289,8 @@ def diagnose(state: IncidentState) -> dict:
         if state.get("termination_reason") == "evidence_budget_exhausted":
             state["status"] = "needs_human"
             _emit_status(state)
+            incident_repo.update_state(state["incident_id"], status="needs_human",
+                                       termination_reason=state.get("termination_reason"))
         else:
             state["status"] = "investigating"  # 继续循环
     return state
@@ -350,17 +357,40 @@ def propose_fix(state: IncidentState) -> dict:
     return state
 
 
-def report(state: IncidentState) -> dict:
-    """终态复盘:调用 LLM 用已落库事实生成报告并写 postmortem 表。"""
-    llm = get_llm()
-    content = llm.write_report(state)
-    postmortem_repo.create_postmortem(incident_id=state["incident_id"], content=content)
-    state["report"] = content
-    # 终态事件(SSE 前端据此关闭连接)
-    event_repo.append_event(state["incident_id"], "incident_finished",
-                            {"status": state.get("status")})
-    # status 保持前序终态(recovered / needs_human / rejected 等)
-    return state
+def report(state: IncidentState, llm=None) -> dict:
+    """终态复盘:调用 LLM 用已落库事实生成报告并写 postmortem 表。
+    V1.1:报告阶段失败不推翻已恢复状态 — report.status=failed + degraded 标记。"""
+    from app.agent.llm import ModelDegradedError, get_llm
+    llm = llm if llm is not None else get_llm()
+    try:
+        result = llm.write_report(state)
+        content = {"status": "ready", **result}
+        postmortem_repo.create_postmortem(incident_id=state["incident_id"], content=content)
+        event_repo.append_event(state["incident_id"], "incident_finished",
+                                {"status": state.get("status")})
+        state["report"] = content
+        state["degraded"] = False
+        incident_repo.update_state(state["incident_id"], degraded=False)
+        return state
+    except ModelDegradedError:
+        # real_strict:报告阶段失败不推翻 recovered;标记 report.failed
+        _emit_degradation(state, "llm_degraded")
+        state["report"] = {"status": "failed", "content": ""}
+        state["degraded"] = True
+        state["degradation_reasons"] = [*(state.get("degradation_reasons") or []),
+                                        "report_generation_failed"]
+        incident_repo.update_state(state["incident_id"], degraded=True,
+                                   degradation_reasons=state["degradation_reasons"])
+        return state
+    except Exception as exc:  # noqa: BLE001 兜底
+        logger.warning("报告生成异常: %s", exc)
+        state["report"] = {"status": "failed", "content": ""}
+        state["degraded"] = True
+        state["degradation_reasons"] = [*(state.get("degradation_reasons") or []),
+                                        "report_generation_failed"]
+        incident_repo.update_state(state["incident_id"], degraded=True,
+                                   degradation_reasons=state["degradation_reasons"])
+        return state
 
 
 def human_approval(state: IncidentState) -> dict:

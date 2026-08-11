@@ -43,3 +43,23 @@ def update_status(incident_id: int, status: str) -> None:
             return
         inc.status = status
         session.commit()
+
+
+def update_state(incident_id: int, *, status: str | None = None,
+                 termination_reason: str | None = None,
+                 degraded: bool | None = None,
+                 degradation_reasons: list[str] | None = None) -> None:
+    """V1.1 状态属性部分更新(termination_reason / degraded 等)。"""
+    with Session(get_control_engine()) as session:
+        inc = session.get(Incident, incident_id)
+        if inc is None:
+            return
+        if status is not None:
+            inc.status = status
+        if termination_reason is not None:
+            inc.termination_reason = termination_reason
+        if degraded is not None:
+            inc.degraded = degraded
+        if degradation_reasons is not None:
+            inc.degradation_reasons = ",".join(degradation_reasons)
+        session.commit()

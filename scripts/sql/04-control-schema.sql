@@ -12,7 +12,10 @@ CREATE TABLE IF NOT EXISTS incident (
   healthy_metrics_baseline JSON NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'created',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  finished_at DATETIME NULL
+  finished_at DATETIME NULL,
+  termination_reason VARCHAR(64) NULL,
+  degraded TINYINT NOT NULL DEFAULT 0,
+  degradation_reasons VARCHAR(500) NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS agent_run (
@@ -197,3 +200,28 @@ CREATE TABLE tracemind_control.retrieval_record (
   INDEX idx_retrieval_incident (incident_id),
   INDEX idx_retrieval_run (agent_run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- V1.1 幂等迁移:为已存在的 incident 表补充状态属性列(信息 schema 判断,MySQL 8 兼容)
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='incident'
+                    AND COLUMN_NAME='termination_reason');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.incident ADD COLUMN termination_reason VARCHAR(64) NULL AFTER finished_at',
+  'SELECT 1');
+PREPARE stmt_t FROM @ddl; EXECUTE stmt_t; DEALLOCATE PREPARE stmt_t;
+
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='incident'
+                    AND COLUMN_NAME='degraded');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.incident ADD COLUMN degraded TINYINT NOT NULL DEFAULT 0 AFTER termination_reason',
+  'SELECT 1');
+PREPARE stmt_d FROM @ddl; EXECUTE stmt_d; DEALLOCATE PREPARE stmt_d;
+
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='incident'
+                    AND COLUMN_NAME='degradation_reasons');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.incident ADD COLUMN degradation_reasons VARCHAR(500) NULL AFTER degraded',
+  'SELECT 1');
+PREPARE stmt_r FROM @ddl; EXECUTE stmt_r; DEALLOCATE PREPARE stmt_r;
