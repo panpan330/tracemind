@@ -1,0 +1,10 @@
+[
+  {"query": "库存接口突然变慢,数据库扫描行数很高", "expected_doc_ids": ["runbook-mysql-missing-index"], "relevance": "relevant"},
+  {"query": "EXPLAIN 显示 type=ALL 全表扫描如何解读", "expected_doc_ids": ["runbook-mysql-explain-analysis"], "relevance": "relevant"},
+  {"query": "索引存在但接口仍然很慢,执行计划走了索引", "expected_doc_ids": ["runbook-mysql-lock-wait"], "relevance": "relevant"},
+  {"query": "order-service 调用 inventory-service 超时", "expected_doc_ids": ["runbook-downstream-timeout"], "relevance": "relevant"},
+  {"query": "修复后如何验证服务已恢复", "expected_doc_ids": ["runbook-recovery-verification"], "relevance": "relevant"},
+  {"query": "如何煮咖啡", "expected_doc_ids": [], "relevance": "irrelevant"},
+  {"query": "今天天气怎么样", "expected_doc_ids": [], "relevance": "irrelevant"},
+  {"query": "推荐一部科幻电影", "expected_doc_ids": [], "relevance": "irrelevant"}
+]

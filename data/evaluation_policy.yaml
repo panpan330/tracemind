@@ -1,0 +1,4 @@
+retrieval_policy_version: "1"
+score_threshold: 0.0        # 校准后人工确认冻结
+relevant_query_empty_rate_max: 0.0
+irrelevant_query_rejection_rate_min: 1.0

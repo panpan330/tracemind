@@ -1,0 +1,14 @@
+[
+  {"query": "查询变慢且 EXPLAIN 全表扫描,索引缺失如何确认", "expected_doc_ids": ["runbook-mysql-missing-index"], "relevance": "relevant"},
+  {"query": "如何用执行计划区分索引失效与查询低效", "expected_doc_ids": ["runbook-mysql-explain-analysis"], "relevance": "relevant"},
+  {"query": "查询走了索引但耗时上升,可能是锁等待", "expected_doc_ids": ["runbook-mysql-lock-wait"], "relevance": "relevant"},
+  {"query": "数据库连接池耗尽的表现与处置", "expected_doc_ids": ["runbook-db-connection-pool-exhaustion"], "relevance": "relevant"},
+  {"query": "服务间网络延迟导致调用变慢", "expected_doc_ids": ["runbook-service-network-latency"], "relevance": "relevant"},
+  {"query": "QPS 突增导致接口变慢如何判断", "expected_doc_ids": ["runbook-traffic-spike"], "relevance": "relevant"},
+  {"query": "缓存失效导致间歇性变慢", "expected_doc_ids": ["runbook-cache-failure"], "relevance": "relevant"},
+  {"query": "证据不足时如何升级人工", "expected_doc_ids": ["runbook-insufficient-evidence-escalation"], "relevance": "relevant"},
+  {"query": "如何烹饪意大利面", "expected_doc_ids": [], "relevance": "irrelevant"},
+  {"query": "量子计算入门教程", "expected_doc_ids": [], "relevance": "irrelevant"},
+  {"query": "帮我写一首诗", "expected_doc_ids": [], "relevance": "irrelevant"},
+  {"query": "股票明天会涨吗", "expected_doc_ids": [], "relevance": "irrelevant"}
+]
