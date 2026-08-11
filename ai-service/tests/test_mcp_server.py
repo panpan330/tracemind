@@ -29,7 +29,8 @@ def test_contract_constants():
     assert SERVER_NAME == "tracemind-tools"
     assert TOOL_NAMES == frozenset({
         "get_service_metrics", "get_trace", "list_expensive_query_digests",
-        "get_query_plan", "get_index_info"})
+        "get_query_plan", "get_index_info", "get_lock_waiters",
+        "get_transaction_details"})
 
 
 def test_llm_tool_schemas_hide_context_fields():

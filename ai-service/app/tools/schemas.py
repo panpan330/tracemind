@@ -46,11 +46,11 @@ class GetIndexInfoIn(BaseModel):
 
 
 class GetLockWaitersIn(BaseModel):
-    scope_ref: str = Field(default="INVENTORY_RESERVATION", pattern="^(INVENTORY_RESERVATION)$")
+    scope_ref: str = Field(pattern="^(INVENTORY_RESERVATION)$")
 
 
 class GetTransactionDetailsIn(BaseModel):
-    transaction_ref: str = Field(default="OBSERVED_BLOCKER", pattern="^(OBSERVED_BLOCKER)$")
+    transaction_ref: str = Field(pattern="^(OBSERVED_BLOCKER)$")
 
 
 class ExecuteFixIn(BaseModel):
