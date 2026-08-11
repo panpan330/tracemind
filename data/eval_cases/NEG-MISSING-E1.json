@@ -1,0 +1,58 @@
+{
+  "case_id": "NEG-MISSING-E1",
+  "title": "指标正常但声称慢查询",
+  "description": "描述库存查询慢,但 get_service_metrics 显示 P95=3ms 正常。",
+  "expected": "needs_human",
+  "severity": "medium",
+  "tool_fixtures": {
+    "get_service_metrics:0da4e0513f47": {
+      "ok": true,
+      "data": {
+        "p95Ms": 3
+      }
+    },
+    "get_trace:680c57fead83": {
+      "ok": true,
+      "data": {
+        "inventory_service": [
+          {
+            "stage": "database",
+            "durationMs": 110
+          },
+          {
+            "stage": "total",
+            "durationMs": 120
+          }
+        ]
+      }
+    },
+    "list_expensive_query_digests:f96458c068e0": {
+      "ok": true,
+      "data": [
+        {
+          "query_ref": "INVENTORY_LOOKUP",
+          "rows_examined_delta": 498250,
+          "count_delta": 10
+        }
+      ]
+    },
+    "get_query_plan:fd000bb90389": {
+      "ok": true,
+      "data": {
+        "explain": {
+          "query_block": {
+            "table": {
+              "access_type": "ALL"
+            }
+          }
+        }
+      }
+    },
+    "get_index_info:4da3506338b9": {
+      "ok": true,
+      "data": {
+        "indexes": []
+      }
+    }
+  }
+}

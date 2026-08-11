@@ -1,0 +1,47 @@
+{
+  "case_id": "NEG-TRAFFIC",
+  "title": "流量突增导致变慢",
+  "description": "QPS 大幅上升,P95 上升但数据库计划与索引均正常。",
+  "expected": "needs_human",
+  "severity": "medium",
+  "tool_fixtures": {
+    "get_service_metrics:0da4e0513f47": {
+      "ok": true,
+      "data": {
+        "p95Ms": 3
+      }
+    },
+    "list_expensive_query_digests:f96458c068e0": {
+      "ok": true,
+      "data": [
+        {
+          "query_ref": "INVENTORY_LOOKUP",
+          "rows_examined_delta": 50,
+          "count_delta": 10
+        }
+      ]
+    },
+    "get_query_plan:fd000bb90389": {
+      "ok": true,
+      "data": {
+        "explain": {
+          "query_block": {
+            "table": {
+              "access_type": "ref"
+            }
+          }
+        }
+      }
+    },
+    "get_index_info:4da3506338b9": {
+      "ok": true,
+      "data": {
+        "indexes": [
+          {
+            "index_name": "idx_sku_warehouse"
+          }
+        ]
+      }
+    }
+  }
+}

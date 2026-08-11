@@ -1,0 +1,13 @@
+{
+  "case_id": "NEG-TOOL-TIMEOUT",
+  "title": "调查工具超时",
+  "description": "get_service_metrics 调用超时,无法取得指标。",
+  "expected": "needs_human",
+  "severity": "medium",
+  "tool_fixtures": {
+    "get_service_metrics:0da4e0513f47": {
+      "ok": false,
+      "error": "timeout"
+    }
+  }
+}
