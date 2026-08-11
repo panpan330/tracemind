@@ -58,3 +58,32 @@ def test_toolcall_model_has_mcp_fields():
     assert tc.agent_run_id == 2
     assert tc.mcp_invocation_id == "mcp-1-abc"
     assert tc.mcp_attempt == 1
+
+
+def test_fix_execution_repo_insert(monkeypatch):
+    from app.repositories import fix_execution_repo
+    captured = {}
+
+    class FakeConn:
+        def execute(self, sql, params):
+            captured["sql"] = str(sql)
+            captured["params"] = params
+
+    class FakeCtx:
+        def __enter__(self):
+            return FakeConn()
+
+        def __exit__(self, *a):
+            return False
+
+    class FakeEngine:
+        def begin(self):
+            return FakeCtx()
+
+    monkeypatch.setattr(fix_execution_repo, "control_engine", FakeEngine())
+    fix_execution_repo.create_execution(incident_id=1, fix_proposal_id=2, approval_id=3,
+                                        idempotency_key="k1", blocking_relation_hash="rh",
+                                        status="succeeded", execution_result="executed",
+                                        kill_attempted=True, actual_processlist_id=88)
+    assert "INSERT INTO fix_execution" in captured["sql"]
+    assert captured["params"][3] == "k1"
