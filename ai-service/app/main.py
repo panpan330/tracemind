@@ -7,16 +7,25 @@ from fastapi import FastAPI
 import app.tools  # noqa: E402,F401
 
 from app.api import approvals, demo, incidents, runs, stream  # noqa: E402
+from app.mcp.client import McpClientManager  # noqa: E402
 from app.services import runner  # noqa: E402
 from app.services.approval_scanner import scanner_loop  # noqa: E402
+
+mcp_manager: McpClientManager | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global mcp_manager
+    # MCP Server 启动/契约校验失败 → start() 抛异常 → 应用启动失败(readiness=false)
+    mcp_manager = McpClientManager()
+    await mcp_manager.start()
     await runner.recover_pending_runs()  # 启动先恢复未完成任务,再接收流量
     task = asyncio.create_task(scanner_loop())
     yield
     task.cancel()
+    await mcp_manager.stop()
+    mcp_manager = None
 
 
 app = FastAPI(title="TraceMind AI Service", lifespan=lifespan)
@@ -24,7 +33,7 @@ app = FastAPI(title="TraceMind AI Service", lifespan=lifespan)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "mcp_ready": bool(mcp_manager and mcp_manager.is_ready)}
 
 
 app.include_router(incidents.router)
