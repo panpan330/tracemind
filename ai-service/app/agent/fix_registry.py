@@ -86,7 +86,9 @@ def _sha256(parameters: dict) -> str:
 
 
 def build_proposal(state: dict) -> dict:
-    root_cause = state.get("root_cause_code")
+    root_cause = state.get("root_cause_code") or ROOT_CAUSE_INDEX
+    if root_cause not in _FIXES:
+        root_cause = ROOT_CAUSE_INDEX  # 未知/缺失根因回退默认场景(V1.0 兼容)
     fix = FixRegistry.resolve(root_cause)
     if root_cause == ROOT_CAUSE_INDEX:
         parameters = {"index_name": fix.index_name, "table": fix.table_ref,
