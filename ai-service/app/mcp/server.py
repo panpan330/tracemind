@@ -68,6 +68,20 @@ def run_server(fixture_file: str | None = None) -> None:
     def get_index_info(incident_id: int, agent_run_id: int, table_ref: str) -> dict:
         return _delegate("get_index_info", incident_id, agent_run_id, table_ref=table_ref)
 
+    @mcp.tool()
+    def get_lock_waiters(incident_id: int, agent_run_id: int,
+                         scope_ref: str) -> dict:
+        """查询目标库存记录的锁等待关系(scope_ref 枚举白名单)。"""
+        return _delegate("get_lock_waiters", incident_id, agent_run_id,
+                         scope_ref=scope_ref)
+
+    @mcp.tool()
+    def get_transaction_details(incident_id: int, agent_run_id: int,
+                                transaction_ref: str) -> dict:
+        """查询已观测阻塞事务详情(transaction_ref 必须为前序证据的 blocker_ref)。"""
+        return _delegate("get_transaction_details", incident_id, agent_run_id,
+                         transaction_ref=transaction_ref)
+
     mcp.run()   # stdio transport;stdout 仅 MCP JSON-RPC
 
 

@@ -6,14 +6,15 @@ from typing import Any
 
 from app.tools.registry import TOOL_REGISTRY
 
-MCP_TOOL_CONTRACT_VERSION = "1.0"
+MCP_TOOL_CONTRACT_VERSION = "2.0.0"
 SERVER_NAME = "tracemind-tools"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 
 # 调查工具名(MCP 暴露集合;execute_fix/verify_recovery 不在此列)
 TOOL_NAMES = frozenset({
     "get_service_metrics", "get_trace", "list_expensive_query_digests",
-    "get_query_plan", "get_index_info",
+    "get_query_plan", "get_index_info", "get_lock_waiters",
+    "get_transaction_details",
 })
 
 # 上下文字段:MCP Client 注入,不进入 LLM Schema 与 Fixture 哈希

@@ -25,7 +25,7 @@ class FakeFastMCP:
 
 
 def test_contract_constants():
-    assert MCP_TOOL_CONTRACT_VERSION == "1.0"
+    assert MCP_TOOL_CONTRACT_VERSION == "2.0.0"
     assert SERVER_NAME == "tracemind-tools"
     assert TOOL_NAMES == frozenset({
         "get_service_metrics", "get_trace", "list_expensive_query_digests",
@@ -34,7 +34,7 @@ def test_contract_constants():
 
 def test_llm_tool_schemas_hide_context_fields():
     schemas = llm_tool_schemas()
-    assert len(schemas) == 5
+    assert len(schemas) == 7
     for s in schemas:
         props = s["function"]["parameters"]["properties"]
         assert "incident_id" not in props and "agent_run_id" not in props
@@ -46,7 +46,7 @@ def test_schema_sha256_stable():
     assert len(schema_sha256(s1)) == 64
 
 
-def test_server_registers_five_tools_and_fixture(monkeypatch, tmp_path):
+def test_server_registers_seven_tools_and_fixture(monkeypatch, tmp_path):
     from app.mcp import server as server_mod
     from app.tools import execute
 
@@ -64,7 +64,7 @@ def test_server_registers_five_tools_and_fixture(monkeypatch, tmp_path):
 
     fake_mcp = FakeFastMCP._last_created
     assert fake_mcp.name == SERVER_NAME
-    assert len(fake_mcp._tools) == 5
+    assert len(fake_mcp._tools) == 7
     assert fake_mcp._ran is True
     assert loaded == fake
 
