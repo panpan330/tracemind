@@ -412,6 +412,7 @@ def propose_fix(state: IncidentState) -> dict:
         parameters=fix["parameters"],
         parameters_hash=fix["parameters_hash"],
         reason=fix.get("reason"),
+        blocking_relation_hash=fix.get("blocking_relation_hash"),
     )
     approval = approval_repo.create_approval(
         incident_id=state["incident_id"],
@@ -425,6 +426,7 @@ def propose_fix(state: IncidentState) -> dict:
         "risk_level": fix["risk_level"],
         "parameters": fix["parameters"],
         "parameters_hash": fix["parameters_hash"],
+        "blocking_relation_hash": fix.get("blocking_relation_hash"),
         "reason": fix.get("reason"),
     }
     state["approval"] = {

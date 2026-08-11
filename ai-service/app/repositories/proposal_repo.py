@@ -18,7 +18,8 @@ def get_fix_definition_id(action_name: str) -> int:
 
 
 def create_proposal(incident_id: int, action_type: str, risk_level: str,
-                    parameters: dict, parameters_hash: str, reason: str | None = None) -> FixProposal:
+                    parameters: dict, parameters_hash: str, reason: str | None = None,
+                    blocking_relation_hash: str | None = None) -> FixProposal:
     with Session(get_control_engine()) as session:
         fix_definition_id = get_fix_definition_id(action_type)
         proposal = FixProposal(
@@ -26,6 +27,7 @@ def create_proposal(incident_id: int, action_type: str, risk_level: str,
             fix_definition_id=fix_definition_id,
             parameters_json=parameters,
             parameters_hash=parameters_hash,
+            blocking_relation_hash=blocking_relation_hash,
             risk_level=risk_level,
             reason=reason,
             status="proposed",

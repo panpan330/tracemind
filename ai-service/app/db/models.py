@@ -105,6 +105,7 @@ class FixProposal(Base):
     fix_definition_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     parameters_json: Mapped[Optional[dict]] = mapped_column(JSON)
     parameters_hash: Mapped[str] = mapped_column(String(64))
+    blocking_relation_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     risk_level: Mapped[str] = mapped_column(String(16), default="medium")
     reason: Mapped[Optional[str]] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(16), default="proposed")
