@@ -71,14 +71,20 @@ def run_offline(case: dict, thread_id: str) -> dict:
                             "failure_reason": str(exc)}
                 result = out
                 # 离线评测只验证根因与提案(执行/恢复由 E2E 验证,fixture 不覆盖)
-                if (out.get("fix_proposal") or {}).get("action_type") == "CREATE_INVENTORY_INDEX":
+                action_type = (out.get("fix_proposal") or {}).get("action_type")
+                if action_type == "CREATE_INVENTORY_INDEX":
                     return {"terminal_status": "awaiting_approval",
-                            "root_cause": "missing_index",
+                            "root_cause": "MISSING_INVENTORY_INDEX",
+                            "evidence_gate": out.get("evidence_gate")}
+                if action_type == "TERMINATE_BLOCKING_SESSION":
+                    return {"terminal_status": "awaiting_approval",
+                            "root_cause": "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION",
                             "evidence_gate": out.get("evidence_gate")}
                 if out.get("status") in TERMINAL:
                     break
             proposal = result.get("fix_proposal") or {}
-            root = ("missing_index" if result.get("status") == "recovered"
+            root = ("MISSING_INVENTORY_INDEX"
+                    if result.get("status") == "recovered"
                     and proposal.get("action_type") == "CREATE_INVENTORY_INDEX"
                     else "needs_human")
             return {"terminal_status": result.get("status"), "root_cause": root,
@@ -126,7 +132,8 @@ def main() -> int:
                   f"actual={actual['root_cause']} {'PASS' if passed else 'FAIL'}"
                   f" | mcp={ev.get('transport')} errors={ev.get('mcp_error_count')}"
                   f" direct_fallback={ev.get('direct_fallback')}")
-            if case["expected"] == "missing_index":
+            if case["expected"] in ("MISSING_INVENTORY_INDEX",
+                                    "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION"):
                 pos_total += 1
                 pos_ok += 1 if passed else 0
             else:

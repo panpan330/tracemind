@@ -8,6 +8,14 @@
     "get_service_metrics:0da4e0513f47": {
       "ok": false,
       "error": "timeout"
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
+      }
     }
   }
 }

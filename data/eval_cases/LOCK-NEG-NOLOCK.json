@@ -1,14 +1,15 @@
 {
-  "case_id": "NEG-DOWNSTREAM-TIMEOUT",
-  "title": "下游服务超时",
-  "description": "order-service 调用 inventory-service 超时,inventory 自身指标正常。",
+  "case_id": "LOCK-NEG-NOLOCK",
+  "title": "存在长事务但无锁等待",
+  "description": "存在长事务但无锁等待",
   "expected": "needs_human",
-  "severity": "medium",
+  "severity": "high",
   "tool_fixtures": {
     "get_service_metrics:0da4e0513f47": {
       "ok": true,
       "data": {
-        "p95Ms": 3
+        "p95Ms": 117,
+        "representativeSlowTraceId": "t1"
       }
     },
     "get_trace:680c57fead83": {
@@ -16,12 +17,12 @@
       "data": {
         "inventory_service": [
           {
-            "stage": "inventory_http",
-            "durationMs": 5
+            "stage": "database",
+            "durationMs": 110
           },
           {
             "stage": "total",
-            "durationMs": 115
+            "durationMs": 120
           }
         ]
       }
@@ -36,18 +37,6 @@
         }
       ]
     },
-    "get_query_plan:fd000bb90389": {
-      "ok": true,
-      "data": {
-        "explain": {
-          "query_block": {
-            "table": {
-              "access_type": "ref"
-            }
-          }
-        }
-      }
-    },
     "get_index_info:4da3506338b9": {
       "ok": true,
       "data": {
@@ -61,9 +50,19 @@
     "get_lock_waiters:a7b2cb65e797": {
       "ok": true,
       "data": {
-        "observed_at": "2026-08-11T00:00:00Z",
-        "snapshot_expires_at": "2026-08-11T00:00:20Z",
         "waits": []
+      }
+    },
+    "get_query_plan:fd000bb90389": {
+      "ok": true,
+      "data": {
+        "explain": {
+          "query_block": {
+            "table": {
+              "access_type": "ref"
+            }
+          }
+        }
       }
     }
   }

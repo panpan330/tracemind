@@ -2,7 +2,7 @@
   "case_id": "POS-03",
   "title": "联合索引缺失导致慢查询",
   "description": "按 sku 与仓库维度查询库存耗时百毫秒级,数据库阶段耗时占比高,联合索引不存在。",
-  "expected": "missing_index",
+  "expected": "MISSING_INVENTORY_INDEX",
   "severity": "medium",
   "tool_fixtures": {
     "get_service_metrics:0da4e0513f47": {
@@ -53,6 +53,14 @@
       "ok": true,
       "data": {
         "indexes": []
+      }
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
       }
     }
   }

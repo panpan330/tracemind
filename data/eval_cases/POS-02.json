@@ -2,7 +2,7 @@
   "case_id": "POS-02",
   "title": "库存查询慢且执行计划全表扫描",
   "description": "inventory-service 查询变慢,EXPLAIN 显示 type=ALL,索引元数据缺少联合索引。",
-  "expected": "missing_index",
+  "expected": "MISSING_INVENTORY_INDEX",
   "severity": "medium",
   "tool_fixtures": {
     "get_service_metrics:0da4e0513f47": {
@@ -53,6 +53,14 @@
       "ok": true,
       "data": {
         "indexes": []
+      }
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
       }
     }
   }

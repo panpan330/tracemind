@@ -2,7 +2,7 @@
   "case_id": "POS-04",
   "title": "inventory 无复合索引查询退化",
   "description": "inventory-service 库存接口 P95 异常,trace 显示耗时在 database 阶段,全表扫描且无 idx_sku_warehouse。",
-  "expected": "missing_index",
+  "expected": "MISSING_INVENTORY_INDEX",
   "severity": "medium",
   "tool_fixtures": {
     "get_service_metrics:0da4e0513f47": {
@@ -53,6 +53,14 @@
       "ok": true,
       "data": {
         "indexes": []
+      }
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
       }
     }
   }
