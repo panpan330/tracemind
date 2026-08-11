@@ -1,6 +1,8 @@
 import json
 import time
 
+_time = time  # 混合循环内部使用,避免与函数参数名冲突
+
 from langgraph.types import interrupt
 
 from app.agent.llm import get_llm
@@ -47,15 +49,139 @@ def _append_evidence(state: IncidentState, key: str, source: str, content: dict,
     })
 
 
-def collect_evidence(state: IncidentState) -> dict:
-    """调查预算内依次调用五个只读调查工具,产出 E1~E5 判定与 evidence。"""
-    state["investigation_round"] = state.get("investigation_round", 0) + 1
-    status = {}
+def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
+    """混合循环:LLM 选工具(或确定性规划器)→ 程序校验/解析/去重/执行 → 更新闸门。
+    返回增量 dict 由 LangGraph reducer 合并;llm/tools 以参数注入便于单测。"""
+    from app.agent.determinism import DeterministicEvidencePlanner
+    from app.agent.llm import get_llm
+    from app.agent.tool_calling import (MAX_CONSECUTIVE_INVALID, MAX_CONSECUTIVE_NO_PROGRESS,
+                                        MAX_DECISION_ATTEMPTS, MAX_DURATION_SECONDS,
+                                        MAX_TOOL_EXECUTIONS, ArgumentResolutionError,
+                                        DuplicateGuard, compute_eligible_tools,
+                                        resolve_arguments, validate_tool_call)
 
-    # E1: 目标服务 P95 相对健康基线异常(基线缺失时用宽松阈值兜底)
-    r1 = _call_tool(state, "get_service_metrics",
-                    service_ref=state["service_ref"], window_seconds=300)
-    p95 = (r1.get("data") or {}).get("p95Ms")
+    llm = llm if llm is not None else get_llm()
+    tools = tools if tools is not None else _execute_with_evidence
+    planner = DeterministicEvidencePlanner()
+
+    gate = state.get("evidence_gate") or {}
+    if evaluate_evidence_gate(gate):
+        return {}
+
+    now = _time.time()
+    started = state.get("investigation_started_at") or now
+    if now - started > MAX_DURATION_SECONDS:
+        return {"status": "needs_human", "termination_reason": "investigation_timeout",
+                "investigation_started_at": started}
+
+    decision = (state.get("decision_attempt_count") or 0) + 1
+    if decision > MAX_DECISION_ATTEMPTS:
+        return {"status": "needs_human", "termination_reason": "decision_budget_exhausted",
+                "decision_attempt_count": decision, "investigation_started_at": started}
+
+    eligible = compute_eligible_tools(state)
+    prompt = _build_collect_prompt(state, eligible)
+    if hasattr(llm, "select_tool"):
+        calls = llm.select_tool(state, prompt, eligible)
+    else:
+        # FakeLLM/确定性路径:规划器按 E1→E5 顺序补缺失证据(不伪装成模型)
+        calls = planner.choose(state, eligible)
+
+    out = {"decision_attempt_count": decision,
+           "investigation_started_at": started,
+           "consecutive_invalid_count": 0,
+           "consecutive_no_progress_count": 0,
+           "tool_execution_count": state.get("tool_execution_count") or 0}
+
+    if not calls:
+        noop = (state.get("consecutive_no_progress_count") or 0) + 1
+        if noop >= MAX_CONSECUTIVE_NO_PROGRESS:
+            return {**out, "status": "needs_human", "termination_reason": "no_progress",
+                    "consecutive_no_progress_count": noop}
+        return {**out, "consecutive_no_progress_count": noop}
+
+    if len(calls) > 1:
+        inv = (state.get("consecutive_invalid_count") or 0) + 1
+        if inv >= MAX_CONSECUTIVE_INVALID:
+            return {**out, "status": "needs_human", "termination_reason": "multi_tool_call_rejected",
+                    "consecutive_invalid_count": inv}
+        return {**out, "consecutive_invalid_count": inv}
+
+    tc = calls[0]
+    name, raw_args = tc.get("name", ""), tc.get("arguments", {}) or {}
+    err = validate_tool_call(name, raw_args, eligible)
+    if err:
+        inv = (state.get("consecutive_invalid_count") or 0) + 1
+        if inv >= MAX_CONSECUTIVE_INVALID:
+            return {**out, "status": "needs_human", "termination_reason": "invalid_tool_decision",
+                    "consecutive_invalid_count": inv}
+        return {**out, "consecutive_invalid_count": inv}
+
+    try:
+        resolved = resolve_arguments(name, raw_args, state)
+    except ArgumentResolutionError:
+        inv = (state.get("consecutive_invalid_count") or 0) + 1
+        if inv >= MAX_CONSECUTIVE_INVALID:
+            return {**out, "status": "needs_human", "termination_reason": "argument_resolution_failed",
+                    "consecutive_invalid_count": inv}
+        return {**out, "consecutive_invalid_count": inv}
+
+    guard = DuplicateGuard()
+    for rec in state.get("tool_calls_record") or []:
+        guard.seed(rec)
+    dup, _ = guard.check(name, resolved)
+    if dup:
+        inv = (state.get("consecutive_invalid_count") or 0) + 1
+        if inv >= MAX_CONSECUTIVE_INVALID:
+            return {**out, "status": "needs_human", "termination_reason": "duplicate_tool_call",
+                    "consecutive_invalid_count": inv}
+        return {**out, "consecutive_invalid_count": inv}
+
+    exec_count = (state.get("tool_execution_count") or 0) + 1
+    if exec_count > MAX_TOOL_EXECUTIONS:
+        return {**out, "status": "needs_human", "termination_reason": "execution_budget_exhausted",
+                "tool_execution_count": exec_count}
+
+    result = tools(state, name, resolved)
+    out["tool_execution_count"] = exec_count
+    record = {"tool_name": name, "arguments": resolved}
+    if result.get("ok") and result.get("evidence"):
+        new_evidence = result["evidence"]
+        new_gate = dict(gate)
+        for ev in new_evidence:
+            new_gate[ev.get("id", "").upper()] = bool(ev.get("passed"))
+        # 审计落库:证据写 evidence 表(按 source 幂等覆盖)
+        for ev in new_evidence:
+            evidence_repo.upsert_evidence(state["incident_id"], ev.get("id") or ev.get("key"),
+                                          ev["source"], ev.get("content"),
+                                          bool(ev.get("passed")))
+        return {**out, "evidence": new_evidence, "evidence_gate": new_gate,
+                "tool_calls_record": [record], "consecutive_no_progress_count": 0}
+
+    # 工具成功但无证据(或执行失败):noop 计数
+    noop = (state.get("consecutive_no_progress_count") or 0) + 1
+    if noop >= MAX_CONSECUTIVE_NO_PROGRESS:
+        return {**out, "status": "needs_human", "termination_reason": "no_progress",
+                "consecutive_no_progress_count": noop}
+    return {**out, "consecutive_no_progress_count": noop, "tool_calls_record": [record]}
+
+
+def _build_collect_prompt(state: dict, eligible: set[str]) -> str:
+    hyps = "\n".join(f"- [{h.get('status', '?')}] {h.get('description', '')}"
+                     for h in state.get("hypotheses") or []) or "(无)"
+    evidence = "\n".join(f"- {e.get('id', e.get('key'))}: passed={e.get('passed')}"
+                         for e in state.get("evidence") or []) or "(无)"
+    return (
+        "你是故障调查 Agent。根据当前假设和已有证据,从可用工具中选择**一个**下一步要调用的工具。\n"
+        f"当前假设:\n{hyps}\n已有证据:\n{evidence}\n"
+        f"可用工具(只能选这些):{', '.join(sorted(eligible))}\n"
+        "只输出一个 tool_call;若证据已足够则不做任何调用。"
+    )
+
+
+def _evaluate_metrics(result: dict, state: dict) -> list[dict]:
+    data = result.get("data") or {}
+    p95 = data.get("p95Ms")
     inc = incident_repo.get_incident(state["incident_id"])
     health = (inc.healthy_metrics_baseline or {}) if inc else {}
     base_p95 = (health or {}).get("p95_ms")
@@ -63,72 +189,81 @@ def collect_evidence(state: IncidentState) -> dict:
         e1 = p95 > int(base_p95) * 1.2
     else:
         e1 = p95 is not None and p95 > FALLBACK_E1_P95_MS
-    _append_evidence(state, "E1", "get_service_metrics", {"p95Ms": p95}, e1)
-    status["E1"] = e1
-    slow_trace = (r1.get("data") or {}).get("representativeSlowTraceId")
+    content: dict = {"p95Ms": p95}
+    if data.get("representativeSlowTraceId"):
+        content["representativeSlowTraceId"] = data["representativeSlowTraceId"]
+    return [{"id": "E1", "key": "e1", "source": "get_service_metrics",
+             "content": content, "passed": e1}]
 
-    # E2: 代表性慢请求耗时位于 inventory 数据库阶段
-    e2 = False
-    if slow_trace:
-        r2 = _call_tool(state, "get_trace", trace_id=slow_trace)
-        if r2["success"]:
-            inv = (r2.get("data") or {}).get("inventory_service") or []
-            db_stage = next((x for x in inv if x.get("stage") == "database"), None)
-            total_stage = next((x for x in inv if x.get("stage") == "total"), None)
-            if db_stage and total_stage:
-                e2 = db_stage.get("durationMs", 0) >= total_stage.get("durationMs", 1) * 0.5
-            _append_evidence(state, "E2", "get_trace", {"stages": inv}, e2)
-    if not e2:
-        _append_evidence(state, "E2", "get_trace", {"detail": "no slow trace"}, e2)
-    status["E2"] = e2
 
-    # E3: 目标 SQL 扫描行数/耗时异常(digest 增量)
-    r3 = _call_tool(state, "list_expensive_query_digests", incident_id=state["incident_id"])
-    digests = (r3.get("data") or []) if r3["success"] else []
+def _evaluate_trace(result: dict, state: dict) -> list[dict]:
+    if not result.get("success"):
+        return [{"id": "E2", "key": "e2", "source": "get_trace",
+                 "content": {"detail": "no slow trace"}, "passed": False}]
+    inv = (result.get("data") or {}).get("inventory_service") or []
+    db_stage = next((x for x in inv if x.get("stage") == "database"), None)
+    total_stage = next((x for x in inv if x.get("stage") == "total"), None)
+    e2 = bool(db_stage and total_stage
+              and db_stage.get("durationMs", 0) >= total_stage.get("durationMs", 1) * 0.5)
+    return [{"id": "E2", "key": "e2", "source": "get_trace",
+             "content": {"stages": inv}, "passed": e2}]
+
+
+def _evaluate_digests(result: dict, state: dict) -> list[dict]:
+    digests = (result.get("data") or []) if result.get("success") else []
     top = digests[0] if digests else {}
-    e3 = r3["success"] and top.get("rows_examined_delta", 0) > 1000
-    _append_evidence(state, "E3", "list_expensive_query_digests", {"top": top}, e3)
-    status["E3"] = e3
+    e3 = result.get("success") and top.get("rows_examined_delta", 0) > 1000
+    # 单场景:高扫描行数的 digest 即目标查询(系统内只有 INVENTORY_LOOKUP 一个慢查询场景)
+    return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
+             "content": {"top": top, "query_ref": "INVENTORY_LOOKUP"}, "passed": e3}]
 
-    # E4: 执行计划全表扫描或未命中目标索引
-    r4 = _call_tool(state, "get_query_plan", query_ref="INVENTORY_LOOKUP",
-                    sample_parameters=PROBE_PARAMS)
-    plan = (r4.get("data") or {}).get("explain") if r4["success"] else None
+
+def _evaluate_plan(result: dict, state: dict) -> list[dict]:
+    plan = (result.get("data") or {}).get("explain") if result.get("success") else None
     access_type = None
     try:
         access_type = plan["query_block"]["table"].get("access_type") if plan else None
     except (KeyError, TypeError, AttributeError):
         access_type = None
-    e4 = r4["success"] and access_type == "ALL"
-    _append_evidence(state, "E4", "get_query_plan", {"access_type": access_type}, e4)
-    status["E4"] = e4
+    e4 = result.get("success") and access_type == "ALL"
+    return [{"id": "E4", "key": "e4", "source": "get_query_plan",
+             "content": {"access_type": access_type}, "passed": e4}]
 
-    # E5: 索引元数据确认联合索引缺失
-    r5 = _call_tool(state, "get_index_info", table_ref="inventory")
-    names = [i["index_name"] for i in ((r5.get("data") or {}).get("indexes") or [])]
-    e5 = r5["success"] and "idx_sku_warehouse" not in names
-    _append_evidence(state, "E5", "get_index_info", {"indexes": names}, e5)
-    status["E5"] = e5
 
-    state["evidence_gate"] = status  # type: ignore[assignment]
+def _evaluate_index(result: dict, state: dict) -> list[dict]:
+    names = [i["index_name"] for i in ((result.get("data") or {}).get("indexes") or [])]
+    e5 = result.get("success") and "idx_sku_warehouse" not in names
+    return [{"id": "E5", "key": "e5", "source": "get_index_info",
+             "content": {"indexes": names}, "passed": e5}]
 
-    # 审计落库:每轮证据写 evidence 表(按 source 幂等覆盖)
-    for ev in state.get("evidence", []):
-        evidence_repo.upsert_evidence(state["incident_id"], ev["id"], ev["source"],
-                                      ev.get("content"), bool(ev.get("passed")))
 
-    # 预算耗尽判断
-    if (state.get("investigation_round", 0) >= state.get("max_investigation_rounds", DEFAULT_MAX_ROUNDS)
-            or state.get("tool_call_count", 0) >= state.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)):
-        state["termination_reason"] = "evidence_budget_exhausted"
-    elif not evaluate_evidence_gate(status):
-        # 证据未齐且预算充足:等待负载数据产生后重试(仅阻塞调查线程,不阻塞事件循环)
-        time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
-    return state
+_EVALUATORS = {
+    "get_service_metrics": _evaluate_metrics,
+    "get_trace": _evaluate_trace,
+    "list_expensive_query_digests": _evaluate_digests,
+    "get_query_plan": _evaluate_plan,
+    "get_index_info": _evaluate_index,
+}
+
+
+def _execute_with_evidence(state: dict, name: str, args: dict) -> dict:
+    """执行工具 + 单工具证据判定;返回 {"ok": bool, "evidence": [..]}。"""
+    result = _call_tool(state, name, **args)
+    evaluator = _EVALUATORS.get(name)
+    if evaluator is None:
+        return {"ok": False, "evidence": [], "error": f"无评估器 {name}"}
+    evidence = evaluator(result, state)
+    if not result.get("success"):
+        return {"ok": False, "evidence": evidence, "error": result.get("error_message", "tool_failed")}
+    return {"ok": True, "evidence": evidence}
 
 
 def diagnose(state: IncidentState) -> dict:
     """汇总证据 E1~E5,规则闸门决定是否确认根因。"""
+    if state.get("status") == "needs_human":
+        # collect_evidence 已决定转人工(预算/无效决策/去重/超时),保留并补发事件
+        _emit_status(state)
+        return state
     gate = state.get("evidence_gate") or {}
     if evaluate_evidence_gate(gate):
         state["confirmed_hypothesis_id"] = "h1"

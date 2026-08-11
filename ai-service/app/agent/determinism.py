@@ -49,7 +49,9 @@ class DeterministicEvidencePlanner:
             return state["trigger_trace_id"]
         for ev in state.get("evidence") or []:
             content = ev.get("content") or {}
-            tid = content.get("representative_slow_trace_id") or content.get("representativeTraceId")
+            tid = (content.get("representative_slow_trace_id")
+                   or content.get("representativeTraceId")
+                   or content.get("representativeSlowTraceId"))
             if tid:
                 return tid
         return ""

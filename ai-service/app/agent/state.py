@@ -11,6 +11,11 @@ def dedup_by_id(existing: list[dict], updates: list[dict]) -> list[dict]:
     return merged
 
 
+def append_records(existing: list[dict] | None, updates: list[dict] | None) -> list[dict]:
+    """工具调用记录追加(不按 id 去重,保留每次调用)。"""
+    return (list(existing) if existing else []) + (list(updates) if updates else [])
+
+
 class IncidentState(TypedDict, total=False):
     incident_id: int
     run_id: int
@@ -26,6 +31,13 @@ class IncidentState(TypedDict, total=False):
     termination_reason: str | None
     hypotheses: Annotated[list[dict], dedup_by_id]
     evidence: Annotated[list[dict], dedup_by_id]
+    # V1.1 混合循环预算与记录
+    decision_attempt_count: int
+    tool_execution_count: int
+    consecutive_invalid_count: int
+    consecutive_no_progress_count: int
+    investigation_started_at: float
+    tool_calls_record: Annotated[list[dict], append_records]
     confirmed_hypothesis_id: int | None
     fix_proposal: dict | None
     approval: dict | None

@@ -21,32 +21,35 @@ EVIDENCE_TOOL = {
 
 
 def compute_eligible_tools(state: dict) -> set[str]:
-    """独立资格判断:每轮把所有满足条件的工具暴露给 LLM(不退化为固定顺序)。"""
+    """独立资格判断:每轮把所有满足条件的工具暴露给 LLM(不退化为固定顺序)。
+    evidence_gate 兼容大写(E1)与小写(e1)两种写法。"""
     gate = state.get("evidence_gate") or {}
+
+    def satisfied(key: str) -> bool:
+        return bool(gate.get(key, gate.get(key.upper(), False)))
+
     evidence = {e.get("key"): e for e in state.get("evidence") or []}
     eligible: set[str] = set()
-    if not gate.get("e1"):
+    if not satisfied("e1"):
         eligible.add("get_service_metrics")
-    if not gate.get("e2"):
+    if not satisfied("e2"):
         content = (evidence.get("e1") or {}).get("content") or {}
         if content.get("representativeSlowTraceId"):
             eligible.add("get_trace")
-    if not gate.get("e3"):
+    if not satisfied("e3"):
         eligible.add("list_expensive_query_digests")
-    if not gate.get("e4"):
+    if not satisfied("e4"):
         content = (evidence.get("e3") or {}).get("content") or {}
         if content.get("query_ref") == "INVENTORY_LOOKUP":
             eligible.add("get_query_plan")
-    if not gate.get("e5"):
+    if not satisfied("e5"):
         eligible.add("get_index_info")
     return eligible
 
 
 def _validate_enum(name: str, args: dict, schema: dict) -> str | None:
+    """只校验白名单与边界;required 由 resolve_arguments 程序补充(LLM 只选工具)。"""
     props = schema["parameters"].get("properties", {})
-    for req in schema["parameters"].get("required", []):
-        if req not in args:
-            return f"缺少参数 {req}"
     for k, v in args.items():
         spec = props.get(k)
         if spec and "enum" in spec and v not in spec["enum"]:
@@ -84,8 +87,11 @@ def resolve_arguments(name: str, raw_args: dict, state: dict) -> dict:
     if name == "list_expensive_query_digests":
         return {"window_seconds": raw_args.get("window_seconds", 300)}
     if name == "get_query_plan":
+        sp = raw_args.get("sample_parameters") or {}
+        # 演示参数由程序固定(INVENTORY_LOOKUP 白名单模板),模型不得编造
         return {"query_ref": "INVENTORY_LOOKUP",
-                "sample_parameters": raw_args.get("sample_parameters") or {}}
+                "sample_parameters": {"skuId": sp.get("skuId", 42),
+                                       "warehouseId": sp.get("warehouseId", 7)}}
     if name == "get_index_info":
         return {"table_ref": "inventory"}
     raise ArgumentResolutionError(f"未知工具 {name}")
@@ -109,3 +115,7 @@ class DuplicateGuard:
             return True, key
         self._seen.add(key)
         return False, key
+
+    def seed(self, record: dict) -> None:
+        """用历史调用记录预置去重集合(供 collect_evidence 跨轮去重)。"""
+        self._seen.add(self._key(record.get("tool_name", ""), record.get("arguments", {})))

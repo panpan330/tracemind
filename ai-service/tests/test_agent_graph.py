@@ -77,7 +77,8 @@ def test_incomplete_evidence_keeps_collecting(monkeypatch):
              "severity": "high", "max_investigation_rounds": 1, "max_tool_calls": 5}
     result = graph.invoke(state)
     assert result["status"] == "needs_human"
-    assert result["termination_reason"] == "evidence_budget_exhausted"
+    # V1.1 预算语义:无故障场景(E1 正常)重复调用同一工具被去重拦截后转人工
+    assert result["termination_reason"] == "duplicate_tool_call"
     assert result.get("confirmed_hypothesis_id") is None
 
 
