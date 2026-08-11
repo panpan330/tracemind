@@ -55,3 +55,29 @@ def test_template_report_uses_facts_only():
     report = TemplatePostmortemRenderer().render(base_state())
     assert "复盘" in report["content"] or "根因" in report["content"]
     assert report["root_cause_summary"]
+
+
+# ---- V1.3:锁证据链(L1→L2)----
+
+def test_planner_collects_lock_chain():
+    planner = DeterministicEvidencePlanner()
+    state = {"evidence_gate": {}, "evidence": [],
+             "service_ref": "inventory-service",
+             "policy": {"scn001": "unknown", "scn002": "unknown"}}
+    eligible = {"get_service_metrics", "get_trace", "list_expensive_query_digests",
+                "get_query_plan", "get_index_info", "get_lock_waiters"}
+    calls = planner.choose(state, eligible)
+    names = [c["name"] for c in calls]
+    assert "get_lock_waiters" in names  # 锁证据缺失 → 补采
+
+
+def test_planner_transaction_details_after_lock():
+    planner = DeterministicEvidencePlanner()
+    state = {"evidence_gate": {"E1": True, "E2": True, "E3": True, "E4": True, "E5": True},
+             "evidence": [{"key": "l1", "content": {"waits": [{"blocker_ref": "blk_1",
+                       "object_schema": "tracemind_business", "object_table": "inventory",
+                       "waiting_query_ref": "INVENTORY_RESERVATION"}]}, "passed": True}]}
+    eligible = {"get_transaction_details"}
+    calls = planner.choose(state, eligible)
+    assert calls and calls[0]["name"] == "get_transaction_details"
+    assert calls[0]["arguments"]["transaction_ref"] == "blk_1"

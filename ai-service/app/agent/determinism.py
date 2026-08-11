@@ -11,6 +11,10 @@ EVIDENCE_TOOL = {
     "e5": "get_index_info",
 }
 
+# 锁证据链(V1.3:L1 → L2 依赖 blocker_ref)
+LOCK_EVIDENCE_ORDER = ["l1", "l2"]
+LOCK_EVIDENCE_TOOL = {"l1": "get_lock_waiters", "l2": "get_transaction_details"}
+
 
 class TemplateHypothesisGenerator:
     def generate(self, state: dict) -> list[dict]:
@@ -26,7 +30,7 @@ class DeterministicEvidencePlanner:
         gate = state.get("evidence_gate") or {}
         trace_id = self._find_trace_id(state)
         for key in EVIDENCE_ORDER:
-            if gate.get(key, False):
+            if gate.get(key, gate.get(key.upper(), False)):
                 continue
             if key == "e2" and not trace_id:
                 # 无 trace_id:回退到 metrics 重新取代表性 trace
@@ -41,7 +45,28 @@ class DeterministicEvidencePlanner:
             if key == "e2":
                 args["trace_id"] = trace_id
             return [{"id": f"d{key}", "name": tool, "arguments": args}]
+        # 锁链(L1→L2):索引链已齐或证据不足时补锁证据
+        for key in LOCK_EVIDENCE_ORDER:
+            if gate.get(key, gate.get(key.upper(), False)):
+                continue
+            if key == "l2" and not self._find_blocker_ref(state):
+                continue  # 无 blocker_ref,无法调用事务详情
+            tool = LOCK_EVIDENCE_TOOL[key]
+            if tool not in eligible_tools:
+                continue
+            return [{"id": f"d{key}", "name": tool,
+                     "arguments": self._arguments_for(key, tool, state)}]
         return []
+
+    @staticmethod
+    def _find_blocker_ref(state: dict) -> str:
+        for ev in state.get("evidence") or []:
+            for w in ((ev.get("content") or {}).get("waits") or []):
+                if (w.get("object_schema") == "tracemind_business"
+                        and w.get("object_table") == "inventory"
+                        and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"):
+                    return w.get("blocker_ref") or ""
+        return ""
 
     @staticmethod
     def _find_trace_id(state: dict) -> str:
@@ -63,6 +88,10 @@ class DeterministicEvidencePlanner:
                     "window_seconds": 300}
         if tool == "get_trace":
             return {"trace_id": ""}
+        if tool == "get_lock_waiters":
+            return {"scope_ref": "INVENTORY_RESERVATION"}
+        if tool == "get_transaction_details":
+            return {"transaction_ref": DeterministicEvidencePlanner._find_blocker_ref(state)}
         if tool == "list_expensive_query_digests":
             return {"window_seconds": 300}
         if tool == "get_query_plan":
