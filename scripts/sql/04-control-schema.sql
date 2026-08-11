@@ -140,3 +140,60 @@ CREATE TABLE IF NOT EXISTS incident_event (
   UNIQUE KEY uq_incident_seq (incident_id, sequence),
   KEY idx_event_incident (incident_id, id)
 ) ENGINE=InnoDB;
+
+-- model_call:LLM 逻辑调用审计(含每次尝试)
+CREATE TABLE tracemind_control.model_call (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  incident_id BIGINT NOT NULL,
+  agent_run_id BIGINT NOT NULL,
+  node VARCHAR(50) NOT NULL,
+  mode VARCHAR(20) NOT NULL,
+  provider VARCHAR(20) NOT NULL,
+  model VARCHAR(100) NOT NULL,
+  model_snapshot VARCHAR(100) DEFAULT '',
+  prompt_version VARCHAR(20) DEFAULT '',
+  prompt_hash CHAR(16) DEFAULT '',
+  tool_schema_version VARCHAR(20) DEFAULT '',
+  logical_call_id VARCHAR(64) DEFAULT '',
+  attempts_json TEXT,
+  finish_reason VARCHAR(30) DEFAULT '',
+  structured_output_valid TINYINT DEFAULT 0,
+  tool_call_count INT DEFAULT 0,
+  provider_request_id VARCHAR(64) DEFAULT '',
+  fallback_executor VARCHAR(50) DEFAULT '',
+  input_snapshot_json TEXT,
+  latency_ms INT DEFAULT 0,
+  input_tokens INT,
+  output_tokens INT,
+  status VARCHAR(20) NOT NULL,
+  error_code VARCHAR(100) DEFAULT '',
+  degraded TINYINT DEFAULT 0,
+  git_commit_sha CHAR(40) DEFAULT '',
+  knowledge_chunk_ids VARCHAR(500) DEFAULT '',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_model_call_incident (incident_id),
+  INDEX idx_model_call_run (agent_run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- retrieval_record:RAG 检索审计(知识参考,不参与 E 闸门)
+CREATE TABLE tracemind_control.retrieval_record (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  incident_id BIGINT NOT NULL,
+  agent_run_id BIGINT NOT NULL,
+  node VARCHAR(50) NOT NULL,
+  query_text_hash CHAR(16) DEFAULT '',
+  collection_alias VARCHAR(100) DEFAULT '',
+  collection_version VARCHAR(50) DEFAULT '',
+  embedding_model VARCHAR(50) DEFAULT '',
+  embedding_dimensions INT DEFAULT 0,
+  candidate_top_k INT DEFAULT 0,
+  final_chunk_ids VARCHAR(500) DEFAULT '',
+  scores VARCHAR(500) DEFAULT '',
+  latency_ms INT DEFAULT 0,
+  status VARCHAR(20) NOT NULL,
+  error_code VARCHAR(100) DEFAULT '',
+  degraded TINYINT DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_retrieval_incident (incident_id),
+  INDEX idx_retrieval_run (agent_run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

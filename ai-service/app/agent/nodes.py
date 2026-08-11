@@ -38,6 +38,11 @@ def _emit_status(state: IncidentState) -> None:
                             {"status": state.get("status")})
 
 
+def _emit_degradation(state: IncidentState, kind: str) -> None:
+    """llm_degraded / rag_degraded / rag_recovered SSE 事件。"""
+    event_repo.append_event(state["incident_id"], kind, {"run_id": state.get("run_id")})
+
+
 def _append_evidence(state: IncidentState, key: str, source: str, content: dict,
                      passed: bool) -> None:
     evidence = state.setdefault("evidence", [])
@@ -63,6 +68,8 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     llm = llm if llm is not None else get_llm()
     tools = tools if tools is not None else _execute_with_evidence
     planner = DeterministicEvidencePlanner()
+    if getattr(llm, "degraded", False):
+        _emit_degradation(state, "llm_degraded")
 
     gate = state.get("evidence_gate") or {}
     if evaluate_evidence_gate(gate):
