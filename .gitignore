@@ -27,3 +27,5 @@ dist/
 # 运行时产物
 ai-service/data/
 web/*.tsbuildinfo
+ai-service/data/
+ai-service/.eval_fixtures/
