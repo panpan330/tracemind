@@ -80,7 +80,8 @@
     "expected_doc_ids": [
       "runbook-mysql-lock-wait"
     ],
-    "group": "clear_lock"
+    "group": "clear_lock",
+    "relevance": "relevant"
   },
   {
     "query": "库存接口数据库阶段变慢",
@@ -89,6 +90,7 @@
       "runbook-mysql-missing-index"
     ],
     "group": "generic_db_slow",
-    "any_top3": true
+    "any_top3": true,
+    "relevance": "relevant"
   }
 ]
