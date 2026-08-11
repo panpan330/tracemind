@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     eval_repetitions: int = 3
     eval_mode: bool = False                    # 启用 EvalApprover(自动审批)
 
+    # ---- MCP 工具服务 ----
+    mcp_timeout_seconds: float = 15.0   # 单次工具调用超时
+    mcp_max_restart: int = 1            # Server 启动/初始化失败最多重启次数
+    mcp_ready: bool = False             # 运行时:契约校验通过后置 True
+
     # ---- V1.0 旧 LLM 字段(deprecated fallback)----
     llm_base_url: str = ""
     llm_api_key: str = ""

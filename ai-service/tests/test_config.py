@@ -41,3 +41,9 @@ def test_qdrant_defaults():
     s = Settings()
     assert s.qdrant_url == "http://127.0.0.1:6333"
     assert s.qdrant_collection_alias == "tracemind_runbook_current"
+
+
+def test_mcp_config_defaults():
+    s = Settings(_env_file=None)
+    assert s.mcp_timeout_seconds == 15.0
+    assert s.mcp_max_restart == 1
