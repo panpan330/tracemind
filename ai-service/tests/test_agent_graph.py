@@ -17,7 +17,7 @@ def test_full_evidence_path_reaches_awaiting_approval(monkeypatch):
                     "data": {"p95Ms": 150, "representativeSlowTraceId": "t1"}}
         if tool == "get_trace":
             return {"success": True, "data": {"sourceBackend": "fixture",
-                "inventoryServiceDurationMs": 90, "targetDbDurationMs": 85,
+                "inventoryServerDurationMs": 90, "targetDbDurationMs": 85,
                 "dbDominanceRatio": 0.9, "targetDbSpanId": "s3",
                 "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}}
         if tool == "list_expensive_query_digests":
@@ -130,7 +130,7 @@ def test_lock_wait_graph_reaches_confirmed(monkeypatch):
             return {"success": True, "data": {"p95Ms": 117, "representativeSlowTraceId": "t1"}}
         if tool == "get_trace":
             return {"success": True, "data": {"sourceBackend": "fixture",
-                "inventoryServiceDurationMs": 110, "targetDbDurationMs": 105,
+                "inventoryServerDurationMs": 110, "targetDbDurationMs": 105,
                 "dbDominanceRatio": 0.95, "targetDbSpanId": "s3",
                 "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}}
         if tool == "list_expensive_query_digests":

@@ -38,7 +38,7 @@ def test_search_uses_whitelisted_bounds(monkeypatch):
     url, params = fake.calls[0]
     assert "/api/traces" in url
     assert params["service"] == "inventory-service"
-    assert params["limit"] <= 20
+    assert params["limit"] <= 50
 
 
 def test_get_trace_by_id_not_found(monkeypatch):

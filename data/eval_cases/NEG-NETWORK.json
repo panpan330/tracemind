@@ -15,11 +15,11 @@
       "ok": true,
       "data": {
         "sourceBackend": "fixture",
-        "inventoryServiceDurationMs": 115,
         "targetDbDurationMs": 90,
         "dbDominanceRatio": 0.78,
         "targetDbSpanId": "s3",
-        "normalizationRuleVersion": "TRACE_NORMALIZER_V1"
+        "normalizationRuleVersion": "TRACE_NORMALIZER_V1",
+        "inventoryServerDurationMs": 115
       }
     },
     "list_expensive_query_digests:f96458c068e0": {

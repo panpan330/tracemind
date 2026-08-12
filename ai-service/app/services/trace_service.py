@@ -57,7 +57,7 @@ def get_trace(trace_ref: str | None, trace_id: str | None, incident: dict,
                    **normalized}
         else:  # fixture
             out = {"sourceBackend": "fixture", "traceId": "fixture-trace-1",
-                   "inventoryServiceDurationMs": 900, "targetDbDurationMs": 820,
+                   "inventoryServerDurationMs": 900, "targetDbDurationMs": 820,
                    "dbDominanceRatio": 0.91, "targetDbSpanId": "s3",
                    "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}
         _audit(out, incident_id, agent_run_id, service_ref, operation_ref,

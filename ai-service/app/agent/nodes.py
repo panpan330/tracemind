@@ -267,7 +267,7 @@ def _evaluate_trace(result: dict, state: dict) -> list[dict]:
         return []
     passed = bool(data.get("dbDominanceRatio") is not None
                   and (data.get("dbDominanceRatio") or 0) >= 0.5
-                  and data.get("inventoryServiceDurationMs"))
+                  and data.get("inventoryServerDurationMs"))
     return [{"id": "E2", "key": "e2", "source": "get_trace",
              "content": data, "passed": passed}]
 

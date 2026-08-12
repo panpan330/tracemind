@@ -23,7 +23,7 @@ def _patch_node_deps(monkeypatch):
                     "data": {"p95Ms": 150, "representativeSlowTraceId": "t1"}}
         if tool == "get_trace":
             return {"success": True, "data": {"sourceBackend": "fixture",
-                "inventoryServiceDurationMs": 90, "targetDbDurationMs": 85,
+                "inventoryServerDurationMs": 90, "targetDbDurationMs": 85,
                 "dbDominanceRatio": 0.9, "targetDbSpanId": "s3",
                 "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}}
         if tool == "list_expensive_query_digests":
