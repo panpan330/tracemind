@@ -51,8 +51,8 @@ class PrometheusMetricsClient:
         obs_id = uuid.uuid4().hex[:12]
         evaluated_at = int(time.time())
         window = f"{int(settings.metrics_max_age_seconds * 2)}s"
-        labels = {"service": service_ref, "uri": ".+", "method": "",
-                  "status": "", "window": window}
+        labels = {"service": service_ref, "uri": ".+",
+                  "extra": "", "window": window}
         p95_rows = self.query("HTTP_SERVER_P95_V1", labels, 300)
         qps_rows = self.query("HTTP_SERVER_QPS_V1", labels, 300)
         err_rows = self.query("HTTP_SERVER_ERROR_RATE_V1", labels, 300)
