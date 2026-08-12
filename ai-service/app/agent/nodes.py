@@ -205,12 +205,18 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
         return {**out, "evidence": new_evidence, "evidence_gate": new_gate,
                 "tool_calls_record": [record], "consecutive_no_progress_count": 0}
 
-    # 工具成功但无证据(或执行失败):noop 计数
+    # 工具成功但无证据(或执行失败):不记录到 tool_calls_record(允许后续重采),
+    # 连续无进展达阈值才转人工
     noop = (state.get("consecutive_no_progress_count") or 0) + 1
-    if noop >= MAX_CONSECUTIVE_NO_PROGRESS:
+    if noop >= MAX_CONSECUTIVE_NO_PROGRESS and name != "get_service_metrics":
         return {**out, "status": "needs_human", "termination_reason": "no_progress",
                 "consecutive_no_progress_count": noop}
-    return {**out, "consecutive_no_progress_count": noop, "tool_calls_record": [record]}
+    # get_service_metrics 空窗口是暂态(注入清空观测后负载尚未进入窗口):
+    # 不计数 no_progress,轮间等待窗口产生数据后重采(execution 预算兜底)
+    if name == "get_service_metrics":
+        noop = 0
+        _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
+    return {**out, "consecutive_no_progress_count": noop}
 
 
 def _build_collect_prompt(state: dict, eligible: set[str]) -> str:
@@ -230,6 +236,10 @@ def _build_collect_prompt(state: dict, eligible: set[str]) -> str:
 def _evaluate_metrics(result: dict, state: dict) -> list[dict]:
     data = result.get("data") or {}
     p95 = data.get("p95Ms")
+    if p95 is None:
+        # 窗口内无观测样本(如注入清空观测后负载尚未进入窗口):
+        # 不产出证据,视为"尚未采集",允许 planner 后续轮次重采
+        return []
     inc = incident_repo.get_incident(state["incident_id"])
     health = (inc.healthy_metrics_baseline or {}) if inc else {}
     base_p95 = (health or {}).get("p95_ms")
