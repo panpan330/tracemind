@@ -43,13 +43,15 @@ def get_trace(trace_ref: str | None, trace_id: str | None, incident: dict,
                                                   start_w, end_w, "SLOWEST")
                 if not candidates:
                     raise ValueError("TRACE_NOT_FOUND")
-                # 候选逐个归一化:取首个结构完整的 trace(部分导出的锁超时 trace 可能不完整)
-                raw, normalized = None, None
+                # 候选逐个归一化:取结构完整且 db 占比最高的 trace
+                # (锁超时部分导出的 trace 结构不完整;健康 trace 结构完整但占比低)
+                raw, normalized, best_ratio = None, None, 0.0
                 for cand in candidates:
                     n = TraceNormalizer().normalize(cand, operation_ref)
                     if n.get("status") == "ok":
-                        raw, normalized = cand, n
-                        break
+                        ratio = float(n.get("dbDominanceRatio") or 0.0)
+                        if raw is None or ratio > best_ratio:
+                            raw, normalized, best_ratio = cand, n, ratio
                 if raw is None:
                     raise ValueError("TRACE_INCOMPLETE")
             out = {"sourceBackend": "jaeger", "traceId": raw.get("traceID"),
