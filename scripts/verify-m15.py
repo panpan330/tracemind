@@ -1,5 +1,5 @@
 """V1.5 验收:证据与决策链回放。
-1) SCN-001 完整闭环 → replayStatus=complete,步骤链完整,keyStepIndexes 齐全
+1) SCN-002 完整闭环 → replayStatus=complete,步骤链完整,keyStepIndexes 齐全
 2) rejected 路径 → runOutcome=rejected,无 FIX_EXECUTED 必需步骤要求
 3) 只读无副作用:播放前后 Incident/Approval/FixExecution 记录不变;重复读取步骤一致;runId 归属校验 404
 用法: python scripts/verify-m15.py --base http://localhost:8000 --order http://localhost:8081
@@ -174,20 +174,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:8000")
     ap.add_argument("--order", default="http://localhost:8081")
-    ap.add_argument("--scenario", choices=["SCN-001", "SCN-002"], default="SCN-002",
-                    help="完整闭环场景:本地 fixture 用 SCN-002(锁证据真实);VM 真实观测用 SCN-001")
     args = ap.parse_args()
 
-    # 1) 完整闭环 → complete replay(缺索引/锁,取决于场景;VM 真实模式用 SCN-001)
-    p(f"=== {args.scenario} 完整闭环 ===")
-    inc1 = run_round(args.base, args.order, args.scenario)
+    # 1) SCN-002 完整闭环 → complete replay(锁场景,fixture 观测下证据真实)
+    p("=== SCN-002 完整闭环 ===")
+    inc1 = run_round(args.base, args.order, "SCN-002")
     run_id, steps = replay_complete(args.base, inc1)
     readonly_assertions(args.base, inc1, run_id, steps)
     p(f"SCN-002 replayStatus=complete, totalSteps={steps['totalSteps']}")
 
     # 2) rejected 路径 → runOutcome=rejected,不要求 FIX_EXECUTED
     p("=== rejected 路径 ===")
-    inc2 = run_round(args.base, args.order, args.scenario, reject=True)
+    inc2 = run_round(args.base, args.order, "SCN-002", reject=True)
     m = api(args.base, "GET", f"/api/incidents/{inc2}/replay")
     run_id2 = m["defaultRunId"]
     rm = api(args.base, "GET", f"/api/incidents/{inc2}/replay/runs/{run_id2}")
