@@ -257,3 +257,14 @@ CREATE TABLE IF NOT EXISTS observation_query (
     INDEX idx_incident (incident_id),
     INDEX idx_obs_id (observation_query_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- V1.5 回放:agent_run 扩展(幂等)
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='agent_run' AND COLUMN_NAME='next_replay_sequence');
+SET @sql := IF(@c=0, 'ALTER TABLE agent_run ADD COLUMN next_replay_sequence INT NOT NULL DEFAULT 0', 'SELECT 1');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='agent_run' AND COLUMN_NAME='expected_policy_bundle_version');
+SET @sql := IF(@c=0, 'ALTER TABLE agent_run ADD COLUMN expected_policy_bundle_version VARCHAR(32) NULL', 'SELECT 1');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='agent_run' AND COLUMN_NAME='policy_bundle_version');
+SET @sql := IF(@c=0, 'ALTER TABLE agent_run ADD COLUMN policy_bundle_version VARCHAR(32) NULL', 'SELECT 1');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;

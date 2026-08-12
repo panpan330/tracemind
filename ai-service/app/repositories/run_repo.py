@@ -56,3 +56,33 @@ def list_pending_runs() -> list[AgentRun]:
             select(AgentRun)
             .filter(AgentRun.status.in_(("investigating", "executing", "verifying")))
             .order_by(AgentRun.id.asc())).all())
+
+
+def allocate_replay_sequence(agent_run_id: int,
+                             session: Session | None = None) -> int:
+    """原子分配 replay sequence_no。
+    传入 session 时与调用方共用同一事务(序号分配+记录插入必须同事务);
+    否则自行 open 会话。"""
+    owns = session is None
+    s = session or Session(get_control_engine())
+    try:
+        r = s.get(AgentRun, agent_run_id)
+        if r is None:
+            raise ValueError("agent_run not found")
+        r.next_replay_sequence += 1
+        if owns:
+            s.commit()
+        return r.next_replay_sequence
+    finally:
+        if owns:
+            s.close()
+
+
+def freeze_run_versions(agent_run_id: int, policy_bundle_version: str) -> None:
+    """Run 启动/收尾时冻结预期版本。"""
+    with Session(get_control_engine()) as session:
+        run = session.get(AgentRun, agent_run_id)
+        if run is None:
+            return
+        run.expected_policy_bundle_version = policy_bundle_version
+        session.commit()

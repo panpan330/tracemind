@@ -47,6 +47,10 @@ class AgentRun(Base):
     incident_digest_baseline: Mapped[Optional[dict]] = mapped_column(JSON)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # V1.5 回放:序号分配与版本冻结
+    next_replay_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    expected_policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
+    policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
 
 
 class Hypothesis(Base):
