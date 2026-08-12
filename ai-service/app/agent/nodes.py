@@ -17,6 +17,76 @@ from app.services import fix_service
 from app.mcp.client import get_mcp_client
 from app.tools.execute import execute_tool
 
+from app.replay.snapshot import ReplaySnapshotFactory
+from app.replay.writer import ReplayWriter, STEP_TYPES
+
+_snapshot_factory = ReplaySnapshotFactory()
+_writer_registry: dict[tuple[int, int], ReplayWriter] = {}
+
+
+def replay_writer_for(incident_id: int, run_id: int) -> ReplayWriter:
+    """(incident_id, run_id) → writer(测试可 monkeypatch)。"""
+    return _writer_registry.setdefault((incident_id, run_id), ReplayWriter(incident_id, run_id))
+
+
+def _snap(state: dict) -> dict:
+    return _snapshot_factory.snapshot(state)
+
+
+def _replay(state: dict, step_type: str, phase: str, *, logical_step_id: str,
+            state_before: dict | None = None, state_after: dict | None = None,
+            decision: dict | None = None, operation: dict | None = None,
+            source_refs: dict | None = None, outcome: str | None = None,
+            round_no: int | None = None, attempt_no: int = 1) -> None:
+    """回放快照写入(防御:无 run_id 或写入失败不阻塞业务;失败仅告警)。"""
+    import logging
+    run_id = state.get("run_id")
+    if not run_id:
+        return
+    try:
+        writer = replay_writer_for(state["incident_id"], run_id)
+        writer.write(step_type, phase, logical_step_id=logical_step_id,
+                     attempt_no=attempt_no, round_no=round_no,
+                     state_before=state_before, state_after=state_after,
+                     decision=decision, operation=operation,
+                     source_refs=source_refs, step_outcome=outcome)
+    except Exception as e:  # 回放写入失败不阻塞调查;完整性检查标记 partial
+        logging.getLogger("replay").warning("replay step 写入失败: %s", e)
+
+
+def _replay_node(step_type: str):
+    """节点级回放包裹:进入捕获 before,返回捕获 after(before/after 快照由 _snap 生成)。"""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(state, *args, **kwargs):
+            lid = (f"ls-{step_type.lower()}-"
+                   f"{state.get('run_id') or state.get('incident_id')}")
+            _replay(state, step_type, "started", logical_step_id=lid,
+                    state_before=_snap(state),
+                    source_refs={"businessKey": f"{step_type}:{state.get('incident_id')}"})
+            out = fn(state, *args, **kwargs)
+            merged = {**state, **(out if isinstance(out, dict) else {})}
+            outcome = _node_outcome(step_type, merged)
+            _replay(state, step_type, "completed", logical_step_id=lid,
+                    state_after=_snap(merged), outcome=outcome)
+            return out
+        return wrapper
+    return deco
+
+
+def _node_outcome(step_type: str, merged: dict) -> str:
+    if step_type == "DIAGNOSIS_EVALUATED":
+        return "confirmed" if merged.get("confirmed_hypothesis_id") else (
+            merged.get("termination_reason") or "evaluated")
+    if step_type == "FIX_PROPOSED":
+        return "proposal_created" if merged.get("fix_proposal") else "evaluated"
+    if step_type == "REPORT_GENERATED":
+        return "reported" if merged.get("postmortem") else "failed"
+    return "succeeded"
+
+
 # 固定探测参数(INVENTORY_LOOKUP 白名单模板)
 PROBE_PARAMS = {"skuId": 42, "warehouseId": 7}
 DEFAULT_MAX_ROUNDS = 5
@@ -349,6 +419,7 @@ def _execute_with_evidence(state: dict, name: str, args: dict) -> dict:
     return {"ok": True, "evidence": evidence}
 
 
+@_replay_node("DIAGNOSIS_EVALUATED")
 def diagnose(state: IncidentState) -> dict:
     """V1.3:按双 Policy 四分支判定(设计 §4.4)。"""
     if state.get("status") == "needs_human":
@@ -391,15 +462,22 @@ def diagnose(state: IncidentState) -> dict:
 
 def ingest(state: IncidentState) -> dict:
     """初始化调查预算与状态(Incident 已在 API 层创建)。"""
+    lid = f"ls-ingest-{state.get('run_id') or state['incident_id']}"
+    _replay(state, "INCIDENT_INGESTED", "started", logical_step_id=lid,
+            state_before=_snap(state),
+            source_refs={"businessKey": f"ingest:{state['incident_id']}"})
     state.setdefault("investigation_round", 0)
     state.setdefault("max_investigation_rounds", DEFAULT_MAX_ROUNDS)
     state.setdefault("tool_call_count", 0)
     state.setdefault("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
     state["status"] = "investigating"
     _emit_status(state)
+    _replay(state, "INCIDENT_INGESTED", "completed", logical_step_id=lid,
+            state_after=_snap(state), outcome="succeeded")
     return state
 
 
+@_replay_node("HYPOTHESES_GENERATED")
 def hypothesize(state: IncidentState) -> dict:
     """调用 LLM 生成初始假设列表,写入 hypotheses 并进入调查。
     real_strict 模型失败:优雅转 needs_human(llm_unavailable),不让调查崩溃。"""
@@ -421,6 +499,7 @@ def hypothesize(state: IncidentState) -> dict:
     return state
 
 
+@_replay_node("FIX_PROPOSED")
 def propose_fix(state: IncidentState) -> dict:
     """根因确认后生成修复提案并落库,同时创建待审批记录,状态进入 awaiting_approval。
     V1.1:提案完全确定性(fix_registry.build_proposal),零 LLM 调用。"""
@@ -460,6 +539,7 @@ def propose_fix(state: IncidentState) -> dict:
     return state
 
 
+@_replay_node("REPORT_GENERATED")
 def report(state: IncidentState, llm=None) -> dict:
     """终态复盘:调用 LLM 用已落库事实生成报告并写 postmortem 表。
     V1.1:报告阶段失败不推翻已恢复状态 — report.status=failed + degraded 标记。"""

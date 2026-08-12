@@ -1,4 +1,6 @@
-from sqlalchemy import inspect
+import uuid
+
+from sqlalchemy import delete, inspect
 from sqlalchemy.orm import Session
 
 from app.db.engine import get_control_engine
@@ -11,9 +13,13 @@ def test_replay_step_table_created():
 
 
 def test_replay_step_insert():
+    run_id = int(uuid.uuid4().int % 10**7)
     with Session(get_control_engine()) as s:
+        s.execute(delete(IncidentReplayStep).where(
+            IncidentReplayStep.agent_run_id == run_id))
+        s.commit()
         step = IncidentReplayStep(
-            incident_id=999002, agent_run_id=999002, logical_step_id="ls-1",
+            incident_id=run_id, agent_run_id=run_id, logical_step_id="ls-1",
             phase="started", step_type="DIAGNOSIS_EVALUATED", sequence_no=1,
             replay_schema_version="1.0", policy_bundle_version="1.0",
         )

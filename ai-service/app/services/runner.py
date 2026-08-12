@@ -33,6 +33,30 @@ def get_saver() -> SqliteSaver:
     return _saver
 
 
+from app.replay.versions import POLICY_BUNDLE_VERSION
+from app.replay.writer import ReplayWriter
+
+
+def _finalize_run(incident_id: int, run_id: int, status: str,
+                  termination_reason: str | None = None) -> None:
+    """Run 收尾:冻结版本 + 写 RUN_TERMINATED 回放步骤。"""
+    try:
+        run_repo.freeze_run_versions(run_id, POLICY_BUNDLE_VERSION)
+        writer = ReplayWriter(incident_id, run_id)
+        lid = f"ls-term-{run_id}"
+        outcome = ("succeeded" if status == "recovered"
+                   else "rejected" if status == "rejected"
+                   else "needs_human" if status == "needs_human"
+                   else "failed")
+        writer.write("RUN_TERMINATED", "completed", logical_step_id=lid,
+                     step_outcome=outcome,
+                     source_refs={"businessKey": f"terminated:{run_id}"},
+                     decision={"runStatus": status,
+                               "terminationReason": termination_reason})
+    except Exception:
+        logger.exception("finalize_run failed incident=%s run=%s", incident_id, run_id)
+
+
 async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dict) -> None:
     from app.agent.graph import build_graph
     graph = build_graph(checkpointer=get_saver())
@@ -50,6 +74,7 @@ async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dic
     status = result.get("status") or "finished"
     run_repo.update_run_status(run_id, status)
     incident_repo.update_status(incident_id, status)
+    _finalize_run(incident_id, run_id, status, result.get("termination_reason"))
     logger.info("graph finished incident=%s run=%s status=%s", incident_id, run_id, status)
 
 
@@ -84,6 +109,7 @@ async def resume_investigation(thread_id: str, resume_value: dict) -> None:
         status = result.get("status") or "finished"
         run_repo.update_run_status(run.id, status)
         incident_repo.update_status(run.incident_id, status)
+        _finalize_run(run.incident_id, run.id, status, result.get("termination_reason"))
         logger.info("graph resumed thread=%s status=%s", thread_id, status)
 
 
