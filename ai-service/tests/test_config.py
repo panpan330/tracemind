@@ -61,5 +61,5 @@ def test_observability_defaults():
     assert s.trace_search_retry_interval_seconds == 2
     assert s.trace_search_max_attempts == 5
     assert s.max_trace_search_window_seconds == 600
-    assert s.max_trace_candidates == 20
+    assert s.max_trace_candidates == 50
     assert s.internal_observation_enabled is False
