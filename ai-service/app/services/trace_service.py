@@ -41,10 +41,15 @@ def get_trace(trace_ref: str | None, trace_id: str | None, incident: dict,
                                                   start_w, end_w, "SLOWEST")
                 if not candidates:
                     raise ValueError("TRACE_NOT_FOUND")
-                raw = client.get_trace_by_id(candidates[0]["traceID"])
-            normalized = TraceNormalizer().normalize(raw, operation_ref)
-            if normalized.get("status") == "TRACE_INCOMPLETE":
-                raise ValueError("TRACE_INCOMPLETE")
+                # 候选逐个归一化:取首个结构完整的 trace(部分导出的锁超时 trace 可能不完整)
+                raw, normalized = None, None
+                for cand in candidates:
+                    n = TraceNormalizer().normalize(cand, operation_ref)
+                    if n.get("status") == "ok":
+                        raw, normalized = cand, n
+                        break
+                if raw is None:
+                    raise ValueError("TRACE_INCOMPLETE")
             out = {"sourceBackend": "jaeger", "traceId": raw.get("traceID"),
                    "observationQueryId": "obs-" + str(raw.get("traceID", ""))[:8],
                    **normalized}
