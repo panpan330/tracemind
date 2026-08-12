@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS incident (
   severity VARCHAR(16) NOT NULL DEFAULT 'medium',
   service_ref VARCHAR(64) NULL,
   observed_at DATETIME NULL,
+  affected_service_ref VARCHAR(64) NULL,
+  affected_operation_ref VARCHAR(64) NULL,
   trigger_trace_id VARCHAR(64) NULL,
   healthy_metrics_baseline JSON NULL,
   status VARCHAR(32) NOT NULL DEFAULT 'created',

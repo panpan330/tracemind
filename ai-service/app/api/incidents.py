@@ -9,6 +9,7 @@ from app.db.models import (Approval, FixDefinition, FixExecution, FixProposal,
 from app.repositories import evidence_repo, hypothesis_repo, incident_repo
 from app.repositories.tool_repo import list_tool_calls
 from app.services.health_baseline_service import capture_health_baseline
+from app.services.operation_registry import OPERATION_REFS
 
 router = APIRouter(prefix="/api/incidents")
 
@@ -19,12 +20,20 @@ class IncidentIn(BaseModel):
     severity: str = "medium"
     service_ref: str
     observed_at: str | None = None
+    # V1.4 非根因上下文(白名单;表示"哪个业务接口异常",不代表根因)
+    affected_service_ref: str | None = None
+    affected_operation_ref: str | None = None
 
 
 @router.post("", status_code=201)
 def create_incident(payload: IncidentIn):
+    if payload.affected_operation_ref is not None \
+            and payload.affected_operation_ref not in OPERATION_REFS:
+        raise HTTPException(422, f"affected_operation_ref 白名单: {OPERATION_REFS}")
     inc = incident_repo.create_incident(
-        payload.title, payload.description, payload.severity, payload.service_ref)
+        payload.title, payload.description, payload.severity, payload.service_ref,
+        affected_service_ref=payload.affected_service_ref or payload.service_ref,
+        affected_operation_ref=payload.affected_operation_ref)
     # 健康指标基线:Incident 创建时从 Java 采集(失败为 None 不影响创建)
     health = capture_health_baseline(payload.service_ref)
     incident_repo.save_health_baseline(inc.id, health)

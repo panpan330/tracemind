@@ -8,10 +8,14 @@ from app.db.models import Incident
 
 
 def create_incident(title: str, description: str | None, severity: str,
-                    service_ref: str, observed_at: datetime | None = None) -> Incident:
+                    service_ref: str, observed_at: datetime | None = None,
+                    affected_service_ref: str | None = None,
+                    affected_operation_ref: str | None = None) -> Incident:
     with Session(get_control_engine()) as session:
         inc = Incident(title=title, description=description, severity=severity,
-                       service_ref=service_ref, observed_at=observed_at, status="created")
+                       service_ref=service_ref, observed_at=observed_at, status="created",
+                       affected_service_ref=affected_service_ref,
+                       affected_operation_ref=affected_operation_ref)
         session.add(inc)
         session.commit()
         session.refresh(inc)

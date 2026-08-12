@@ -37,3 +37,22 @@ def test_tool_entry_point():
     body = resp.json()
     assert body["success"] is True
     assert "PRIMARY" in [i["index_name"] for i in body["data"]["indexes"]]
+
+
+def test_create_incident_accepts_operation_context():
+    r = client.post("/api/incidents", json={
+        "title": "t", "description": "d", "severity": "high",
+        "service_ref": "inventory-service",
+        "affected_service_ref": "inventory-service",
+        "affected_operation_ref": "INVENTORY_RESERVATION"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["affected_operation_ref"] == "INVENTORY_RESERVATION"
+
+
+def test_operation_ref_whitelist():
+    r = client.post("/api/incidents", json={
+        "title": "t", "description": "d", "severity": "high",
+        "service_ref": "inventory-service",
+        "affected_operation_ref": "DROP_TABLE"})
+    assert r.status_code == 422  # 白名单外拒绝
