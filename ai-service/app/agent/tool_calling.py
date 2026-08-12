@@ -99,17 +99,12 @@ def resolve_arguments(name: str, raw_args: dict, state: dict) -> dict:
         return {"service_ref": state.get("service_ref", "inventory-service"),
                 "window_seconds": raw_args.get("window_seconds", 300)}
     if name == "get_trace":
-        # V1.4 三层参数:模型只传抽象 trace_ref 或可信 trace_id;程序解析为搜索参数
+        # V1.4 三层参数:模型/规划器只传抽象 trace_ref 或可信 trace_id;
+        # 搜索参数(service/operation/窗口)在 trace_service 内部按 Incident 解析。
         raw_trace_id = (raw_args or {}).get("trace_id")
         if raw_trace_id:
             return {"trace_id": raw_trace_id}
-        return {
-            "service_ref": state.get("affected_service_ref") or state.get("service_ref"),
-            "operation_ref": state.get("affected_operation_ref") or "INVENTORY_LOOKUP",
-            "window_start": state.get("observed_at") or "2026-08-12T00:00:00Z",
-            "window_end": "2026-08-12T00:05:00Z",
-            "strategy": "SLOWEST",
-        }
+        return {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}
     if name == "list_expensive_query_digests":
         return {"window_seconds": raw_args.get("window_seconds", 300)}
     if name == "get_query_plan":

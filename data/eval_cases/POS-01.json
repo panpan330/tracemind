@@ -12,18 +12,7 @@
         "representativeSlowTraceId": "t1"
       }
     },
-    "get_trace:680c57fead83": {
-      "ok": true,
-      "data": {
-        "sourceBackend": "fixture",
-        "inventoryServiceDurationMs": 120,
-        "targetDbDurationMs": 110,
-        "dbDominanceRatio": 0.92,
-        "targetDbSpanId": "s3",
-        "normalizationRuleVersion": "TRACE_NORMALIZER_V1"
-      }
-    },
-    "get_trace:dba5ce04c90c": {
+    "get_trace:02507a7aaf0e": {
       "ok": true,
       "data": {
         "sourceBackend": "fixture",

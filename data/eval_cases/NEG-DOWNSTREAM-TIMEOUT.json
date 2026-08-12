@@ -11,18 +11,7 @@
         "p95Ms": 3
       }
     },
-    "get_trace:680c57fead83": {
-      "ok": true,
-      "data": {
-        "sourceBackend": "fixture",
-        "inventoryServiceDurationMs": 115,
-        "targetDbDurationMs": 90,
-        "dbDominanceRatio": 0.78,
-        "targetDbSpanId": "s3",
-        "normalizationRuleVersion": "TRACE_NORMALIZER_V1"
-      }
-    },
-    "get_trace:dba5ce04c90c": {
+    "get_trace:02507a7aaf0e": {
       "ok": true,
       "data": {
         "sourceBackend": "fixture",

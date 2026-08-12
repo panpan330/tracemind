@@ -138,9 +138,8 @@ def test_resolve_get_trace_trace_ref():
              "affected_operation_ref": "INVENTORY_RESERVATION",
              "observed_at": "2026-08-12T00:00:00Z"}
     out = tool_calling.resolve_arguments("get_trace", {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}, state)
-    assert out["service_ref"] == "inventory-service"
-    assert out["operation_ref"] == "INVENTORY_RESERVATION"
-    assert out["strategy"] == "SLOWEST"
+    # V1.4:抽象 trace_ref 透传;搜索参数(service/operation/窗口)在 trace_service 内部解析
+    assert out == {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}
 
 
 def test_resolve_get_trace_trace_id_priority():
