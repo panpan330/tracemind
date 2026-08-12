@@ -268,3 +268,37 @@ PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
 SET @c := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='agent_run' AND COLUMN_NAME='policy_bundle_version');
 SET @sql := IF(@c=0, 'ALTER TABLE agent_run ADD COLUMN policy_bundle_version VARCHAR(32) NULL', 'SELECT 1');
 PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- V1.5 回放:incident_replay_step(纯追加,两段式)
+CREATE TABLE IF NOT EXISTS incident_replay_step (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    incident_id BIGINT NOT NULL,
+    agent_run_id BIGINT NOT NULL,
+    logical_step_id VARCHAR(64) NOT NULL,
+    phase VARCHAR(16) NOT NULL,
+    round_no INT NULL,
+    attempt_no INT NOT NULL DEFAULT 1,
+    step_type VARCHAR(40) NOT NULL,
+    step_title VARCHAR(128) NULL,
+    step_outcome VARCHAR(32) NULL,
+    sequence_no INT NOT NULL,
+    state_before_json JSON NULL,
+    state_after_json JSON NULL,
+    decision_json JSON NULL,
+    operation_json JSON NULL,
+    source_references_json JSON NULL,
+    actual_duration_ms INT NULL,
+    replay_schema_version VARCHAR(16) NOT NULL,
+    policy_bundle_version VARCHAR(32) NULL,
+    prompt_version VARCHAR(64) NULL,
+    tool_contract_version VARCHAR(32) NULL,
+    normalization_rule_version VARCHAR(32) NULL,
+    snapshot_hash VARCHAR(64) NULL,
+    payload_size_bytes INT NULL,
+    occurred_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uk_seq (agent_run_id, sequence_no),
+    UNIQUE KEY uk_attempt_phase (agent_run_id, logical_step_id, attempt_no, phase),
+    CONSTRAINT chk_phase CHECK (phase IN ('started','completed','failed')),
+    INDEX idx_run (agent_run_id, sequence_no),
+    INDEX idx_incident (incident_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

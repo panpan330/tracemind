@@ -178,3 +178,33 @@ class IncidentEvent(Base):
     event_type: Mapped[str] = mapped_column(String(32))
     payload: Mapped[Optional[dict]] = mapped_column(JSON)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class IncidentReplayStep(Base):
+    """V1.5 回放:不可变纯追加;两段式 = 同 logical_step_id 多条 phase 记录。"""
+    __tablename__ = "incident_replay_step"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    agent_run_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    logical_step_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    round_no: Mapped[Optional[int]] = mapped_column(Integer)
+    attempt_no: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    step_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    step_title: Mapped[Optional[str]] = mapped_column(String(128))
+    step_outcome: Mapped[Optional[str]] = mapped_column(String(32))
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    state_before_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    state_after_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    decision_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    operation_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    source_references_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    actual_duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    replay_schema_version: Mapped[str] = mapped_column(String(16))
+    policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
+    prompt_version: Mapped[Optional[str]] = mapped_column(String(64))
+    tool_contract_version: Mapped[Optional[str]] = mapped_column(String(32))
+    normalization_rule_version: Mapped[Optional[str]] = mapped_column(String(32))
+    snapshot_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    payload_size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
