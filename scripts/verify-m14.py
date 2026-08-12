@@ -78,6 +78,7 @@ def run_round(scenario: str, round_no: int) -> None:
         time.sleep(3)  # 让锁等待/超时流量产生
     else:
         load(8, 15, sku=42, wh=7, max_in_flight=1, timeout=6.0)
+    time.sleep(6)  # 等 OTel batch + Jaeger 完成 trace 导出(collector batch 5s 延迟)
     rr = requests.post(f"{base}/api/incidents/{incident_id}/investigations", timeout=10)
     rr.raise_for_status()
     # fixture 冒烟:metrics 恒健康;锁等待时序不稳定(本地 UPDATE/loadgen 子进程)

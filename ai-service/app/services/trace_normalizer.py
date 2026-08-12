@@ -58,7 +58,10 @@ def _is_inventory_server(span: dict, service: str) -> bool:
     if service != "inventory-service":
         return False
     op = span.get("operationName") or ""
-    if op.startswith("/internal/") or "scenario" in op or "lock-holder" in op:
+    if op.startswith("/internal/") or "/actuator/" in op or "scenario" in op or "lock-holder" in op:
+        return False
+    # 业务路由限定 /api/(监控/管理端点不计入业务证据)
+    if "/api/" not in op:
         return False
     # HTTP 服务端:operationName 为 "METHOD /path"(Jaeger 由 server span 命名)
     if " " in op and op.split(" ", 1)[0] in ("GET", "POST", "PUT", "DELETE", "PATCH"):
