@@ -16,7 +16,7 @@ describe('replay api client', () => {
     const out = await fetchReplaySteps(123, 456)
     expect(fake).toHaveBeenCalledWith('/api/incidents/123/replay/runs/456/steps', expect.anything())
     expect(out.totalSteps).toBe(1)
-    expect(out.steps[0].stateAfter?.facts?.F_INDEX_MISSING).toBe(true)
+    expect((out.steps[0].stateAfter?.facts as any)?.['F_INDEX_MISSING']).toBe(true)
   })
 
   it('fetchIncidentReplay 请求 manifest', async () => {

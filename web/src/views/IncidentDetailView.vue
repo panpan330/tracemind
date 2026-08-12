@@ -19,6 +19,7 @@
               开始调查
             </el-button>
             <el-button v-if="isTerminal(detail.status)" type="success" @click="goReport">查看复盘报告</el-button>
+            <el-button v-if="detail.id" @click="goReplay">查看历史回放</el-button>
           </div>
         </div>
       </el-card>
@@ -148,6 +149,10 @@ async function start() {
 
 function goReport() {
   router.push(`/incidents/${incidentId}/report`)
+}
+
+function goReplay() {
+  router.push({ path: '/replay', query: { incidentId: incidentId } })
 }
 
 onMounted(() => {
