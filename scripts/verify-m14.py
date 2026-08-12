@@ -62,7 +62,7 @@ def run_round(scenario: str, round_no: int) -> None:
     if scenario == "SCN-002":
         # 持续锁负载:UPDATE 42/7(等待锁)+ loadgen(超时流量),调查期间保持
         up = subprocess.Popen([sys.executable, "-c",
-                               'import pymysql,time; c=pymysql.connect(host="127.0.0.1",port=3306,'
+                               f'import pymysql,time; c=pymysql.connect(host="{args.order_host}",port=3306,'
                                'user="app_business",password="app_business_pwd",database="tracemind_business");'
                                'cur=c.cursor(); end=time.time()+30\n'
                                'while time.time()<end:\n'
@@ -126,6 +126,8 @@ def main() -> int:
     p.add_argument("--order", default="http://localhost:8081")
     p.add_argument("--fixture", action="store_true", help="fixture 后端冒烟(跳过 jaeger/防伪断言)")
     p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--interval", type=int, default=0,
+                   help="轮间等待秒数(默认 0;连续多轮验收建议 300,让 Prometheus 指标窗口滚动,避免基线污染)")
     p.add_argument("--scenario", choices=["SCN-001", "SCN-002", "all"], default="all")
     args = p.parse_args()
     args.order_host = args.order.replace("http://", "").split(":")[0]
@@ -135,6 +137,9 @@ def main() -> int:
         for sc in scenarios:
             for i in range(1, args.rounds + 1):
                 run_round(sc, i)
+                if i < args.rounds and args.interval > 0:
+                    print(f"  轮间等待 {args.interval}s(指标窗口滚动)...", flush=True)
+                    time.sleep(args.interval)
     finally:
         for sc in scenarios:
             try:

@@ -53,7 +53,11 @@ def get_trace(trace_ref: str | None, trace_id: str | None, incident: dict,
                         if raw is None or ratio > best_ratio:
                             raw, normalized, best_ratio = cand, n, ratio
                 if raw is None:
-                    raise ValueError("TRACE_INCOMPLETE")
+                    # 候选存在但无结构完整的 trace(锁超时 trace 部分导出):产出"已采集但证据不足"的
+                    # E2 证据(记 status=TRACE_INCOMPLETE),让 planner 不再重采 get_trace
+                    return {"sourceBackend": "jaeger", "status": "TRACE_INCOMPLETE",
+                            "dbDominanceRatio": 0.0, "inventoryServerDurationMs": 0,
+                            "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}
             out = {"sourceBackend": "jaeger", "traceId": raw.get("traceID"),
                    "observationQueryId": "obs-" + str(raw.get("traceID", ""))[:8],
                    **normalized}
