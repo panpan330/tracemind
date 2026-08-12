@@ -50,7 +50,8 @@ Java Services ──────────┤                                 
 
 - 双服务加 `micrometer-registry-prometheus` 依赖;Actuator 暴露 `/actuator/prometheus`。
 - **Histogram 必须启用**:`management.metrics.distribution.percentiles-histogram.http.server.requests=true`,并配置显式 SLO buckets 覆盖 `10ms/50ms/100ms/250ms/500ms/1s/2s/5s/10s`(SCN-002 锁等待超时不能落在最高 bucket 外)。
-- 指标名以 Micrometer 实际输出为准(`http_server_requests_seconds_*`);PromQL 按 `service / route / method / status|outcome / le` 聚合;管理接口与场景控制接口**不混入**业务 P95。
+- **服务标签稳定**:`management.metrics.tags.service=${spring.application.name}`(Micrometer 不天然输出 service 标签;HTTP 路由标签按真实输出可能是 `uri` 而非 `route`)。
+- **启动契约测试(冻结标签契约与模板版本)**:`service=order-service|inventory-service` 存在;`uri` 使用低基数模板路径(非具体 ID 路径);管理端点与场景端点不进入业务查询;`P95 / QPS / 错误率` 模板各返回唯一预期时间序列。实现完成后**冻结标签契约与 PromQL 模板版本**,不能只写"以实际输出为准"。
 
 ### 4.2 Actuator 暴露收紧
 
@@ -72,6 +73,8 @@ OTEL_METRICS_EXPORTER=none              # metrics 不走 OTLP,与 Micrometer/Pro
 OTEL_LOGS_EXPORTER=none
 OTEL_TRACES_SAMPLER=always_on           # 仅演示环境;不宣称生产采样配置
 OTEL_PROPAGATORS=tracecontext,baggage
+OTEL_SEMCONV_STABILITY_OPT_IN=http,database   # 语义约定稳定字段(db.system.name 等)
+OTEL_RESOURCE_ATTRIBUTES=service.version=<git-version>,deployment.environment.name=demo,service.instance.id=<container-instance>
 ```
 
 - 自动插桩覆盖:Spring HTTP SERVER span、RestTemplate/WebClient CLIENT span(inventory_http)、JDBC CLIENT span(database)、`traceparent` 跨服务传播。
@@ -113,18 +116,22 @@ OTEL_PROPAGATORS=tracecontext,baggage
   - AI 程序解析:`{"service_ref": "inventory-service", "operation_ref": "INVENTORY_RESERVATION", "window_start": "...", "window_end": "...", "strategy": "SLOWEST"}`
   - MCP 调用:Client 注入 `incident_id` / `agent_run_id`
 - `trace_id` 只能来自:前序可信证据 / Jaeger 搜索结果 / 与 OTel 一致的 `x-trace-id`;不能由 LLM 直接生成。
+- **`operation_ref` 来源(非根因上下文)**:Incident 创建时由调用方提供 `affected_service_ref` + `affected_operation_ref`(允许值 `ORDER_CREATE / INVENTORY_LOOKUP / INVENTORY_RESERVATION`),表示"哪个业务接口发生异常",**不代表 scenario_id / root_cause / DiagnosticPolicy / 修复动作**。程序通过注册表映射:`affected_operation_ref → Prometheus service/uri 模板 → Jaeger service/http.route → get_trace 搜索参数`;避免 LLM 从描述解析或生成任意 Route。
 - **资格逻辑同步更新**:`get_service_metrics` 返回有效异常时间窗口 → 程序能解析 `service_ref + operation_ref + window` → `get_trace` eligible;同步更新 `compute_eligible_tools` / `resolve_arguments` / Deterministic Planner / Fixture Key / Evidence Evaluator / MCP Contract 与 Schema Hash(契约版本升级)。
 
 ### 5.2 TraceNormalizer 确定性规则(`TRACE_NORMALIZER_V1`)
 
 1. 找到目标 inventory SERVER span
 2. 找其全部后代 DB CLIENT span
-3. 过滤 `db.system=mysql`
-4. 过滤允许的 `db.operation.name`(SELECT / UPDATE)
+3. 过滤 `db.system.name=mysql`(**稳定语义字段**;旧字段 `db.system` 兼容映射仅用于旧 Fixture 与迁移)
+4. 过滤允许的 `db.operation.name`(SELECT / UPDATE;旧字段 `db.operation` 兼容映射)
 5. 优先选择位于目标业务 span 下的 DB span
 6. 使用**关键路径上耗时最长的目标 DB span**(多 DB span 不累加重叠区间;非重叠合并留后续)
 
-- 阶段映射基于 `span.kind` / `service.name` / `http.route` / `server.address` / `db.system` / `db.operation.name` / `parent_span_id`;不依赖完整 SQL 文本(OTel 可能脱敏)。
+- 阶段映射基于 `span.kind` / `service.name` / `http.route` / `server.address` / `db.system.name` / `db.operation.name` / `parent_span_id`;不依赖完整 SQL 文本(OTel 可能脱敏)。
+- **语义约定策略**:Java Agent 配置 `OTEL_SEMCONV_STABILITY_OPT_IN=http,database` 后优先输出稳定字段;Normalizer 以稳定字段为主,并提供旧字段兼容映射(`db.system→db.system.name`、`db.operation→db.operation.name`)。
+- 回归报告记录:OTel Semantic Convention 模式、OTel Java Agent 版本、TraceNormalizer 兼容字段版本。
+- **契约测试必须使用真实 Java Agent Trace**,不能只用手工 Fixture 验证。
 - 输出:
 
 ```json
@@ -145,11 +152,12 @@ OTEL_PROPAGATORS=tracecontext,baggage
 Jaeger 只能查询**已结束并完成导出**的 span。**SCN-002 采用持续负载,保证两类证据同时存在**:
 
 1. blocker 事务持续持锁
-2. loadgen 持续发起库存预占请求
+2. loadgen 持续发起库存预占请求(**固定并发参数**:`target_qps` / `max_in_flight` / `request_timeout` / `total_duration`,防止 HikariCP 连接池耗尽、线程堆积、CPU 升高混入第三种故障)
 3. 至少一个请求超时结束,形成完整慢 Trace
 4. 等待该 Trace 导出到 Jaeger(有限轮询)
 5. loadgen 继续运行,保证当前仍有请求处于锁等待
-6. 创建 Incident 并开始调查
+6. **调查开始前断言**:至少一条已导出的超时 Trace(`minimum_completed_timeout_traces`)+ 至少一条实时锁等待(`minimum_active_lock_waiters`)+ HikariCP 未耗尽 + CPU 未超场景安全阈值——证明诊断的是长事务锁阻塞,而非负载发生器造成的连接池耗尽
+7. 创建 Incident 并开始调查
 
 - Jaeger:已结束的超时请求 → 证明数据库阶段耗时异常
 - MySQL MCP 工具:当前锁等待关系 → 证明实时阻塞因果链
@@ -161,7 +169,12 @@ Jaeger 只能查询**已结束并完成导出**的 span。**SCN-002 采用持续
 
 - 配置:`TRACEMIND_METRICS_BACKEND=prometheus|fixture`、`TRACEMIND_TRACE_BACKEND=jaeger|fixture`、`TRACEMIND_PROMETHEUS_URL=http://prometheus:9090`、`TRACEMIND_JAEGER_QUERY_ENDPOINT=jaeger:16685`;地址只来自服务配置,LLM/Incident/前端不可传入。
 - **fixture 生产保护**:`fixture` 仅 `TRACEMIND_EVAL_MODE=true` 或 test Profile 允许;fixture 模式禁止访问真实 Prometheus/Jaeger;VM/full E2E 启动校验强制 `prometheus + jaeger`(任一不满足拒绝执行,不自动切换)。
-- 标准后端失败**明确报错,不静默回退 internal**;错误码:`METRICS_BACKEND_UNAVAILABLE` / `METRICS_NOT_FOUND` / `TRACE_BACKEND_UNAVAILABLE` / `TRACE_EXPORT_TIMEOUT` / `TRACE_INCOMPLETE`。
+- 标准后端失败**明确报错,不静默回退 internal**。
+- **错误码统一(10 个)**:`METRICS_BACKEND_UNAVAILABLE` / `METRICS_NOT_FOUND` / `METRICS_STALE` / `METRICS_RESULT_INVALID`;`TRACE_BACKEND_UNAVAILABLE` / `TRACE_NOT_FOUND` / `TRACE_EXPORT_TIMEOUT` / `TRACE_OUTSIDE_INCIDENT_WINDOW` / `TRACE_INCOMPLETE` / `TRACE_RESULT_INVALID`。**仅 `TRACE_NOT_FOUND`**(可能由导出延迟导致)允许有限重试;Schema 错误、鉴权错误、非法响应不重试。
+- **证据新鲜度判定**:
+  - Metrics:`latest_sample_at` 必须位于有效 Incident 窗口,且 `queried_at - latest_sample_at <= METRICS_MAX_AGE_SECONDS`;否则 `METRICS_STALE`,不生成 E1/共享 Fact
+  - Trace:`trace_start/end` 必须与 Incident 窗口相交,且 service/operation 与当前 Incident 匹配;否则 `TRACE_OUTSIDE_INCIDENT_WINDOW`,不生成 E2/共享 Fact
+  - 防止 Prometheus/Jaeger 中**上一次故障的数据**被错误用于当前 Incident。
 
 ### 5.6 证据溯源与审计
 
@@ -172,7 +185,9 @@ Jaeger 只能查询**已结束并完成导出**的 span。**SCN-002 采用持续
 { "sourceBackend": "jaeger", "observationQueryId": "...", "traceId": "...", "observedAt": "..." }
 ```
 
-- **审计不存完整原始响应**:存 `observation_query_id / backend / query_template_id / 规范化参数 / 时间窗口 / 调用状态 / 耗时 / 错误码 / result_hash / trace_id / normalized_result / created_at`;原始 Jaeger Trace 不写入控制库(复现走 trace_id 查 Jaeger)。
+- **审计不存完整原始响应**:存 `observation_query_id / backend / query_template_id / 规范化参数 / 时间窗口 / 调用状态 / 耗时 / 错误码 / result_hash / trace_id / normalized_result / created_at`;原始 Jaeger Trace 不写入控制库。
+- **Jaeger 内存存储与复现边界**:Jaeger 进程生命周期内可通过 Trace ID 回查完整 Trace;**Jaeger 重启后**控制库仅保留归一化证据、关键 Span ID、Trace ID、结果 Hash 与查询元数据,**不保证重新取得原始 Trace**(持久化 Trace 存储属后续版本范围);简历不宣称原始 Trace 永久可回放。
+- **Prometheus 持久化**:使用命名 Volume `prometheus-data`(否则"保留 6h"只在容器未重建时成立)。
 - **时间语义拆分**:`queried_at`(TraceMind 发起查询时间)/ `window_start|end`(查询数据窗口)/ `latest_sample_at`(Prometheus 最新样本时间)/ `trace_start|end`(Jaeger Trace 实际时间)。
 
 ## 6. 部署(Compose,VM 8GB)
@@ -206,11 +221,16 @@ Jaeger 只能查询**已结束并完成导出**的 span。**SCN-002 采用持续
 - Receiver 监听容器内 `0.0.0.0:4317`,**不映射到宿主机/公网**;Exporter 指向 `jaeger:4317`;开启 `sending_queue` + `retry_on_failure`;`memory_limiter` 上限低于 192MB 容器上限。
 - `service.name` / `service.version` / `deployment.environment` 由 Java Agent 提供,Collector 不覆盖 `service.name`。
 
-### 6.4 网络与暴露边界
+### 6.4 网络与暴露边界(网络分区)
 
-- 管理端口 9081/9082 仅 `expose`;`/actuator/prometheus` 仅 Prometheus 内部网络可达。
-- 内部调用:`ai-service → prometheus:9090`、`ai-service → jaeger:16685`(gRPC QueryService)、`grafana → prometheus:9090`。
-- 人工 UI 仅绑宿主机回环:`127.0.0.1:16686:16686`(Jaeger)、`127.0.0.1:3000:3000`(Grafana);远程访问走 SSH Tunnel,不直接暴露公网。
+- **`expose` 不限制同网络内访问**:Docker `expose` 只是声明端口,不阻止同一网络内其他容器连接;访问隔离由**独立 Docker 网络**保证。
+- 网络划分:
+  - `app-net`:order / inventory / ai / web / loadgen / mysql / qdrant(业务互通)
+  - `metrics-scrape-net`:order / inventory / prometheus(管理端口 9081/9082 仅在此网,不映射宿主机)
+  - `trace-ingest-net`:order / inventory / otel-collector / jaeger(OTLP 4317 仅在此网,不映射宿主机)
+  - `observability-query-net`:ai / prometheus / jaeger / grafana
+- 职责边界:AI 不能连接 Java 管理端口;Prometheus 不能访问业务数据库;Java 不能访问 Jaeger Query API;Collector 不能访问 Prometheus;Grafana 只能查询 Prometheus。
+- 管理端口不映射宿主机,并只加入 `metrics-scrape-net`;人工 UI 仅绑宿主机回环:`127.0.0.1:16686:16686`(Jaeger)、`127.0.0.1:3000:3000`(Grafana);远程访问走 SSH Tunnel,不直接暴露公网。
 - Grafana:禁匿名管理;管理员密码经环境 Secret 注入(不提交仓库);不在线安装动态插件;Dashboard 与数据源通过 Provisioning 进入版本控制。
 
 ### 6.5 配置文件(仓库新增 `observability/`)
@@ -245,7 +265,12 @@ observability/
 - `x-trace-id` = order Trace = inventory Trace = Jaeger Trace = Evidence Trace ID 完全一致。
 - Trace 包含跨服务 HTTP span 与 inventory JDBC span;不含 `scenario.inject` / `lock-holder` / `SCN-001/002` 等答案泄露内容。
 - Java 内部 Observation 端点关闭或返回 404;全程未调用 `/internal/observations`。
-- SCN-001 E2E 连续 3/3;SCN-002 E2E 连续 3/3(SCN-002 另确认:Jaeger 存在已完成的超时慢 JDBC span + MySQL 存在当前实时锁等待证据;处置后锁等待消失、Trace 与指标恢复)。
+- SCN-001 E2E 连续 3/3;SCN-002 E2E 连续 3/3(SCN-002 另确认:Jaeger 存在已完成的超时慢 JDBC span + MySQL 存在当前实时锁等待证据 + HikariCP 未耗尽 + CPU 未超阈值;处置后锁等待消失、Trace 与指标恢复)。
+
+### 8.3 Grafana Profile Smoke(单独验收)
+
+- Prometheus 数据源 Healthy;Dashboard UID 存在;所有面板无查询错误;SCN-001/SCN-002 压测时能看到指标变化;Dashboard JSON 已提交仓库。
+- Grafana 测试**不阻塞默认 Agent 闭环**,但**阻塞"V1.4 展示交付完成"验收**。
 
 ### 8.2 Backend 故障验收(独立 `observability-resilience` 测试)
 
@@ -256,6 +281,7 @@ observability/
 
 ## 9. 版本兼容与后续
 
-- **兼容扩展**:MCP 工具契约升级(get_trace Schema 变化,版本升级);`observation_query_id` / `sourceBackend` / `normalizationRuleVersion` 审计字段新增;内部观测端点标记 deprecated。
-- **不改动**:E1~E5 / L1~L6 证据闸门判定逻辑、双 Policy 判定、审批中断、处置安全、恢复判定、MCP Server 工具注册与 Fixture 机制。
-- **后续扩展**:Prometheus Exemplars(metrics 与 trace 关联)、非重叠区间合并(多 DB span)、MCP HTTP/SSE 传输、调查回放。
+- **保持不变**:MCP 工具名称与数量(7 个)、stdio 传输方式、Agent 工具白名单安全原则、Fixture 隔离机制、双 Policy 与根因阈值语义、审批与处置框架、恢复判定。
+- **必须改动(证据获取/归一化/资格适配)**:`get_trace` 输入 Schema 与 Handler、MCP Contract Version 与 Schema Hash、Fixture 内容及 Key、`compute_eligible_tools`、`resolve_arguments`、Metrics/Trace Evidence Evaluator、E1/E2 与共享 Fact 的数据提取适配器。
+- **准确表述**:根因判定语义不变,但证据获取、归一化和资格计算适配新的标准观测后端。
+- **后续扩展**:Prometheus Exemplars(metrics 与 trace 关联)、非重叠区间合并(多 DB span)、持久化 Trace 存储、MCP HTTP/SSE 传输、调查回放。
