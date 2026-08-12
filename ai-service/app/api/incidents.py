@@ -38,7 +38,9 @@ def create_incident(payload: IncidentIn):
     health = capture_health_baseline(payload.service_ref)
     incident_repo.save_health_baseline(inc.id, health)
     return {"id": inc.id, "status": inc.status, "title": inc.title,
-            "service_ref": inc.service_ref}
+            "service_ref": inc.service_ref,
+            "affected_service_ref": inc.affected_service_ref,
+            "affected_operation_ref": inc.affected_operation_ref}
 
 
 @router.get("")
@@ -73,6 +75,8 @@ def get_incident(incident_id: int):
     return {
         "id": inc.id, "title": inc.title, "status": inc.status,
         "severity": inc.severity, "service_ref": inc.service_ref,
+        "affected_service_ref": inc.affected_service_ref,
+        "affected_operation_ref": inc.affected_operation_ref,
         "created_at": str(inc.created_at),
         "finished_at": str(inc.finished_at) if inc.finished_at else None,
         "degraded": bool(inc.degraded),
