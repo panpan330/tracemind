@@ -17,6 +17,8 @@ def _resolve_incident_window(incident: dict) -> tuple[str, str]:
     start_iso = incident.get("observed_at") or end
     try:
         start_dt = datetime.datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=datetime.timezone.utc)  # DB naive datetime 视为 UTC
     except ValueError:
         start_dt = now - datetime.timedelta(seconds=settings.max_trace_search_window_seconds)
     if (now - start_dt).total_seconds() > settings.max_trace_search_window_seconds:
