@@ -220,9 +220,40 @@ python scripts/run_regression.py --tier full    # full 档:fast + SCN-001/SCN-00
 
 `TRACEMIND_SESSION_TERMINATOR_DB_URL`(会话终止专用账号,无 database)· `TRACEMIND_RECOVERY_TIMEOUT`(恢复轮询超时,默认 60s)
 
+## V1.4:真实可观测性(Prometheus + Jaeger + OTel)
+
+### 观测架构
+
+```
+Java(OTel Agent 2.12.0,管理端口 9081/9082)
+  ├─ Trace: OTLP/gRPC → otel-collector(trace-only) → jaeger(内存存储)
+  └─ Metrics: Micrometer Prometheus 端点 → prometheus → grafana
+ai-service(TRACEMIND_METRICS_BACKEND / TRACE_BACKEND 切换)
+  ├─ get_service_metrics → PrometheusMetricsClient(固定 PromQL 模板注册表,新鲜度判定)
+  └─ get_trace → JaegerTraceClient(HTTP JSON API)+ TraceNormalizer(TRACE_NORMALIZER_V1)
+```
+
+- **证据语义**:E1 证据含 `sourceBackend/observationQueryId/windowStart/windowEnd/latestSampleAt`;E2 证据含 `dbDominanceRatio`(数据库阶段占比 ≥0.5)+ `traceId`(Jaeger 可再查)。get_trace 由**异常时间窗口**驱动(planner 经 `trace_ref=REPRESENTATIVE_SLOW_TRACE` 抽象引用解析)。
+- **观测审计**:`observation_query` 表记录每次查询(backend/template_id/状态/耗时/结果哈希/归一化结果),不存原始 Prometheus/Jaeger 响应。
+- **不回退 internal**:`full` 回归档强制 `metrics_backend=prometheus + trace_backend=jaeger`;Prometheus/Jaeger 停止时工具返回 `METRICS_BACKEND_UNAVAILABLE` / `TRACE_BACKEND_UNAVAILABLE`,调查明确失败,绝不回落旧内部观测。
+- **compose 网络分区**:`tracemind`(业务)/ `metrics-scrape-net`(Java→Prometheus)/ `trace-ingest-net`(Java→Collector→Jaeger)/ `observability-query-net`(AI/Grafana→Prometheus/Jaeger);Grafana/Jaeger UI 仅宿主机回环 + `observability-ui` profile。
+
+### 验证命令(V1.4)
+
+```bash
+# 本地 fixture 冒烟(不需要 Prometheus/Jaeger)
+python scripts/verify-m14.py --base http://localhost:8000 --order http://localhost:8081 --fixture --rounds 1
+# VM 全量验收(全栈 + 观测栈;要求 metrics_backend=prometheus + trace_backend=jaeger)
+python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081
+python scripts/verify-observability-resilience.py --base http://192.168.88.10:8000
+python scripts/verify-grafana-smoke.py --grafana http://127.0.0.1:3000
+python scripts/run_regression.py --tier full   # full 档强制真实后端
+```
+
 ## 版本历史
 
 - **V1.0**:核心闭环(Java 目标系统 + LangGraph 单场景 + 人工审批 + 真实 MySQL 证据)
 - **V1.1**:真实 LLM(三模式)+ Tool Calling + Runbook RAG + 离线/检索/真实模型三级评测
 - **V1.2**:工具层 MCP 化(stdio,消除 direct 路径)
 - **V1.3**:多故障场景 SCN-002 锁等待 + 双 Policy 诊断 + 处置安全 + 回归评测流水线
+- **V1.4**:真实可观测性(OTel Agent + Prometheus + Jaeger + Grafana)+ 观测审计 + 回归强制真实后端
