@@ -1,0 +1,25 @@
+# TraceMind 观测收集:仅 trace 管道(metrics/logs 由各组件直接导出/抓取)
+# 4317 仅容器内监听,compose 不映射宿主机;service.name 由 Java Agent 提供。
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 160
+  batch:
+    send_batch_size: 512
+    timeout: 5s
+exporters:
+  otlp:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp]

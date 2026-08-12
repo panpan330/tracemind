@@ -1,0 +1,4 @@
+# Jaeger all-in-one(内存存储)。镜像 jaegertracing/all-in-one:1.60
+# 环境变量由 compose 设置:
+#   SPAN_STORAGE_TYPE=memory MEMORY_MAX_TRACES=10000 COLLECTOR_OTLP_ENABLED=true
+# 查询端口 16685(gRPC QueryService)仅容器内访问;UI 16686 不对外。
