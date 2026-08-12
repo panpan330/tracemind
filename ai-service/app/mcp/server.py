@@ -42,13 +42,18 @@ def run_server(fixture_file: str | None = None) -> None:
 
     @mcp.tool()
     def get_service_metrics(incident_id: int, agent_run_id: int,
-                            service_ref: str, window_seconds: int) -> dict:
+                            service_ref: str, window_seconds: int,
+                            window_start: str | None = None,
+                            window_end: str | None = None) -> dict:
         return _delegate("get_service_metrics", incident_id, agent_run_id,
-                         service_ref=service_ref, window_seconds=window_seconds)
+                         service_ref=service_ref, window_seconds=window_seconds,
+                         window_start=window_start, window_end=window_end)
 
     @mcp.tool()
-    def get_trace(incident_id: int, agent_run_id: int, trace_id: str) -> dict:
-        return _delegate("get_trace", incident_id, agent_run_id, trace_id=trace_id)
+    def get_trace(incident_id: int, agent_run_id: int,
+                  trace_ref: str | None = None, trace_id: str | None = None) -> dict:
+        return _delegate("get_trace", incident_id, agent_run_id,
+                         incident_id=incident_id, trace_ref=trace_ref, trace_id=trace_id)
 
     @mcp.tool()
     def list_expensive_query_digests(incident_id: int, agent_run_id: int,

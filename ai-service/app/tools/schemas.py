@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def utcnow_iso() -> str:
@@ -25,11 +25,21 @@ QUERY_REF_WHITELIST = {"INVENTORY_LOOKUP"}
 
 class GetServiceMetricsIn(BaseModel):
     service_ref: str = Field(pattern="^(order-service|inventory-service)$")
-    window_seconds: int = Field(ge=10, le=3600)
+    window_seconds: int = Field(ge=10, le=3600)  # 兼容参数
+    window_start: str | None = None   # V1.4:显式观测窗口(程序注入)
+    window_end: str | None = None
 
 
 class GetTraceIn(BaseModel):
-    trace_id: str = Field(min_length=1, max_length=64)
+    incident_id: int | None = Field(default=None, gt=0)  # 审计/上下文注入
+    trace_ref: str | None = Field(default=None, pattern="^(REPRESENTATIVE_SLOW_TRACE)$")
+    trace_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def _one_of(self):
+        if not self.trace_ref and not self.trace_id:
+            raise ValueError("trace_ref 或 trace_id 至少提供一个")
+        return self
 
 
 class ListDigestsIn(BaseModel):

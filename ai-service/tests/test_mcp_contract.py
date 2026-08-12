@@ -13,20 +13,20 @@ def _tools_from_schemas():
 
 def test_verify_contract_ok():
     tools = _tools_from_schemas()
-    verify_contract({"name": SERVER_NAME, "version": "0.2.0"}, tools)
+    verify_contract({"name": SERVER_NAME, "version": "0.3.0"}, tools)
 
 
 def test_verify_contract_name_mismatch():
     tools = _tools_from_schemas()
     with pytest.raises(MCPContractError):
-        verify_contract({"name": "other", "version": "0.2.0"}, tools)
+        verify_contract({"name": "other", "version": "0.3.0"}, tools)
 
 
 def test_verify_contract_tool_set_mismatch():
     tools = _tools_from_schemas()
     tools = [t for t in tools if t["name"] != "get_trace"]
     with pytest.raises(MCPContractError):
-        verify_contract({"name": SERVER_NAME, "version": "0.2.0"}, tools)
+        verify_contract({"name": SERVER_NAME, "version": "0.3.0"}, tools)
 
 
 def test_verify_contract_schema_drift():
@@ -34,7 +34,7 @@ def test_verify_contract_schema_drift():
     # 属性名/类型漂移 → 不一致
     tools[0]["inputSchema"]["properties"]["bogus_field"] = {"type": "string"}
     with pytest.raises(MCPContractError):
-        verify_contract({"name": SERVER_NAME, "version": "0.2.0"}, tools)
+        verify_contract({"name": SERVER_NAME, "version": "0.3.0"}, tools)
 
 
 def test_verify_contract_accepts_constraint_differences():
@@ -45,20 +45,20 @@ def test_verify_contract_accepts_constraint_differences():
     gsm = next(t for t in tools if t["name"] == "get_service_metrics")
     gsm["inputSchema"]["properties"]["service_ref"] = {"type": "string"}
     gsm["inputSchema"]["properties"]["window_seconds"] = {"type": "integer"}
-    verify_contract({"name": SERVER_NAME, "version": "0.2.0"}, tools)
+    verify_contract({"name": SERVER_NAME, "version": "0.3.0"}, tools)
 
 
 def test_verify_contract_rejects_control_tools():
     tools = _tools_from_schemas()
     tools.append({"name": "execute_fix", "inputSchema": {"type": "object"}})
     with pytest.raises(MCPContractError):
-        verify_contract({"name": SERVER_NAME, "version": "0.2.0"}, tools)
+        verify_contract({"name": SERVER_NAME, "version": "0.3.0"}, tools)
 
 
 # ---- V1.3:契约 2.0.0,工具集 5→7 ----
 
 def test_contract_version_200():
-    assert MCP_TOOL_CONTRACT_VERSION == "2.0.0"
+    assert MCP_TOOL_CONTRACT_VERSION == "2.1.0"
 
 
 def test_seven_tools_in_contract():

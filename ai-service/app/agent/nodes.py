@@ -247,24 +247,27 @@ def _evaluate_metrics(result: dict, state: dict) -> list[dict]:
         e1 = p95 > int(base_p95) * 1.2
     else:
         e1 = p95 is not None and p95 > FALLBACK_E1_P95_MS
-    content: dict = {"p95Ms": p95}
-    if data.get("representativeSlowTraceId"):
-        content["representativeSlowTraceId"] = data["representativeSlowTraceId"]
+    content: dict = {"p95Ms": p95,
+                     "sourceBackend": data.get("sourceBackend"),
+                     "observationQueryId": data.get("observationQueryId"),
+                     "windowStart": data.get("windowStart"),
+                     "windowEnd": data.get("windowEnd"),
+                     "latestSampleAt": data.get("latestSampleAt")}
     return [{"id": "E1", "key": "e1", "source": "get_service_metrics",
              "content": content, "passed": e1}]
 
 
 def _evaluate_trace(result: dict, state: dict) -> list[dict]:
-    if not result.get("success"):
-        return [{"id": "E2", "key": "e2", "source": "get_trace",
-                 "content": {"detail": "no slow trace"}, "passed": False}]
-    inv = (result.get("data") or {}).get("inventory_service") or []
-    db_stage = next((x for x in inv if x.get("stage") == "database"), None)
-    total_stage = next((x for x in inv if x.get("stage") == "total"), None)
-    e2 = bool(db_stage and total_stage
-              and db_stage.get("durationMs", 0) >= total_stage.get("durationMs", 1) * 0.5)
+    """V1.4:TraceNormalizer 输出结构(dbDominanceRatio);无法归一化不产 E2。"""
+    data = result.get("data") or {}
+    backend = data.get("sourceBackend")
+    if backend not in ("jaeger", "fixture"):
+        return []
+    passed = bool(data.get("dbDominanceRatio") is not None
+                  and (data.get("dbDominanceRatio") or 0) >= 0.5
+                  and data.get("inventoryServiceDurationMs"))
     return [{"id": "E2", "key": "e2", "source": "get_trace",
-             "content": {"stages": inv}, "passed": e2}]
+             "content": data, "passed": passed}]
 
 
 def _evaluate_digests(result: dict, state: dict) -> list[dict]:

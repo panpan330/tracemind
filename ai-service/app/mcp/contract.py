@@ -6,9 +6,9 @@ from typing import Any
 
 from app.tools.registry import TOOL_REGISTRY
 
-MCP_TOOL_CONTRACT_VERSION = "2.0.0"
+MCP_TOOL_CONTRACT_VERSION = "2.1.0"
 SERVER_NAME = "tracemind-tools"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 # 调查工具名(MCP 暴露集合;execute_fix/verify_recovery 不在此列)
 TOOL_NAMES = frozenset({

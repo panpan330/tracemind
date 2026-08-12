@@ -33,7 +33,7 @@ def execute_tool(tool_name: str, incident_id: int | None = None,
     (MCP Client 或安全控制节点)注入,不参与 Fixture 参数哈希。
     """
     # 离线评测 Fixture 命中优先;fixture 非空时不再补真实数据
-    args = {k: v for k, v in kwargs.items() if k != "incident_id"}
+    args = {k: v for k, v in kwargs.items() if k != "incident_id" and v is not None}
     key = tool_name + ":" + hashlib.sha256(
         json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
     if key in _EVAL_FIXTURE:

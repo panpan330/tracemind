@@ -25,7 +25,7 @@ class FakeFastMCP:
 
 
 def test_contract_constants():
-    assert MCP_TOOL_CONTRACT_VERSION == "2.0.0"
+    assert MCP_TOOL_CONTRACT_VERSION == "2.1.0"
     assert SERVER_NAME == "tracemind-tools"
     assert TOOL_NAMES == frozenset({
         "get_service_metrics", "get_trace", "list_expensive_query_digests",

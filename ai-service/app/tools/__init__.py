@@ -1,4 +1,5 @@
 # 工具注册:五个 LLM 可调用调查工具 + 两个确定性节点工具
+from app.repositories import incident_repo
 from app.services import (index_info_service, metrics_service, query_plan_service,
                           recovery_service, slow_query_service, fix_service,
                           trace_service)
@@ -8,6 +9,32 @@ from app.tools.schemas import (ExecuteFixIn, GetIndexInfoIn, GetLockWaitersIn,
                                GetQueryPlanIn, GetServiceMetricsIn,
                                GetTraceIn, GetTransactionDetailsIn, ListDigestsIn,
                                VerifyRecoveryIn)
+
+
+def _get_metrics(service_ref: str, window_start: str | None = None,
+                 window_end: str | None = None, **kw) -> dict:
+    """V1.4 指标门面:显式窗口优先;兼容 window_seconds 回退。"""
+    if window_start and window_end:
+        return metrics_service.get_metrics(service_ref, window_start, window_end)
+    # 回退:以当前时间向前推 window_seconds
+    import datetime
+    end = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    start = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(seconds=kw.get("window_seconds") or 300)).isoformat()
+    return metrics_service.get_metrics(service_ref, start, end)
+
+
+def _get_trace(trace_ref: str | None = None, trace_id: str | None = None,
+               incident_id: int | None = None, **kw) -> dict:
+    """V1.4 trace 门面:从 Incident 解析 service/operation 上下文。"""
+    incident = incident_repo.get_incident(incident_id) if incident_id else None
+    inc_dict = {}
+    if incident is not None:
+        inc_dict = {"id": incident.id,
+                    "affected_service_ref": incident.affected_service_ref,
+                    "affected_operation_ref": incident.affected_operation_ref,
+                    "observed_at": str(incident.created_at)}
+    return trace_service.get_trace(trace_ref, trace_id, inc_dict)
 
 
 def _get_lock_waiters(scope_ref: str) -> dict:
@@ -28,8 +55,8 @@ def _get_transaction_details(transaction_ref: str) -> dict:
 
 TOOL_REGISTRY.update({
     "get_service_metrics": ToolSpec("get_service_metrics", GetServiceMetricsIn,
-                                    metrics_service.get_metrics),
-    "get_trace": ToolSpec("get_trace", GetTraceIn, trace_service.get_trace),
+                                    _get_metrics),
+    "get_trace": ToolSpec("get_trace", GetTraceIn, _get_trace),
     "list_expensive_query_digests": ToolSpec(
         "list_expensive_query_digests", ListDigestsIn, slow_query_service.list_expensive_digests),
     "get_query_plan": ToolSpec("get_query_plan", GetQueryPlanIn, query_plan_service.explain),
