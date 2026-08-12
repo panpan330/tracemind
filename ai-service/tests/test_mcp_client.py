@@ -62,11 +62,14 @@ def test_call_tool_passes_context_and_business():
         _stop(m)
 
 
-def test_call_tool_timeout_maps_error():
+def test_call_tool_timeout_maps_error(monkeypatch):
     class Slow:
         async def call_tool(self, name, arguments):
             await asyncio.sleep(10)
     m = _running_manager(Slow(), timeout=0.05)
+    # 模拟重启成功但重试仍超时:最终应映射为 MCP_TIMEOUT(不触发真实子进程重启)
+    monkeypatch.setattr(McpClientManager, "_restart_session",
+                        lambda self, timeout=10.0: True)
     try:
         with pytest.raises(MCPError) as ei:
             m.call_tool("get_trace", incident_id=1, agent_run_id=1, trace_id="t")

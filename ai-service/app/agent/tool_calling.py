@@ -35,11 +35,15 @@ def compute_eligible_tools(state: dict) -> set[str]:
         eligible.add("get_service_metrics")
     if not satisfied("e2"):
         content = (evidence.get("e1") or {}).get("content") or {}
-        # V1.4:metrics 证据含有效异常时间窗口 + Incident 可解析 service/operation 才放行
-        has_window = bool(content.get("windowStart") and content.get("windowEnd"))
-        has_ctx = bool(state.get("affected_service_ref") and state.get("affected_operation_ref"))
-        if has_window and has_ctx:
-            eligible.add("get_trace")
+        # V1.4:get_trace 由异常窗口驱动——E1 已采集后才可循;
+        # 真实后端(prometheus/jaeger)需有效窗口,fixture 后端无需窗口。
+        if content:
+            backend = content.get("sourceBackend") or "fixture"
+            needs_window = backend in ("prometheus", "jaeger")
+            has_window = bool(content.get("windowStart") and content.get("windowEnd"))
+            has_ctx = bool(state.get("affected_service_ref") or state.get("service_ref"))
+            if (has_window or not needs_window) and has_ctx:
+                eligible.add("get_trace")
     if not satisfied("e3"):
         eligible.add("list_expensive_query_digests")
     if not satisfied("e4"):

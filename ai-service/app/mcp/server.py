@@ -32,6 +32,9 @@ def run_server(fixture_file: str | None = None) -> None:
         if not fixture_path.is_relative_to(base):
             raise SystemExit("fixture 文件必须位于评测目录")
         payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+        # case 文件结构:顶层为 case 元数据 + tool_fixtures;兼容纯 fixture 字典
+        if isinstance(payload, dict) and "tool_fixtures" in payload:
+            payload = payload["tool_fixtures"]
         set_eval_fixture(payload)
         logger.info("fixture 已加载: %s(%d 条)", fixture_file, len(payload))
 
@@ -53,7 +56,7 @@ def run_server(fixture_file: str | None = None) -> None:
     def get_trace(incident_id: int, agent_run_id: int,
                   trace_ref: str | None = None, trace_id: str | None = None) -> dict:
         return _delegate("get_trace", incident_id, agent_run_id,
-                         incident_id=incident_id, trace_ref=trace_ref, trace_id=trace_id)
+                         trace_ref=trace_ref, trace_id=trace_id)
 
     @mcp.tool()
     def list_expensive_query_digests(incident_id: int, agent_run_id: int,

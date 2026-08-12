@@ -9,7 +9,7 @@ TOOL_SCHEMAS = [
     {"type": "function", "function": {"name": "get_trace",
         "description": "按 traceId 查询调用链各阶段耗时分布",
         "parameters": {"type": "object", "properties": {
-            "trace_ref": {"type": "string", "enum": ["representative_slow_trace"]}},
+            "trace_ref": {"type": "string", "enum": ["REPRESENTATIVE_SLOW_TRACE"]}},
             "required": ["trace_ref"]}}},
     {"type": "function", "function": {"name": "list_expensive_query_digests",
         "description": "列出窗口内高代价 SQL 摘要(相对 Incident 基线的增量)",

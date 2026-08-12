@@ -2,23 +2,12 @@ from app.tools.execute import execute_tool
 
 
 def test_get_service_metrics_ok(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
-        class R:
-            status_code = 200
-
-            def json(self):
-                return {"service": "inventory-service", "p95Ms": 12, "qps": 1.0,
-                        "errorRate": 0.0, "representativeSlowTraceId": "t1"}
-
-            def raise_for_status(self):
-                return None
-        return R()
-
-    monkeypatch.setattr("app.services.java_client.httpx.get", fake_get)
+    """V1.4:默认 fixture 后端返回稳定结构(fixture 值 p95Ms=2)。"""
     out = execute_tool("get_service_metrics", incident_id=None,
                        service_ref="inventory-service", window_seconds=300)
     assert out["success"] is True
-    assert out["data"]["p95Ms"] == 12
+    assert out["data"]["sourceBackend"] == "fixture"
+    assert out["data"]["p95Ms"] == 2
 
 
 def test_get_query_plan_rejects_unknown_ref():

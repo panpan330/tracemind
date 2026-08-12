@@ -16,9 +16,10 @@ def test_full_evidence_path_reaches_awaiting_approval(monkeypatch):
             return {"success": True,
                     "data": {"p95Ms": 150, "representativeSlowTraceId": "t1"}}
         if tool == "get_trace":
-            return {"success": True, "data": {"inventory_service": [
-                {"stage": "database", "durationMs": 90},
-                {"stage": "total", "durationMs": 100}]}}
+            return {"success": True, "data": {"sourceBackend": "fixture",
+                "inventoryServiceDurationMs": 90, "targetDbDurationMs": 85,
+                "dbDominanceRatio": 0.9, "targetDbSpanId": "s3",
+                "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}}
         if tool == "list_expensive_query_digests":
             return {"success": True,
                     "data": [{"rows_examined_delta": 100_000, "count_delta": 10}]}
@@ -89,8 +90,8 @@ def test_incomplete_evidence_keeps_collecting(monkeypatch):
              "severity": "high", "max_investigation_rounds": 1, "max_tool_calls": 5}
     result = graph.invoke(state)
     assert result["status"] == "needs_human"
-    # V1.1 预算语义:无故障场景(E1 正常)重复调用同一工具被去重拦截后转人工
-    assert result["termination_reason"] == "duplicate_tool_call"
+    # V1.4 语义:get_trace 无可用 trace 时连续无进展转人工(不产 E2 证据)
+    assert result["termination_reason"] == "no_progress"
     assert result.get("confirmed_hypothesis_id") is None
 
 
@@ -128,8 +129,10 @@ def test_lock_wait_graph_reaches_confirmed(monkeypatch):
         if tool == "get_service_metrics":
             return {"success": True, "data": {"p95Ms": 117, "representativeSlowTraceId": "t1"}}
         if tool == "get_trace":
-            return {"success": True, "data": {"inventory_service": [
-                {"stage": "database", "durationMs": 110}, {"stage": "total", "durationMs": 120}]}}
+            return {"success": True, "data": {"sourceBackend": "fixture",
+                "inventoryServiceDurationMs": 110, "targetDbDurationMs": 105,
+                "dbDominanceRatio": 0.95, "targetDbSpanId": "s3",
+                "normalizationRuleVersion": "TRACE_NORMALIZER_V1"}}
         if tool == "list_expensive_query_digests":
             return {"success": True, "data": [{"query_ref": "INVENTORY_LOOKUP",
                                                "rows_examined_delta": 500}]}

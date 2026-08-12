@@ -253,6 +253,8 @@ def _evaluate_metrics(result: dict, state: dict) -> list[dict]:
                      "windowStart": data.get("windowStart"),
                      "windowEnd": data.get("windowEnd"),
                      "latestSampleAt": data.get("latestSampleAt")}
+    if data.get("representativeSlowTraceId"):
+        content["representativeSlowTraceId"] = data["representativeSlowTraceId"]
     return [{"id": "E1", "key": "e1", "source": "get_service_metrics",
              "content": content, "passed": e1}]
 

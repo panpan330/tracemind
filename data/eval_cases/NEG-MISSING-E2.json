@@ -15,16 +15,23 @@
     "get_trace:680c57fead83": {
       "ok": true,
       "data": {
-        "inventory_service": [
-          {
-            "stage": "database",
-            "durationMs": 20
-          },
-          {
-            "stage": "total",
-            "durationMs": 120
-          }
-        ]
+        "sourceBackend": "fixture",
+        "inventoryServiceDurationMs": 120,
+        "targetDbDurationMs": 20,
+        "dbDominanceRatio": 0.17,
+        "targetDbSpanId": "s3",
+        "normalizationRuleVersion": "TRACE_NORMALIZER_V1"
+      }
+    },
+    "get_trace:dba5ce04c90c": {
+      "ok": true,
+      "data": {
+        "sourceBackend": "fixture",
+        "inventoryServiceDurationMs": 120,
+        "targetDbDurationMs": 20,
+        "dbDominanceRatio": 0.17,
+        "targetDbSpanId": "s3",
+        "normalizationRuleVersion": "TRACE_NORMALIZER_V1"
       }
     },
     "list_expensive_query_digests:f96458c068e0": {
