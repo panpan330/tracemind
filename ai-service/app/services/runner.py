@@ -96,8 +96,20 @@ async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> 
 
 
 async def resume_investigation(thread_id: str, resume_value: dict) -> None:
-    """用同一 thread_id 恢复挂起的图(interrupt 处继续)。"""
+    """用同一 thread_id 恢复挂起的图(interrupt 处继续)。
+    V1.5:恢复前校验版本,不一致(部署新版本后恢复旧 Run)停止原 Run 进入 version_mismatch。"""
     from app.agent.graph import build_graph
+    from app.replay.versions import POLICY_BUNDLE_VERSION
+
+    run = run_repo.get_run_by_thread(thread_id)
+    if run is not None and run.expected_policy_bundle_version \
+            and run.expected_policy_bundle_version != POLICY_BUNDLE_VERSION:
+        run_repo.update_run_status(run.id, "failed")
+        incident_repo.update_status(run.incident_id, "needs_human",
+                                    termination_reason="version_mismatch")
+        logger.warning("run %s 版本不匹配(expected=%s, current=%s) → version_mismatch",
+                       run.id, run.expected_policy_bundle_version, POLICY_BUNDLE_VERSION)
+        return
     graph = build_graph(checkpointer=get_saver())
     result = await asyncio.to_thread(
         graph.invoke,

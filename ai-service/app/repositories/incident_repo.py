@@ -40,12 +40,15 @@ def list_incidents() -> list[Incident]:
         return list(session.scalars(select(Incident).order_by(Incident.id.desc())).all())
 
 
-def update_status(incident_id: int, status: str) -> None:
+def update_status(incident_id: int, status: str,
+                  termination_reason: str | None = None) -> None:
     with Session(get_control_engine()) as session:
         inc = session.get(Incident, incident_id)
         if inc is None:
             return
         inc.status = status
+        if termination_reason:
+            inc.termination_reason = termination_reason
         session.commit()
 
 
