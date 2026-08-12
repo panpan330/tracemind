@@ -25,11 +25,20 @@ def _attr(tags: dict | list, key: str):
 
 
 def _f(span: dict, *names):
-    """字段访问:兼容 Jaeger camelCase(spanID/parentSpanID/processID)与 snake_case。"""
+    """字段访问:兼容 Jaeger camelCase(spanID/processID)与 snake_case。"""
     for n in names:
         if n in span and span[n] is not None:
             return span[n]
     return None
+
+
+def _parent_span_id(span: dict):
+    """Jaeger 用 references[].CHILD_OF;兼容 parentSpanId/parentSpanID 直链。"""
+    refs = span.get("references") or []
+    for r in refs:
+        if r.get("refType") == "CHILD_OF" and r.get("spanID"):
+            return r.get("spanID")
+    return _f(span, "parentSpanId", "parentSpanID")
 
 
 def _span_service(span: dict, processes: dict) -> str:
@@ -111,7 +120,7 @@ class TraceNormalizer:
 
     @staticmethod
     def _is_descendant(span, ancestor, by_id):
-        cur = _f(span, "parentSpanId", "parentSpanID")
+        cur = _parent_span_id(span)
         anc_id = str(_f(ancestor, "spanId", "spanID"))
         seen = 0
         while cur is not None and seen < 100:
@@ -120,7 +129,7 @@ class TraceNormalizer:
             parent = by_id.get(str(cur))
             if not parent:
                 return False
-            cur = _f(parent, "parentSpanId", "parentSpanID")
+            cur = _parent_span_id(parent)
             seen += 1
         return False
 
