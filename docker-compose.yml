@@ -66,7 +66,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-    networks: [tracemind]
+    mem_limit: 512m
+    networks: [tracemind, metrics-scrape-net, trace-ingest-net]
 
   inventory-service:
     build:
@@ -91,7 +92,8 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-    networks: [tracemind]
+    mem_limit: 512m
+    networks: [tracemind, metrics-scrape-net, trace-ingest-net]
 
   ai-service:
     build:
@@ -115,6 +117,11 @@ services:
       TRACEMIND_QDRANT_URL: "http://qdrant:6333"
       TRACEMIND_EMBEDDING_MODEL: text-embedding-v4
       TRACEMIND_EMBEDDING_DIMENSIONS: "1024"
+      # V1.4 可观测性后端(默认 fixture;真实验收切 prometheus/jaeger,见 README)
+      TRACEMIND_METRICS_BACKEND: fixture
+      TRACEMIND_TRACE_BACKEND: fixture
+      TRACEMIND_PROMETHEUS_URL: "http://prometheus:9090"
+      TRACEMIND_JAEGER_QUERY_ENDPOINT: "jaeger:16685"
     ports:
       - "8000:8000"
     volumes:
@@ -132,7 +139,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
-    networks: [tracemind]
+    networks: [tracemind, observability-query-net]
 
   web:
     build:
@@ -145,10 +152,71 @@ services:
         condition: service_healthy
     networks: [tracemind]
 
+  # ---- V1.4 可观测性栈(固定版本;Grafana UI 用 profile observability-ui 显式开启)----
+  otel-collector:
+    image: otel/opentelemetry-collector:0.119.0
+    container_name: tracemind-otel-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otel/config.yaml:ro
+    mem_limit: 192m
+    networks: [trace-ingest-net]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.6.0
+    container_name: tracemind-jaeger
+    environment:
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "10000"
+      COLLECTOR_OTLP_ENABLED: "true"
+    mem_limit: 512m
+    profiles: [observability-ui]
+    ports:
+      - "127.0.0.1:16686:16686"   # UI 仅宿主机回环;gRPC QueryService 16685 只入 observability-query-net
+    networks: [trace-ingest-net, observability-query-net]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: tracemind-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    mem_limit: 384m
+    networks: [metrics-scrape-net, observability-query-net]
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    container_name: tracemind-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/tracemind-overview.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    profiles: [observability-ui]
+    ports:
+      - "127.0.0.1:3000:3000"     # UI 仅宿主机回环
+    mem_limit: 256m
+    networks: [observability-query-net]
+
 volumes:
   mysql-data:
   ai-checkpoints:
+  prometheus-data:
+  grafana-data:
 
 networks:
   tracemind:
+    driver: bridge
+  metrics-scrape-net:
+    driver: bridge
+  trace-ingest-net:
+    driver: bridge
+  observability-query-net:
     driver: bridge
