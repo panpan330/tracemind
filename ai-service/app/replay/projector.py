@@ -59,7 +59,8 @@ class ReplayProjector:
                 "stateBefore": state_before,
                 "stateAfter": state_after,
                 "missingParts": missing,
-                "decisionSummary": (started.decision_json or {}),
+                "decisionSummary": (started.decision_json if started
+                                    else (terminal.decision_json or {})),
                 "operationSummary": (terminal.operation_json if terminal else {}),
                 "sourceReferenceSummary": src,
                 "actualDurationMs": actual,

@@ -107,7 +107,7 @@ def _node_outcome(step_type: str, merged: dict) -> str:
     if step_type == "FIX_PROPOSED":
         return "proposal_created" if merged.get("fix_proposal") else "evaluated"
     if step_type == "REPORT_GENERATED":
-        return "reported" if merged.get("postmortem") else "failed"
+        return "reported" if (merged.get("report") or merged.get("postmortem")) else "failed"
     return "succeeded"
 
 
@@ -757,6 +757,7 @@ def _record_fix_execution(state: IncidentState, proposal: dict, approval: dict,
         pass
 
 
+@_replay_node("RECOVERY_VERIFIED")
 def verify_recovery_node(state: IncidentState) -> dict:
     """恢复验证。按根因分发:锁根因 → 目标范围六项验证(设计 V1.3 §6);
     其他 → 原有 verify_recovery 工具路径。"""

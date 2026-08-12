@@ -39,9 +39,13 @@ from app.replay.writer import ReplayWriter
 
 def _finalize_run(incident_id: int, run_id: int, status: str,
                   termination_reason: str | None = None) -> None:
-    """Run 收尾:冻结版本 + 写 RUN_TERMINATED 回放步骤。"""
+    """Run 收尾:冻结版本 + 写 RUN_TERMINATED 回放步骤。
+    只在终态写入(审批挂起/执行中等中间状态不写,避免重复终止)。"""
+    terminal = {"recovered", "failed", "needs_human", "rejected", "cancelled"}
     try:
         run_repo.freeze_run_versions(run_id, POLICY_BUNDLE_VERSION)
+        if status not in terminal:
+            return
         writer = ReplayWriter(incident_id, run_id)
         lid = f"ls-term-{run_id}"
         outcome = ("succeeded" if status == "recovered"
