@@ -633,6 +633,17 @@ def human_approval(state: IncidentState) -> dict:
     proposal = state.get("fix_proposal") or {}
     approval = state["approval"]  # propose_fix 已创建
 
+    # V1.5 回放:APPROVAL_REQUESTED(进入审批挂起)
+    run_id = state.get("run_id")
+    lid = f"ls-req-{state['incident_id']}"
+    _replay(state, "APPROVAL_REQUESTED", "completed", logical_step_id=lid,
+            state_before=_snap(state), outcome="requested",
+            decision={"actionType": proposal.get("action_type"),
+                      "riskLevel": proposal.get("risk_level")},
+            source_refs={"approval_id": approval.get("approval_id"),
+                         "fix_proposal_id": proposal.get("fix_proposal_id"),
+                         "businessKey": f"request:{state['incident_id']}"})
+
     decision = interrupt({
         "type": "approval_request",
         "approval_id": approval["approval_id"],
@@ -657,6 +668,16 @@ def execute_fix(state: IncidentState) -> dict:
     proposal = state.get("fix_proposal") or {}
     approval = state.get("approval") or {}
     state["status"] = "executing"
+    # V1.5 回放:FIX_EXECUTED started(两段式,KILL 流程 started → 抢占 → completed/failed)
+    replay_lid = f"ls-fix-{state['incident_id']}"
+    _replay(state, "FIX_EXECUTED", "started", logical_step_id=replay_lid,
+            state_before=_snap(state),
+            decision={"actionType": proposal.get("action_type"),
+                      "approvalId": approval.get("approval_id"),
+                      "fixProposalId": proposal.get("fix_proposal_id")},
+            source_refs={"approval_id": approval.get("approval_id"),
+                         "fix_proposal_id": proposal.get("fix_proposal_id"),
+                         "businessKey": f"fix:{state['incident_id']}"})
     if proposal.get("action_type") == "TERMINATE_BLOCKING_SESSION":
         from app.services import session_terminator as st
         result = st.execute(proposal, approval)
@@ -679,6 +700,15 @@ def execute_fix(state: IncidentState) -> dict:
         }
         # 审计落库:fix_execution 表(Task 9 落库;此处 stub 兼容测试)
         _record_fix_execution(state, proposal, approval, fix_status, result)
+        _replay(state, "FIX_EXECUTED",
+                "completed" if fix_status in ("succeeded", "no_op") else "failed",
+                logical_step_id=replay_lid, state_after=_snap(state),
+                outcome=fix_status,
+                operation={"actionType": proposal.get("action_type"),
+                           "killAttempted": bool(result.get("actual_processlist_id")),
+                           "actualProcesslistId": result.get("actual_processlist_id"),
+                           "executionResult": result["execution_result"]},
+                source_refs={"fix_execution_id": state["fix_execution"].get("fix_execution_id")})
         return state
     try:
         result = fix_service.execute_fix(
@@ -690,12 +720,21 @@ def execute_fix(state: IncidentState) -> dict:
         state["status"] = "failed"
         state["error"] = str(exc)
         _emit_status(state)
+        _replay(state, "FIX_EXECUTED", "failed", logical_step_id=replay_lid,
+                state_after=_snap(state), outcome="failed",
+                operation={"actionType": proposal.get("action_type"),
+                           "rejectionRule": str(exc)})
         return state
     state["fix_execution"] = {
         "fix_execution_id": result.get("fix_execution_id"),
         "status": result.get("status"),
     }
     state["status"] = "executing"
+    _replay(state, "FIX_EXECUTED", "completed", logical_step_id=replay_lid,
+            state_after=_snap(state), outcome=result.get("status", "succeeded"),
+            operation={"actionType": proposal.get("action_type"),
+                       "resultStatus": result.get("status")},
+            source_refs={"fix_execution_id": result.get("fix_execution_id")})
     return state
 
 
