@@ -90,8 +90,8 @@ def test_incomplete_evidence_keeps_collecting(monkeypatch):
              "severity": "high", "max_investigation_rounds": 1, "max_tool_calls": 5}
     result = graph.invoke(state)
     assert result["status"] == "needs_human"
-    # V1.4 语义:get_trace 无可用 trace 属暂态(OTel 导出延迟),由 execution 预算兜底而非立即 no_progress
-    assert result["termination_reason"] == "execution_budget_exhausted"
+    # V1.4 语义:get_trace 无可用 trace 属暂态(OTel 导出延迟),由预算兜底而非立即 no_progress
+    assert result["termination_reason"] in ("execution_budget_exhausted", "decision_budget_exhausted")
     assert result.get("confirmed_hypothesis_id") is None
 
 

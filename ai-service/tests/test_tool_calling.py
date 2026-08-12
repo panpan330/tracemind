@@ -84,7 +84,7 @@ def test_max_consecutive_invalid_constant():
 
 def test_budget_v13():
     assert tool_calling.MAX_DECISION_ATTEMPTS == 14
-    assert tool_calling.MAX_TOOL_EXECUTIONS == 10
+    assert tool_calling.MAX_TOOL_EXECUTIONS == 20
     assert tool_calling.MAX_LOCK_EVIDENCE_REFRESH == 1
 
 
