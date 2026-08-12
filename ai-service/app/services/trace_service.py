@@ -10,8 +10,18 @@ from app.services.trace_normalizer import TraceNormalizer
 
 
 def _resolve_incident_window(incident: dict) -> tuple[str, str]:
-    start = incident.get("observed_at") or "2026-08-12T00:00:00Z"
-    return start, "2026-08-12T00:05:00Z"  # Task 15 按 Incident 真实窗口回填
+    """按 Incident 观测窗口搜索:observed_at 起至当前时间(最多 max_trace_search_window_seconds)。"""
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+    end = now.isoformat()
+    start_iso = incident.get("observed_at") or end
+    try:
+        start_dt = datetime.datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+    except ValueError:
+        start_dt = now - datetime.timedelta(seconds=settings.max_trace_search_window_seconds)
+    if (now - start_dt).total_seconds() > settings.max_trace_search_window_seconds:
+        start_dt = now - datetime.timedelta(seconds=settings.max_trace_search_window_seconds)
+    return start_dt.isoformat(), end
 
 
 def get_trace(trace_ref: str | None, trace_id: str | None, incident: dict,

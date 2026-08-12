@@ -63,7 +63,8 @@ def _total_duration(trace: dict) -> int:
 
 def _epoch_us(iso: str) -> int:
     try:
-        dt = time.mktime(time.strptime(iso, "%Y-%m-%dT%H:%M:%S")) if "T" in iso else 0
-        return int(dt * 1_000_000)
+        import datetime
+        dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return int(dt.timestamp() * 1_000_000)
     except (ValueError, TypeError):
         return int(time.time() * 1_000_000)
