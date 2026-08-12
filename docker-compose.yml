@@ -107,9 +107,10 @@ services:
       TRACEMIND_INVENTORY_SERVICE_URL: "http://inventory-service:8082"
       TRACEMIND_DEMO_MODE: "true"
       TRACEMIND_DEMO_KEY: demo-secret-2026
-      TRACEMIND_LLM_MODE: real_strict
+      TRACEMIND_LLM_MODE: fake
       TRACEMIND_EVAL_CHAT_MODEL: qwen3.7-plus-2026-05-26
-      TRACEMIND_RAG_MODE: required
+      # 真实模型验收:LLM_MODE=real_strict + RAG_MODE=required + 启动 qdrant 服务(见 README)
+      TRACEMIND_RAG_MODE: off
       TRACEMIND_EVAL_MODE: "true"
       TRACEMIND_QDRANT_URL: "http://qdrant:6333"
       TRACEMIND_EMBEDDING_MODEL: text-embedding-v4
