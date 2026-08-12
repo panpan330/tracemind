@@ -33,8 +33,35 @@ def fixture_hash() -> str:
 def collect_metadata() -> dict:
     return {
         "git_commit": git_commit(), "git_dirty": git_dirty(),
-        "dataset_version": "v1.3.0", "fixture_hash": fixture_hash(),
-        "mcp_contract_version": "2.0.0", "diagnostic_policy_version": "1.0",
+        "dataset_version": "v1.4.0", "fixture_hash": fixture_hash(),
+        "mcp_contract_version": "2.1.0", "diagnostic_policy_version": "1.0",
         "scenario_versions": {"SCN-001": "1.0", "SCN-002": "1.0"},
-        "prompt_version": "v13", "model_sampling": {"temperature": 0.0, "top_p": 1.0},
+        "prompt_version": "v14", "model_sampling": {"temperature": 0.0, "top_p": 1.0},
+        # V1.4 观测元数据(缺失用 n/a;prometheus/jaeger 相关版本来自 observability/ 与 Dockerfile)
+        "metrics_backend": _env_or("TRACEMIND_METRICS_BACKEND", "n/a"),
+        "trace_backend": _env_or("TRACEMIND_TRACE_BACKEND", "n/a"),
+        "normalization_rule_version": "TRACE_NORMALIZER_V1",
+        "otel_java_agent_version": _agent_version(),
+        "otel_collector_version": _compose_image_version("otel-collector"),
+        "jaeger_version": _compose_image_version("jaeger"),
+        "prometheus_version": _compose_image_version("prometheus"),
+        "grafana_version": _compose_image_version("grafana"),
     }
+
+
+def _env_or(key: str, default: str) -> str:
+    import os
+    return os.environ.get(key, default)
+
+
+def _compose_image_version(service: str) -> str:
+    import re
+    text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    m = re.search(rf"^  {re.escape(service)}:\s*\n\s+image: ([\w./:-]+)", text, re.M)
+    return m.group(1) if m else "n/a"
+
+
+def _agent_version() -> str:
+    text = (ROOT / "java/order-service/Dockerfile").read_text(encoding="utf-8")
+    m = __import__("re").search(r"OTEL_JAVA_AGENT_VERSION=([\d.]+)", text)
+    return m.group(1) if m else "n/a"

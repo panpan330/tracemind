@@ -27,7 +27,17 @@ STAGES_FAST = [
       "print('RAG schema OK:', len(d), 'cases, policy frozen')"]),
 ]
 
-STAGES_FULL = STAGES_FAST + [
+STAGES_FULL = [
+    # full 档前置校验:观测后端必须真实(prometheus+jaeger),禁 fixture/内部观测回退
+    ("backend_check", ".",
+     ["python", "-c",
+      "import os; "
+      "assert os.environ.get('TRACEMIND_METRICS_BACKEND') == 'prometheus', 'full 必须 TRACEMIND_METRICS_BACKEND=prometheus'; "
+      "assert os.environ.get('TRACEMIND_TRACE_BACKEND') == 'jaeger', 'full 必须 TRACEMIND_TRACE_BACKEND=jaeger'; "
+      "assert os.environ.get('TRACEMIND_INTERNAL_OBSERVATION_ENABLED') != 'true', 'full 禁 internal observation'; "
+      "assert os.environ.get('TRACEMIND_EVAL_MODE') != 'true', 'full 禁 eval mode'; "
+      "print('backend OK: prometheus+jaeger, internal/eval disabled')"]),
+] + STAGES_FAST + [
     ("preflight", ".", ["python", "scripts/check_external_deps.py"]),
     ("smoke_llm", ".", ["python", "scripts/smoke_llm.py"]),
     ("eval_agent_real", "ai-service",
