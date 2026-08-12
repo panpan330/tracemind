@@ -208,7 +208,12 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     # 工具成功但无证据(或执行失败):不记录到 tool_calls_record(允许后续重采),
     # 连续无进展达阈值才转人工
     noop = (state.get("consecutive_no_progress_count") or 0) + 1
-    if noop >= MAX_CONSECUTIVE_NO_PROGRESS and name != "get_service_metrics":
+    # get_trace 无可用 trace(OTel batch 导出延迟/锁超时 trace 未完成)是暂态:
+    # 轮间等待导出后重采(execution 预算兜底),不累计 no_progress
+    if name == "get_trace":
+        noop = 0
+        _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
+    elif noop >= MAX_CONSECUTIVE_NO_PROGRESS and name != "get_service_metrics":
         return {**out, "status": "needs_human", "termination_reason": "no_progress",
                 "consecutive_no_progress_count": noop}
     # get_service_metrics 空窗口是暂态(注入清空观测后负载尚未进入窗口):
