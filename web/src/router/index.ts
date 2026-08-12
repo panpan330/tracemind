@@ -6,6 +6,12 @@ const router = createRouter({
     { path: '/', name: 'scenario', component: () => import('@/views/ScenarioView.vue') },
     { path: '/incidents/:id', name: 'incident-detail', component: () => import('@/views/IncidentDetailView.vue') },
     { path: '/incidents/:id/report', name: 'incident-report', component: () => import('@/views/ReportView.vue') },
+    { path: '/replay', name: 'replay', component: () => import('@/views/ReplayView.vue'),
+      props: (route: { query: { incidentId?: string; runId?: string; position?: string } }) => ({
+        incidentId: route.query.incidentId ? Number(route.query.incidentId) : undefined,
+        runId: route.query.runId ? Number(route.query.runId) : undefined,
+        position: route.query.position ? Number(route.query.position) : 0,
+      }) },
   ],
 })
 

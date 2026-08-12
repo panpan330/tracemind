@@ -83,3 +83,48 @@ export interface CreateIncidentInput {
   service_ref: string
   observed_at?: string
 }
+
+// ---- V1.5 回放 ----
+export type ReplayStepState = 'completed' | 'incomplete' | 'failed' | 'started'
+
+export interface ReplayStep {
+  stepIndex: number
+  logicalStepId: string
+  sourceSequenceNos: number[]
+  stepState: ReplayStepState
+  stepOutcome: string | null
+  stepType: string
+  stepTitle: string | null
+  stateBefore: Record<string, unknown> | null
+  stateAfter: Record<string, unknown> | null
+  missingParts: string[]
+  decisionSummary: Record<string, unknown>
+  operationSummary: Record<string, unknown>
+  sourceReferenceSummary: Record<string, unknown>
+  actualDurationMs: number
+  displayDurationMs: number
+}
+
+export interface ReplayRunManifest {
+  agentRunId: number
+  replayStatus: 'complete' | 'partial' | 'partial_legacy' | 'in_progress' | 'unsupported' | 'unavailable'
+  runStatus: string
+  runOutcome: string | null
+  terminationReason: string | null
+  asOfSequenceNo: number
+  totalSteps: number | null
+  keyStepIndexes: Record<string, number> | null
+}
+
+export interface IncidentReplayManifest {
+  incidentId: number
+  runs: Array<{ agentRunId: number; status: string; finishedAt: string | null }>
+  defaultRunId: number | null
+}
+
+export interface ReplayStepsResponse {
+  replayStatus: string
+  totalSteps: number
+  keyStepIndexes: Record<string, number> | null
+  steps: ReplayStep[]
+}

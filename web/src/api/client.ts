@@ -1,4 +1,4 @@
-import type { CreateIncidentInput, IncidentDetail, IncidentListItem, ScenarioStatus } from './types'
+import type { CreateIncidentInput, IncidentDetail, IncidentListItem, IncidentReplayManifest, ReplayRunManifest, ReplayStepsResponse, ScenarioStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(url, {
@@ -49,4 +49,23 @@ export function resetScenario(scenario = 'SCN-001'): Promise<unknown> {
 
 export function getScenarioStatus(scenario = 'SCN-001'): Promise<ScenarioStatus> {
   return request(`/api/demo/scenarios/${scenario}/status`)
+}
+
+// ---- V1.5 回放(只读) ----
+export function fetchIncidentReplay(incidentId: number): Promise<IncidentReplayManifest> {
+  return request(`/api/incidents/${incidentId}/replay`)
+}
+
+export function fetchRunManifest(incidentId: number, runId: number): Promise<ReplayRunManifest> {
+  return request(`/api/incidents/${incidentId}/replay/runs/${runId}`)
+}
+
+export function fetchReplaySteps(incidentId: number, runId: number): Promise<ReplayStepsResponse> {
+  return request(`/api/incidents/${incidentId}/replay/runs/${runId}/steps`)
+}
+
+export function fetchReplayStepDetail(
+  incidentId: number, runId: number, logicalStepId: string,
+): Promise<Record<string, unknown>> {
+  return request(`/api/incidents/${incidentId}/replay/runs/${runId}/steps/${encodeURIComponent(logicalStepId)}`)
 }
