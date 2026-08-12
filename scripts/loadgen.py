@@ -11,6 +11,8 @@ import urllib.request
 ORDER_URL = os.environ.get("ORDER_SERVICE_URL", "http://localhost:8081")
 DURATION_SECONDS = int(os.environ.get("LOAD_DURATION_SECONDS", "60"))
 QPS = int(os.environ.get("LOAD_QPS", "20"))
+MAX_IN_FLIGHT = int(os.environ.get("LOAD_MAX_IN_FLIGHT", "1"))   # SCN-002 并发约束(信号量)
+TIMEOUT_SECONDS = float(os.environ.get("LOAD_TIMEOUT_SECONDS", "8"))
 
 
 def call() -> None:
@@ -24,7 +26,7 @@ def call() -> None:
         f"{ORDER_URL}/api/orders/1/check-stock",
         data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
-        urllib.request.urlopen(req, timeout=8).read()   # 锁等待时请求阻塞,8s 超时视为故障流量
+        urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS).read()
     except Exception:
         pass   # 超时/连接错误是锁故障的预期表现(计入错误率),不中断负载
 

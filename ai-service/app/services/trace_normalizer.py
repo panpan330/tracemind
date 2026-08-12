@@ -1,4 +1,5 @@
-"""TraceNormalizer(TRACE_NORMALIZER_V1):Jaeger span → Agent 稳定证据结构。"""
+"""TraceNormalizer(TRACE_NORMALIZER_V1):Jaeger span → Agent 稳定证据结构。
+兼容 Jaeger HTTP JSON API 格式(spanID/parentSpanID/tags 数组)与 Fixture 格式。"""
 import datetime
 
 NORMALIZER_VERSION = "TRACE_NORMALIZER_V1"
@@ -8,16 +9,30 @@ ERROR_TRACE_INCOMPLETE = "TRACE_INCOMPLETE"
 _SEMCONV_LEGACY_MAP = {"db.system.name": "db.system", "db.operation.name": "db.operation"}
 
 
-def _attr(tags: dict, key: str):
+def _attr(tags: dict | list, key: str):
+    """兼容 dict 与 Jaeger tags 数组([{"key": ..., "value": ...}])。"""
+    if isinstance(tags, list):
+        for t in tags:
+            if t.get("key") == key:
+                return t.get("value")
+        return None
     if key in tags:
         return tags[key]
     return tags.get(_SEMCONV_LEGACY_MAP.get(key))
 
 
+def _f(span: dict, *names):
+    """字段访问:兼容 Jaeger camelCase(spanID/parentSpanID)与 snake_case。"""
+    for n in names:
+        if n in span and span[n] is not None:
+            return span[n]
+    return None
+
+
 class TraceNormalizer:
     def normalize(self, trace: dict, operation_ref: str) -> dict:
         spans = trace.get("spans") or []
-        by_id = {s.get("spanId"): s for s in spans}
+        by_id = {(_f(s, "spanId", "spanID")): s for s in spans}
         servers = [s for s in spans
                    if s.get("kind") == "SPAN_KIND_SERVER"
                    and s.get("process", {}).get("serviceName") == "inventory-service"
@@ -49,7 +64,7 @@ class TraceNormalizer:
             "inventoryServerDurationMs": round(server_ms),
             "targetDbDurationMs": round(db_ms),
             "dbDominanceRatio": round(ratio, 2),
-            "targetDbSpanId": target.get("spanId"),
+            "targetDbSpanId": _f(target, "spanId", "spanID"),
             "traceId": trace.get("traceID"),
             "traceStart": _iso(start_us),
             "traceEnd": _iso(start_us + (server.get("duration", 0) or 0)),
@@ -58,15 +73,16 @@ class TraceNormalizer:
 
     @staticmethod
     def _is_descendant(span, ancestor, by_id):
-        cur = span.get("parentSpanId")
+        cur = _f(span, "parentSpanId", "parentSpanID")
+        anc_id = _f(ancestor, "spanId", "spanID")
         seen = 0
         while cur and seen < 100:
-            if cur == ancestor.get("spanId"):
+            if cur == anc_id:
                 return True
             parent = by_id.get(cur)
             if not parent:
                 return False
-            cur = parent.get("parentSpanId")
+            cur = _f(parent, "parentSpanId", "parentSpanID")
             seen += 1
         return False
 
