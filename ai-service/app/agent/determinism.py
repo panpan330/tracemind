@@ -35,18 +35,18 @@ class DeterministicEvidencePlanner:
         for key in EVIDENCE_ORDER:
             if key in collected:
                 continue
-            if key == "e2" and not trace_id:
-                # 无 trace_id:回退到 metrics 重新取代表性 trace
-                if "get_service_metrics" in eligible_tools:
-                    return [{"id": "de1", "name": "get_service_metrics",
-                             "arguments": self._arguments_for("e1", "get_service_metrics", state)}]
-                continue
+            if key == "e2":
+                # V1.4:get_trace 由异常时间窗口驱动(eligible 已含);参数用抽象 trace_ref 或可信 trace_id
+                if "get_trace" not in eligible_tools:
+                    continue
+                args = {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}
+                if trace_id:
+                    args = {"trace_id": trace_id}
+                return [{"id": "de2", "name": "get_trace", "arguments": args}]
             tool = EVIDENCE_TOOL[key]
             if tool not in eligible_tools:
                 continue
             args = self._arguments_for(key, tool, state)
-            if key == "e2":
-                args["trace_id"] = trace_id
             return [{"id": f"d{key}", "name": tool, "arguments": args}]
         # 锁链(L1→L2):索引链已齐或证据不足时补锁证据
         for key in LOCK_EVIDENCE_ORDER:
@@ -77,8 +77,7 @@ class DeterministicEvidencePlanner:
             return state["trigger_trace_id"]
         for ev in state.get("evidence") or []:
             content = ev.get("content") or {}
-            tid = (content.get("representative_slow_trace_id")
-                   or content.get("representativeTraceId")
+            tid = (content.get("traceId") or content.get("trace_id")
                    or content.get("representativeSlowTraceId"))
             if tid:
                 return tid
@@ -90,7 +89,7 @@ class DeterministicEvidencePlanner:
             return {"service_ref": state.get("service_ref", "inventory-service"),
                     "window_seconds": 300}
         if tool == "get_trace":
-            return {"trace_id": ""}
+            return {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}
         if tool == "get_lock_waiters":
             return {"scope_ref": "INVENTORY_RESERVATION"}
         if tool == "get_transaction_details":

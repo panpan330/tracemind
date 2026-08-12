@@ -35,7 +35,10 @@ def compute_eligible_tools(state: dict) -> set[str]:
         eligible.add("get_service_metrics")
     if not satisfied("e2"):
         content = (evidence.get("e1") or {}).get("content") or {}
-        if content.get("representativeSlowTraceId"):
+        # V1.4:metrics 证据含有效异常时间窗口 + Incident 可解析 service/operation 才放行
+        has_window = bool(content.get("windowStart") and content.get("windowEnd"))
+        has_ctx = bool(state.get("affected_service_ref") and state.get("affected_operation_ref"))
+        if has_window and has_ctx:
             eligible.add("get_trace")
     if not satisfied("e3"):
         eligible.add("list_expensive_query_digests")
@@ -92,11 +95,17 @@ def resolve_arguments(name: str, raw_args: dict, state: dict) -> dict:
         return {"service_ref": state.get("service_ref", "inventory-service"),
                 "window_seconds": raw_args.get("window_seconds", 300)}
     if name == "get_trace":
-        content = (evidence.get("e1") or {}).get("content") or {}
-        trace_id = content.get("representativeSlowTraceId")
-        if not trace_id:
-            raise ArgumentResolutionError("无代表性 trace_id,无法调用 get_trace")
-        return {"trace_id": trace_id}
+        # V1.4 三层参数:模型只传抽象 trace_ref 或可信 trace_id;程序解析为搜索参数
+        raw_trace_id = (raw_args or {}).get("trace_id")
+        if raw_trace_id:
+            return {"trace_id": raw_trace_id}
+        return {
+            "service_ref": state.get("affected_service_ref") or state.get("service_ref"),
+            "operation_ref": state.get("affected_operation_ref") or "INVENTORY_LOOKUP",
+            "window_start": state.get("observed_at") or "2026-08-12T00:00:00Z",
+            "window_end": "2026-08-12T00:05:00Z",
+            "strategy": "SLOWEST",
+        }
     if name == "list_expensive_query_digests":
         return {"window_seconds": raw_args.get("window_seconds", 300)}
     if name == "get_query_plan":

@@ -33,12 +33,6 @@ def test_eligible_all_missing():
                      "get_index_info", "get_lock_waiters"}
 
 
-def test_eligible_with_trace_id_adds_trace():
-    state = base_state(evidence_gate={"e1": True})
-    state["evidence"] = [{"key": "e1", "content": {"representativeSlowTraceId": "t1"}}]
-    tools = compute_eligible_tools(state)
-    assert "get_trace" in tools
-
 
 def test_eligible_with_query_ref_adds_plan():
     state = base_state(evidence_gate={"e1": True, "e3": True})
@@ -72,16 +66,6 @@ def test_resolve_metrics_service_from_state():
     assert args["service_ref"] == "inventory-service"
 
 
-def test_resolve_trace_from_evidence():
-    state = base_state()
-    state["evidence"] = [{"key": "e1", "content": {"representativeSlowTraceId": "t1"}}]
-    args = resolve_arguments("get_trace", {"trace_ref": "representative_slow_trace"}, state)
-    assert args["trace_id"] == "t1"
-
-
-def test_resolve_trace_without_evidence_raises():
-    with pytest.raises(Exception):
-        resolve_arguments("get_trace", {"trace_ref": "representative_slow_trace"}, base_state())
 
 
 def test_duplicate_guard_blocks_same_key():
@@ -131,3 +115,36 @@ def test_resolve_lock_tools_parameters():
                                            {"transaction_ref": "OBSERVED_BLOCKER"}, state)
     # 受控引用:程序从有效 l1 证据解析 blocker_ref(非 LLM 编造)
     assert args2["transaction_ref"] == "blk_1"
+
+
+def test_get_trace_eligible_with_metrics_window():
+    state = {"incident_id": 1,
+             "affected_service_ref": "inventory-service",
+             "affected_operation_ref": "INVENTORY_LOOKUP",
+             "evidence_gate": {"E1": True},
+             "evidence": [{"key": "e1", "content": {"windowStart": "a", "windowEnd": "b"}}]}
+    eligible = tool_calling.compute_eligible_tools(state)
+    assert "get_trace" in eligible
+
+
+def test_get_trace_not_eligible_without_window():
+    state = {"incident_id": 1, "evidence_gate": {}, "evidence": []}
+    eligible = tool_calling.compute_eligible_tools(state)
+    assert "get_trace" not in eligible
+
+
+def test_resolve_get_trace_trace_ref():
+    state = {"incident_id": 1, "affected_service_ref": "inventory-service",
+             "affected_operation_ref": "INVENTORY_RESERVATION",
+             "observed_at": "2026-08-12T00:00:00Z"}
+    out = tool_calling.resolve_arguments("get_trace", {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}, state)
+    assert out["service_ref"] == "inventory-service"
+    assert out["operation_ref"] == "INVENTORY_RESERVATION"
+    assert out["strategy"] == "SLOWEST"
+
+
+def test_resolve_get_trace_trace_id_priority():
+    state = {"incident_id": 1, "affected_service_ref": "inventory-service",
+             "affected_operation_ref": "INVENTORY_RESERVATION"}
+    out = tool_calling.resolve_arguments("get_trace", {"trace_id": "abc123"}, state)
+    assert out["trace_id"] == "abc123"
