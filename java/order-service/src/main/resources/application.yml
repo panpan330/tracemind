@@ -8,7 +8,20 @@ spring:
     username: ${BUSINESS_DB_USER:app_business}
     password: ${BUSINESS_DB_PASSWORD:app_business_pwd}
 management:
+  server:
+    port: ${ORDER_MANAGEMENT_PORT:9081}
   endpoints:
     web:
       exposure:
-        include: health,metrics
+        include: health,prometheus
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      service: order-service
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        http.server.requests: 10ms,50ms,100ms,250ms,500ms,1s,2s,5s,10s
