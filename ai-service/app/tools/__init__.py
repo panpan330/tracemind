@@ -12,16 +12,17 @@ from app.tools.schemas import (ExecuteFixIn, GetIndexInfoIn, GetLockWaitersIn,
 
 
 def _get_metrics(service_ref: str, window_start: str | None = None,
-                 window_end: str | None = None, **kw) -> dict:
+                 window_end: str | None = None, incident_id: int | None = None, **kw) -> dict:
     """V1.4 指标门面:显式窗口优先;兼容 window_seconds 回退。"""
     if window_start and window_end:
-        return metrics_service.get_metrics(service_ref, window_start, window_end)
+        return metrics_service.get_metrics(service_ref, window_start, window_end,
+                                           incident_id=incident_id or 0)
     # 回退:以当前时间向前推 window_seconds
     import datetime
     end = datetime.datetime.now(datetime.timezone.utc).isoformat()
     start = (datetime.datetime.now(datetime.timezone.utc)
              - datetime.timedelta(seconds=kw.get("window_seconds") or 300)).isoformat()
-    return metrics_service.get_metrics(service_ref, start, end)
+    return metrics_service.get_metrics(service_ref, start, end, incident_id=incident_id or 0)
 
 
 def _get_trace(trace_ref: str | None = None, trace_id: str | None = None,
@@ -34,7 +35,8 @@ def _get_trace(trace_ref: str | None = None, trace_id: str | None = None,
                     "affected_service_ref": incident.affected_service_ref,
                     "affected_operation_ref": incident.affected_operation_ref,
                     "observed_at": str(incident.created_at)}
-    return trace_service.get_trace(trace_ref, trace_id, inc_dict)
+    return trace_service.get_trace(trace_ref, trace_id, inc_dict,
+                                   incident_id=incident_id or 0)
 
 
 def _get_lock_waiters(scope_ref: str) -> dict:

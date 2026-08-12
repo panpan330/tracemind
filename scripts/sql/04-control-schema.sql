@@ -235,3 +235,25 @@ WHERE NOT EXISTS (SELECT 1 FROM fix_definition WHERE action_name = 'CREATE_INVEN
 INSERT INTO fix_definition (action_name, risk_level, description)
 SELECT 'TERMINATE_BLOCKING_SESSION', 'high', '终止持有库存目标记录排他锁的阻塞会话'
 WHERE NOT EXISTS (SELECT 1 FROM fix_definition WHERE action_name = 'TERMINATE_BLOCKING_SESSION');
+
+-- V1.4 观测审计表(不存原始 Prometheus/Jaeger 响应,只存归一化结果)
+CREATE TABLE IF NOT EXISTS observation_query (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    incident_id BIGINT NULL,
+    agent_run_id BIGINT NULL,
+    observation_query_id VARCHAR(64) NOT NULL,
+    backend VARCHAR(16) NOT NULL,
+    query_template_id VARCHAR(64) NULL,
+    normalized_params_json JSON NULL,
+    window_start VARCHAR(40) NULL,
+    window_end VARCHAR(40) NULL,
+    status VARCHAR(16) NOT NULL,
+    error_code VARCHAR(48) NULL,
+    duration_ms INT NULL,
+    result_hash VARCHAR(64) NULL,
+    trace_id VARCHAR(64) NULL,
+    normalized_result_json JSON NULL,
+    queried_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    INDEX idx_incident (incident_id),
+    INDEX idx_obs_id (observation_query_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

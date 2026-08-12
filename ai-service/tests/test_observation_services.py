@@ -59,3 +59,19 @@ def test_trace_jaeger_backend_maps_ref(monkeypatch):
     assert calls["op"] == "INVENTORY_RESERVATION"
     assert calls["strat"] == "SLOWEST"
     assert out["sourceBackend"] == "jaeger" and out["traceId"] == "t1"
+
+
+def test_metrics_records_audit_without_raw(monkeypatch):
+    records = []
+
+    def fake_record(**kw):
+        records.append(kw)
+        assert "normalized_result" in kw  # 仅归一化结果,不含原始响应
+
+    monkeypatch.setattr("app.services.metrics_service.observation_repo.record_query", fake_record)
+    monkeypatch.setattr("app.config.settings.metrics_backend", "fixture")
+    out = metrics_service.get_metrics("inventory-service", "a", "b",
+                                      incident_id=7, agent_run_id=8)
+    assert records and records[0]["incident_id"] == 7
+    assert records[0]["backend"] == "fixture"
+    assert out["p95Ms"] == 2

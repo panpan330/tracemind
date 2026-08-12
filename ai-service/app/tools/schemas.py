@@ -24,6 +24,7 @@ QUERY_REF_WHITELIST = {"INVENTORY_LOOKUP"}
 
 
 class GetServiceMetricsIn(BaseModel):
+    incident_id: int | None = Field(default=None, gt=0)  # 审计上下文注入
     service_ref: str = Field(pattern="^(order-service|inventory-service)$")
     window_seconds: int = Field(ge=10, le=3600)  # 兼容参数
     window_start: str | None = None   # V1.4:显式观测窗口(程序注入)
