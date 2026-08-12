@@ -54,6 +54,30 @@ def _replay(state: dict, step_type: str, phase: str, *, logical_step_id: str,
         logging.getLogger("replay").warning("replay step 写入失败: %s", e)
 
 
+def _tool_call_info_from(state: dict, name: str) -> tuple[str | None, int | None]:
+    """查 tool_call 审计取最近一次该工具的 transport 与 id(回放溯源)。"""
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from app.db.engine import get_control_engine
+    from app.db.models import ToolCall
+    try:
+        with Session(get_control_engine()) as s:
+            rows = list(s.scalars(select(ToolCall).where(
+                ToolCall.incident_id == state.get("incident_id"),
+                ToolCall.tool_name == name).order_by(ToolCall.id.desc()).limit(1)).all())
+        if rows:
+            return rows[0].transport, rows[0].id
+    except Exception:
+        pass
+    return None, None
+
+
+def _decision_summary(name: str, state: dict) -> str:
+    """结构化决策摘要(可审计的外部依据,非思维链)。"""
+    gate = {k: v for k, v in (state.get("evidence_gate") or {}).items() if v}
+    return (f"选择 {name} 补充缺失证据;当前已满足: {sorted(gate) or '无'}")
+
+
 def _replay_node(step_type: str):
     """节点级回放包裹:进入捕获 before,返回捕获 after(before/after 快照由 _snap 生成)。"""
     import functools
@@ -248,9 +272,19 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
         return {**out, "status": "needs_human", "termination_reason": "execution_budget_exhausted",
                 "tool_execution_count": exec_count}
 
+    # V1.5 回放:EVIDENCE_COLLECTION started(每轮一个逻辑步骤)
+    replay_lid = f"ls-ev-{state.get('run_id') or state['incident_id']}-r{decision}"
+    _replay(state, "EVIDENCE_COLLECTION", "started", logical_step_id=replay_lid,
+            round_no=decision, state_before=_snap(state),
+            decision={"eligibleTools": sorted(eligible), "selectedTool": name,
+                      "decisionSummary": _decision_summary(name, state),
+                      "validationResult": "accepted"},
+            source_refs={"businessKey": f"evidence:{state['incident_id']}:{decision}"})
+    _replay_state_before = _snap(state)
     result = tools(state, name, resolved)
     out["tool_execution_count"] = exec_count
     record = {"tool_name": name, "arguments": resolved}
+    _last_tool_transport, _last_tool_call_id = _tool_call_info_from(state, name)
     if result.get("ok") and result.get("evidence"):
         new_evidence = result["evidence"]
         new_gate = dict(gate)
@@ -272,6 +306,15 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
         new_policy = policies_mod.evaluate_policies(new_facts)
         out["facts"] = new_facts
         out["policy"] = new_policy
+        transport, tool_call_id = _tool_call_info_from(state, name)
+        _replay(state, "EVIDENCE_COLLECTION", "completed", logical_step_id=replay_lid,
+                round_no=decision, state_after=_snap({**state, **out}),
+                outcome="succeeded",
+                operation={"toolName": name, "resolvedParameters": resolved,
+                           "transport": transport or "unknown",
+                           "resultStatus": "success"},
+                source_refs={"toolCallId": tool_call_id,
+                             "evidenceIds": [e.get("id") for e in new_evidence]})
         return {**out, "evidence": new_evidence, "evidence_gate": new_gate,
                 "tool_calls_record": [record], "consecutive_no_progress_count": 0}
 
@@ -291,6 +334,15 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     if name == "get_service_metrics":
         noop = 0
         _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
+    transport, tool_call_id = _tool_call_info_from(state, name)
+    _replay(state, "EVIDENCE_COLLECTION", "completed", logical_step_id=replay_lid,
+            round_no=decision, state_after=_snap({**state, **out}),
+            outcome="no_progress" if noop > 0 else "succeeded",
+            operation={"toolName": name, "resolvedParameters": resolved,
+                       "transport": transport or "unknown",
+                       "resultStatus": "success" if result.get("ok") else "error"},
+            source_refs={"toolCallId": tool_call_id,
+                         "evidenceIds": [e.get("id") for e in (result.get("evidence") or [])]})
     return {**out, "consecutive_no_progress_count": noop}
 
 
