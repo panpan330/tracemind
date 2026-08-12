@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     trace_search_retry_interval_seconds: int = 2
     trace_search_max_attempts: int = 5
     max_trace_search_window_seconds: int = 600
-    max_trace_candidates: int = 20
+    max_trace_candidates: int = 50
     internal_observation_enabled: bool = False
 
     @property
