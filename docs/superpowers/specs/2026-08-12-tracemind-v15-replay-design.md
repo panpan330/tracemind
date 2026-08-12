@@ -139,8 +139,10 @@ Run 结束后执行一次 Replay 完整性检查,API 读取时做轻量校验。
 
 ```json
 { "stepIndex": 3, "logicalStepId": "step_xxx", "sourceSequenceNos": [10, 11],
-  "stepStatus": "completed", "stepOutcome": "succeeded" }
+  "stepState": "completed", "stepOutcome": "succeeded" }
 ```
+
+**三层状态语义(避免歧义)**:`phase`(DB 记录生命周期 started/completed/failed)→ `stepState`(Projector 聚合后的 UI 状态 completed/incomplete/started)→ `stepOutcome`(业务结果 succeeded/rejected/expired/needs_human/already_resolved/target_changed)。
 
 - `stepIndex` = 投影后的 UI 步骤下标(非数据库 sequence_no);API 的 `{step_index}` 均指投影下标。
 - **播放时长计算**:`actualDurationMs` 是历史事实(持久化);`displayDurationMs` 是播放策略(不落库),由 Projector 按 `step_type + actualDurationMs + playbackPolicyVersion` 计算;API 返回两者。
