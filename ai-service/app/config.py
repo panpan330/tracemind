@@ -61,6 +61,19 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_provider: str = "bailian"
 
+    # ---- V1.4 可观测性 ----
+    metrics_backend: str = "fixture"              # prometheus | fixture
+    trace_backend: str = "fixture"                # jaeger | fixture
+    prometheus_url: str = "http://localhost:9090"
+    jaeger_query_endpoint: str = "localhost:16685"  # gRPC QueryService
+    metrics_max_age_seconds: int = 120
+    trace_export_wait_timeout_seconds: int = 30
+    trace_search_retry_interval_seconds: int = 2
+    trace_search_max_attempts: int = 5
+    max_trace_search_window_seconds: int = 600
+    max_trace_candidates: int = 20
+    internal_observation_enabled: bool = False
+
     @property
     def chat_base_url_resolved(self) -> str:
         return self.chat_base_url or self.llm_base_url

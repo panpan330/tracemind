@@ -47,3 +47,19 @@ def test_mcp_config_defaults():
     s = Settings(_env_file=None)
     assert s.mcp_timeout_seconds == 15.0
     assert s.mcp_max_restart == 1
+
+
+def test_observability_defaults():
+    from app.config import Settings
+    s = Settings()
+    assert s.metrics_backend == "fixture"
+    assert s.trace_backend == "fixture"
+    assert s.prometheus_url == "http://localhost:9090"
+    assert s.jaeger_query_endpoint == "localhost:16685"
+    assert s.metrics_max_age_seconds == 120
+    assert s.trace_export_wait_timeout_seconds == 30
+    assert s.trace_search_retry_interval_seconds == 2
+    assert s.trace_search_max_attempts == 5
+    assert s.max_trace_search_window_seconds == 600
+    assert s.max_trace_candidates == 20
+    assert s.internal_observation_enabled is False
