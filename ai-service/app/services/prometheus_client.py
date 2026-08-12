@@ -55,14 +55,19 @@ class PrometheusMetricsClient:
                   "extra": "", "window": window}
         p95_rows = self.query("HTTP_SERVER_P95_V1", labels, 300)
         qps_rows = self.query("HTTP_SERVER_QPS_V1", labels, 300)
-        err_rows = self.query("HTTP_SERVER_ERROR_RATE_V1", labels, 300)
+        try:
+            err_rows = self.query("HTTP_SERVER_ERROR_RATE_V1", labels, 300)
+        except ValueError as e:
+            if str(e) != ERROR_METRICS_NOT_FOUND:
+                raise
+            err_rows = []  # 无 5xx 请求 → 错误率视为 0(空集合法)
         latest = self._latest_sample_time(p95_rows)
         if evaluated_at - latest > settings.metrics_max_age_seconds:
             raise ValueError(ERROR_METRICS_STALE)
         try:
             p95 = float(p95_rows[0].get("value", [0, 0])[1]) * 1000.0
             qps = float(qps_rows[0].get("value", [0, 0])[1])
-            err = float(err_rows[0].get("value", [0, 0])[1])
+            err = float(err_rows[0].get("value", [0, 0])[1]) if err_rows else 0.0
         except (IndexError, TypeError, ValueError) as e:
             raise ValueError(ERROR_METRICS_RESULT_INVALID) from e
         return {
