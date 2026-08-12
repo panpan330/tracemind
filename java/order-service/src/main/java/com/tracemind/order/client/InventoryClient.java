@@ -1,7 +1,7 @@
 package com.tracemind.order.client;
 
 import com.tracemind.common.obs.ObservationStore;
-import com.tracemind.common.trace.TraceIdFilter;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -28,10 +28,10 @@ public class InventoryClient {
     public Map<String, Object> queryStock(long skuId, long warehouseId) {
         long start = System.nanoTime();
         try {
+            // V1.4:跨服务 trace 传播完全交给 OTel Java Agent(traceparent),不再手动注入 x-trace-id
             return restClient.get()
                     .uri(uriBuilder -> uriBuilder.path("/api/inventory")
                             .queryParam("skuId", skuId).queryParam("warehouseId", warehouseId).build())
-                    .header(TraceIdFilter.TRACE_ID_HEADER, MDC.get("traceId"))
                     .retrieve()
                     .body(Map.class);
         } catch (org.springframework.web.client.RestClientResponseException e) {

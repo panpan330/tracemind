@@ -3,6 +3,7 @@ package com.tracemind.inventory.service;
 import com.tracemind.common.obs.ObservationStore;
 import com.tracemind.inventory.entity.Inventory;
 import com.tracemind.inventory.mapper.InventoryMapper;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +19,7 @@ public class InventoryService {
         this.observationStore = observationStore;
     }
 
+    @WithSpan("inventory.lookup")
     public Optional<Inventory> queryStock(long skuId, long warehouseId) {
         long start = System.nanoTime();
         try {

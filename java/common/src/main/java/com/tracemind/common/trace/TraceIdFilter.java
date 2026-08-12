@@ -1,5 +1,7 @@
 package com.tracemind.common.trace;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,9 +23,14 @@ public class TraceIdFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        // V1.4:统一 OTel Trace ID = 系统唯一 Trace ID;x-trace-id 取自当前 SpanContext
+        // (无 OTel Agent 的本地/测试环境回退到 UUID,保证响应头始终存在)
         String traceId = request.getHeader(TRACE_ID_HEADER);
-        if (traceId == null || traceId.isBlank()) {
-            traceId = UUID.randomUUID().toString();
+        SpanContext sc = Span.current().getSpanContext();
+        if (sc.isValid()) {
+            traceId = sc.getTraceId();
+        } else if (traceId == null || traceId.isBlank()) {
+            traceId = UUID.randomUUID().toString().replace("-", "");
         }
         MDC.put("traceId", traceId);
         response.setHeader(TRACE_ID_HEADER, traceId);
