@@ -70,7 +70,8 @@ def test_budget_exhausted_sets_needs_human():
 
 
 def test_noop_two_rounds_sets_needs_human():
-    state = base_state(consecutive_no_progress_count=1)
+    # V1.4:无进展阈值 2→4(给观测 trace 导出留重试窗口)
+    state = base_state(consecutive_no_progress_count=3)
     out = collect_evidence(state, llm=StubLLM([[]]), tools=StubTools([]))
     assert out.get("status") == "needs_human"
 

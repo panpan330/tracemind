@@ -55,6 +55,9 @@ def run_round(scenario: str, round_no: int) -> None:
     r.raise_for_status()
     incident_id = r.json()["id"]
     requests.post(f"{base}/api/demo/scenarios/{scenario}/inject", headers=HEADERS, timeout=10)
+    # 先启动调查(此时采集 digest 基线 = 健康状态,保证 E3 增量),再打故障负载
+    rr = requests.post(f"{base}/api/incidents/{incident_id}/investigations", timeout=10)
+    rr.raise_for_status()
     procs = []
     if scenario == "SCN-002":
         # 持续锁负载:UPDATE 42/7(等待锁)+ loadgen(超时流量),调查期间保持
@@ -78,9 +81,7 @@ def run_round(scenario: str, round_no: int) -> None:
         time.sleep(3)  # 让锁等待/超时流量产生
     else:
         load(8, 15, sku=42, wh=7, max_in_flight=1, timeout=6.0)
-    time.sleep(6)  # 等 OTel batch + Jaeger 完成 trace 导出(collector batch 5s 延迟)
-    rr = requests.post(f"{base}/api/incidents/{incident_id}/investigations", timeout=10)
-    rr.raise_for_status()
+    time.sleep(14)  # 等 OTel batch(5s)+ Jaeger 完成 trace 导出;调查第 2 轮 get_trace 时已有完整 trace
     # fixture 冒烟:metrics 恒健康;锁等待时序不稳定(本地 UPDATE/loadgen 子进程)
     # → 流程到达终态即可,根因/证据断言在 VM 非 fixture 模式严格验证
     targets = {"awaiting_approval", "needs_human"} if args.fixture else {"awaiting_approval"}
