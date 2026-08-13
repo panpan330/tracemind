@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "note": "第一版基线=实测值(向下取两位小数)。防下调:新阈值不得低于目标分支(见 scripts/ci/check_coverage.py)。java 为单测覆盖率(业务代码量小,聚合 line 高因 contextLoads 为主)。web branch 由 vitest coverage-v8 计算。",
+  "python": { "line": 78.51, "branch": 0.0 },
+  "java": { "line": 100.0, "branch": 0.0 },
+  "web": { "line": 82.25, "branch": 71.74 }
+}
