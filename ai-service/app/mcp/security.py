@@ -14,11 +14,16 @@ def fingerprint(token: str) -> str:
 
 
 def load_clients(file_path: Optional[str]) -> dict:
-    """Token Fingerprint → {subject, audience, scopes}。"""
+    """Token Fingerprint → {subject, audience, scopes}。文件缺失返回空(认证将拒绝所有请求)。"""
     if not file_path:
         return {}
-    with open(file_path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        import logging
+        logging.getLogger(__name__).warning("mcp_clients 文件不存在: %s", file_path)
+        return {}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

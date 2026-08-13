@@ -47,7 +47,8 @@ def create_http_app() -> Starlette:
     # 组合:health 路由 + 安全中间件链(认证/限流/Origin 由 security.py 提供)
     from app.mcp.security import build_security_middleware
     routes = [Route("/health/live", health_live), Route("/health/ready", health_ready)]
-    app = Starlette(routes=routes, middleware=build_security_middleware())
+    app = Starlette(routes=routes,
+                    middleware=build_security_middleware(clients_file=s.mcp_auth_clients_file))
     # 挂载 /mcp(Streamable HTTP 核心)于同一 ASGI 应用
     app.mount("/mcp", core)
     return app
