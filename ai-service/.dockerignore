@@ -3,7 +3,10 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.egg-info/
-data/
-tests/
+# 运行时生成物(排除)
+data/checkpoints.sqlite*
+data/.eval_fixtures/
+# 本地环境(排除)
 .env.local
 .env
+# 注意:不排除 tests/ 与 data/eval_cases/(ci target 需要,由 Dockerfile COPY 决定)
