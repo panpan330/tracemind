@@ -1,18 +1,20 @@
-"""MCP Server 单元测试:工具注册/委托/Fixture 加载/上下文校验。"""
+"""MCP Server 单元测试:工具注册/契约/Fixture 加载。"""
 import json
 
 from app.mcp.contract import (MCP_TOOL_CONTRACT_VERSION, SERVER_NAME, TOOL_NAMES,
                               llm_tool_schemas, schema_sha256)
-from app.mcp.server import run_server
 
 
 class FakeFastMCP:
     """替代 mcp.server.fastmcp.FastMCP:记录工具注册与 run,不真正启动。"""
+    _last_created = None
+
     def __init__(self, name, version=None):
         self.name = name
         self.version = version
         self._tools = []
         self._ran = False
+        FakeFastMCP._last_created = self
 
     def tool(self, fn=None, **kwargs):
         if fn is None:
@@ -47,37 +49,32 @@ def test_schema_sha256_stable():
     assert len(schema_sha256(s1)) == 64
 
 
-def test_server_registers_seven_tools_and_fixture(monkeypatch, tmp_path):
-    from app.mcp import server as server_mod
-    from app.tools import execute
+def test_factory_registers_seven_tools(monkeypatch):
+    import app.tools  # noqa: F401  触发 TOOL_REGISTRY 注册
+    from app.mcp.server_factory import create_mcp_server
+
+    fake = {"get_service_metrics:abc": {"ok": True, "data": {"p95Ms": 100}}}
+    monkeypatch.setattr("mcp.server.fastmcp.FastMCP", FakeFastMCP)
+
+    mcp = create_mcp_server(runtime="fixture", fixture=fake)
+
+    fake_mcp = FakeFastMCP._last_created
+    assert fake_mcp.name == SERVER_NAME
+    # 7 个只读调查工具,不含 execute_fix/verify_recovery
+    names = {t.__name__ for t in fake_mcp._tools}
+    assert names == set(TOOL_NAMES)
+    assert "execute_fix" not in names and "verify_recovery" not in names
+
+
+def test_stdio_entry_loads_fixture(monkeypatch, tmp_path):
+    from app.mcp import server_stdio
 
     fake = {"get_service_metrics:abc": {"ok": True, "data": {"p95Ms": 100}}}
     (tmp_path / "case.json").write_text(json.dumps(fake), encoding="utf-8")
 
-    loaded = {}
     from app.config import settings
-    monkeypatch.setattr("app.mcp.server.set_eval_fixture", lambda f: loaded.update(f))
-    monkeypatch.setattr("mcp.server.fastmcp.FastMCP", FakeFastMCP)
     monkeypatch.setattr(settings, "eval_mode", True)
     monkeypatch.setattr(settings, "eval_fixture_dir", str(tmp_path))
 
-    run_server(fixture_file="case.json")   # fixture 文件位于评测目录(相对名)
-
-    fake_mcp = FakeFastMCP._last_created
-    assert fake_mcp.name == SERVER_NAME
-    assert len(fake_mcp._tools) == 7
-    assert fake_mcp._ran is True
-    assert loaded == fake
-
-
-# 记录最后创建的 FakeFastMCP 供断言
-FakeFastMCP._last_created = None
-_orig_init = FakeFastMCP.__init__
-
-
-def _init_with_record(self, name, version=None):
-    _orig_init(self, name, version)
-    FakeFastMCP._last_created = self
-
-
-FakeFastMCP.__init__ = _init_with_record
+    payload = server_stdio.load_fixture("case.json")
+    assert payload == fake

@@ -21,7 +21,7 @@ async def test_stdio_initialize_list_call(tmp_path):
 
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "app.mcp.server", "--fixture-file", str(tmp_path / "case.json")],
+        args=["-m", "app.mcp.server_stdio", "--fixture-file", str(tmp_path / "case.json")],
         env={**__import__("os").environ, "TRACEMIND_EVAL_MODE": "true",
              "TRACEMIND_EVAL_FIXTURE_DIR": str(tmp_path)})
     async with stdio_client(params) as (read, write):
@@ -49,7 +49,7 @@ async def test_stdio_fixture_gate_requires_eval_mode(tmp_path):
     (tmp_path / "case.json").write_text("{}", encoding="utf-8")
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "app.mcp.server", "--fixture-file", str(tmp_path / "case.json")],
+        args=["-m", "app.mcp.server_stdio", "--fixture-file", str(tmp_path / "case.json")],
         env={**__import__("os").environ, "TRACEMIND_EVAL_MODE": "false"})
     with pytest.raises(Exception):
         async with stdio_client(params) as (read, write):
