@@ -105,6 +105,8 @@ services:
     environment:
       TRACEMIND_CONTROL_DB_URL: "mysql+pymysql://tracemind_control_app:control_app_pwd@mysql:3306/tracemind_control"
       TRACEMIND_READONLY_DB_URL: "mysql+pymysql://ai_investigator:investigator_pwd@mysql:3306/tracemind_business"
+      # 会话终止专用账号(缺省时 session_terminator 回退只读引擎,无法 KILL → 处置 500);不带库名:KILL 只需 PROCESS+CONNECTION_ADMIN
+      TRACEMIND_SESSION_TERMINATOR_DB_URL: "mysql+pymysql://session_terminator:terminator_pwd@mysql:3306/"
       TRACEMIND_ORDER_SERVICE_URL: "http://order-service:8081"
       TRACEMIND_INVENTORY_SERVICE_URL: "http://inventory-service:8082"
       TRACEMIND_DEMO_MODE: "true"

@@ -90,9 +90,10 @@ def readonly_assertions(base, incident_id, run_id, steps):
     p("只读断言 PASS(重复读取一致/归属校验)")
 
 
-def run_round(base, order, scenario, reject=False):
+def run_round(base, order, scenario, reject=False, order_host="127.0.0.1"):
     """跑一轮完整流程,返回 incident_id。
-    完整闭环用 SCN-002(锁证据真实,fixture 观测下也能到审批);SCN-001 留 VM 真实模式。"""
+    完整闭环用 SCN-002(锁证据真实,fixture 观测下也能到审批);SCN-001 留 VM 真实模式。
+    order_host: pymysql 直连 MySQL 的地址(本地验收 127.0.0.1;VM 验收传 VM IP)。"""
     headers = {"x-demo-key": "demo-secret-2026"}
     # 场景互斥:先重置两个场景,避免 activeScenario 残留导致 inject 409
     for sc in ("SCN-001", "SCN-002"):
@@ -113,7 +114,7 @@ def run_round(base, order, scenario, reject=False):
         assert st.get("lockHeld") is True, f"锁未持有: {st}"
         # 锁等待者:UPDATE 42/7(等锁)+ loadgen(FOR SHARE 超时流量)
         up = subprocess.Popen([sys.executable, "-c",
-                               'import pymysql,time; c=pymysql.connect(host="127.0.0.1",port=3306,'
+                               f'import pymysql,time; c=pymysql.connect(host="{order_host}",port=3306,'
                                'user="app_business",password="app_business_pwd",database="tracemind_business");'
                                'cur=c.cursor(); end=time.time()+30\n'
                                'while time.time()<end:\n'
@@ -176,17 +177,19 @@ def main():
     ap.add_argument("--base", default="http://localhost:8000")
     ap.add_argument("--order", default="http://localhost:8081")
     args = ap.parse_args()
+    # pymysql 直连 MySQL 的地址:VM 验收时 --order 的 host 即 VM IP
+    order_host = args.order.replace("http://", "").split(":")[0]
 
     # 1) SCN-002 完整闭环 → complete replay(锁场景,fixture 观测下证据真实)
     p("=== SCN-002 完整闭环 ===")
-    inc1 = run_round(args.base, args.order, "SCN-002")
+    inc1 = run_round(args.base, args.order, "SCN-002", order_host=order_host)
     run_id, steps = replay_complete(args.base, inc1)
     readonly_assertions(args.base, inc1, run_id, steps)
     p(f"SCN-002 replayStatus=complete, totalSteps={steps['totalSteps']}")
 
     # 2) rejected 路径 → runOutcome=rejected,不要求 FIX_EXECUTED
     p("=== rejected 路径 ===")
-    inc2 = run_round(args.base, args.order, "SCN-002", reject=True)
+    inc2 = run_round(args.base, args.order, "SCN-002", reject=True, order_host=order_host)
     m = api(args.base, "GET", f"/api/incidents/{inc2}/replay")
     run_id2 = m["defaultRunId"]
     rm = api(args.base, "GET", f"/api/incidents/{inc2}/replay/runs/{run_id2}")
