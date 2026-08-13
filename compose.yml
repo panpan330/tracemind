@@ -1,8 +1,9 @@
 # TraceMind 一键编排:MySQL 8 + order/inventory + AI 服务 + 前端工作台
 # 用法: docker compose up -d --build && docker compose ps
+# 基底文件名统一为 compose.yml(设计 §2.2/§2.4);CI 叠加 compose.ci.yml。
 services:
   mysql:
-    image: mysql:8.0
+    image: ${TRACEMIND_MYSQL_IMAGE:-mysql:8.0.39}   # 固定 Patch,防 MySQL 自动升级导致 CI 漂移
     container_name: tracemind-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root_pwd_2026

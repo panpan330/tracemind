@@ -121,7 +121,7 @@ scripts/              # 初始化/灌数/负载/验收/评测脚本
 scripts/sql/          # 建库/五账号/DDL/版本化迁移
 reports/regression/   # 回归评测报告
 docs/                 # 设计文档与实施计划
-docker-compose.yml    # 一键编排
+compose.yml           # 一键编排(基底,CI/本地/VM 统一)
 ```
 
 ## 测试与验收
