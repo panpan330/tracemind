@@ -137,6 +137,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      mcp-tools:
+        condition: service_healthy
       order-service:
         condition: service_healthy
       inventory-service:

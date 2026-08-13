@@ -30,9 +30,12 @@ class McpHttpTransport:
     async def connect(self) -> None:
         from mcp.client.streamable_http import streamablehttp_client
         try:
+            headers = {"Authorization": f"Bearer {self._settings.mcp_http_bearer_token}"}
             self._ctx = streamablehttp_client(self._settings.mcp_http_url,
+                                              headers=headers,
                                               timeout=self._settings.mcp_http_request_timeout_seconds)
-            self._read, self._write = await self._ctx.__aenter__()
+            # 1.29 返回 (read, write, GetSessionIdCallback) 三元素
+            self._read, self._write, self._get_session_id = await self._ctx.__aenter__()
             from mcp import ClientSession
             self._session = await ClientSession(self._read, self._write).__aenter__()
             init = await self._session.initialize()
@@ -75,7 +78,9 @@ class McpHttpTransport:
     async def call_tool(self, name: str, params: dict, ctx: ClientInvocationContext) -> dict:
         if self._session is None:
             raise ClientError(MCP_DISCONNECTED, "未连接", retryable=True)
-        return await self._call_with_retry(name, params, ctx)
+        # context 经受控参数注入(LLM 可见 schema 已隐藏这些字段;FastMCP 层不支持逐请求 header)
+        args = {**params, "incident_id": ctx.incident_id, "agent_run_id": ctx.agent_run_id}
+        return await self._call_with_retry(name, args, ctx)
 
     async def close(self) -> None:
         if self._session:
