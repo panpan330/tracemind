@@ -3,7 +3,7 @@ import httpx
 import pytest
 
 from app.services import java_client
-from app.tools import registry
+from app.tools_core import registry
 
 
 # ---------- java_client ----------
