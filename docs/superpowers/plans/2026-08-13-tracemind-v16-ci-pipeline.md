@@ -1,5 +1,7 @@
 # V1.6 CI 化回归与评测流水线 Implementation Plan
 
+> **⚠️ 方向调整(2026-08-13,用户拍板):本计划的 CI 部分最终放弃。** 用户认为每次推 GitHub 等 CI 太慢,决定 **GitHub Actions 的 CI 全部不做了,GitHub 仅作远程仓库;测试回归 V1.4/V1.5 手动验证方法**。已删除两个 workflow 与 CI 设置文档;保留与 CI 解耦的实打实改进(迁移器 / Run Profile / 覆盖率·契约基线 / 评测缺陷修复)。本计划保留作为过程记录,不再作为执行依据。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把回归评测流水线升级为 GitHub Actions CI:Fast 持续门禁(五 Job + fast-gate 汇聚)+ Full 手动发布验收(compose.ci 全栈 + 真实模型)。

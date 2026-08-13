@@ -6,7 +6,7 @@
 #      (compose 的 profile 合并取并集,无法在覆盖文件中移除)。
 services:
   mysql:
-    image: ${TRACEMIND_MYSQL_IMAGE:-mysql:8.0.39}
+    image: mysql:8.0.39
     mem_limit: 1024m
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?required}

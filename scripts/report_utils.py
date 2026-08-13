@@ -56,7 +56,7 @@ def _env_or(key: str, default: str) -> str:
 
 def _compose_image_version(service: str) -> str:
     import re
-    text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    text = (ROOT / "compose.yml").read_text(encoding="utf-8")
     m = re.search(rf"^  {re.escape(service)}:\s*\n\s+image: ([\w./:-]+)", text, re.M)
     return m.group(1) if m else "n/a"
 
