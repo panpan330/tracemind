@@ -290,6 +290,7 @@ python scripts/verify-m15.py --base http://<vm-host>:8000 --order http://<vm-hos
 - **正式迁移器**:`scripts/db/migrate.py`(唯一入口,checksum/幂等/Advisory Lock/账号 Provisioning),迁移文件 `scripts/db/migrations/`;本地与 VM 部署共用。
 - **Run Profile**:`TRACEMIND_RUN_PROFILE = local|ci_db|offline_eval|full_e2e|production`(fail-closed:严格档缺 URL / LLM 模式不匹配即启动失败;offline_eval 禁数据库访问)。
 - **离线评测缺陷修复**:fixture 的 `metrics.representativeSlowTraceId` 必须配套 `get_trace` 条目(缺则 POS 全 FAIL);新增回归测试 `test_fixture_trace_id_contract`,当前 24/24 PASS。
+- **真实模型验收 + agent 稳定性修复**(VM 全量 PASS,SCN-001/002 各 3 轮):`compute_eligible_tools` 的 `satisfied` 改为"证据已采集即满足"(passed=False 的确定性否定不再让工具永远 eligible,消除 duplicate 死循环);`select_tool` 在真实 LLM 连续失败时确定性 planner 兜底(消除 llm_unavailable);eligible 唯一时确定性执行。
 
 ### 验证命令
 
