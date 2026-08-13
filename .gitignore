@@ -4,6 +4,9 @@
 # 本地环境配置(含真实密码)
 .env.local
 .env
+# 保留示例(不含真实凭据)
+!.env.example
+!.env.ci.example
 
 # Java
 java/**/target/
@@ -35,3 +38,6 @@ web/*.tsbuildinfo
 # 评测临时目录/本地 checkpoint
 ai-service/.eval_fixtures/
 ai-service/data/checkpoints.sqlite
+
+# CI 生成报告(版本化基线保留:evaluation/thresholds, evaluation/contracts)
+reports/generated/

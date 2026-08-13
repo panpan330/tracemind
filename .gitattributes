@@ -1,0 +1,7 @@
+# 行尾统一:防 Windows CRLF 破坏 CI Runner 脚本/迁移文件
+* text=auto
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.ps1 text eol=crlf
