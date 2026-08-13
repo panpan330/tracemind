@@ -2,6 +2,10 @@
 
 > 版本:2026-08-12 · 状态:设计定稿(经 4 段评审修正)
 > 前置:V1.0–V1.5 全部交付(187 提交);仓库无 git remote,历史 spec 预留"CI 化回归流水线"为范围外项。
+>
+> **⚠️ 方向调整(2026-08-13,用户拍板):本设计的 CI 部分最终放弃。** 用户认为每次推 GitHub 等 CI 太慢(本机无 Docker,Full E2E 只能靠 CI/VM 反馈慢),决定 **GitHub Actions 的 CI 全部不做了,GitHub 仅作远程仓库;测试回归 V1.4/V1.5 的手动验证方法**(本地单测 + VM 部署 + verify-m*.py 验收脚本)。已删除 `.github/workflows/fast-gate.yml`、`.github/workflows/full-e2e.yml`、`docs/ci/GITHUB_ACTIONS_SETUP.md`。
+>
+> **保留的实打实改进(与 CI 解耦,本地测试同样受益)**:正式迁移器 `scripts/db/migrate.py`、Run Profile fail-closed、覆盖率/契约基线(`check_coverage.py`/`ci_manifest.py`)、以及**离线评测缺陷修复**(fixture trace_id 契约,让 POS 24/24 PASS 的真实 bug 修复)。以下正文保留原始设计作为过程记录。
 
 ## 1. 背景与目标
 

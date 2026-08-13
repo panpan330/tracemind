@@ -121,7 +121,7 @@ scripts/              # 初始化/灌数/负载/验收/评测脚本
 scripts/sql/          # 建库/五账号/DDL/版本化迁移
 reports/regression/   # 回归评测报告
 docs/                 # 设计文档与实施计划
-compose.yml           # 一键编排(基底,CI/本地/VM 统一)
+compose.yml           # 一键编排(基底,本地/VM 统一)
 ```
 
 ## 测试与验收
@@ -155,7 +155,7 @@ Java 21 / Spring Boot 3.3 / MyBatis-Plus · FastAPI / LangGraph / MCP(官方 Pyt
 
 | 模式 | 行为 | 用途 |
 |---|---|---|
-| `TRACEMIND_LLM_MODE=fake` | FakeLLM(确定性,不触网) | 测试 / CI / 显式回归 |
+| `TRACEMIND_LLM_MODE=fake` | FakeLLM(确定性,不触网) | 测试 / 显式回归 |
 | `real_strict` | 模型失败即转 needs_human,禁止降级 | 正式评测 / 验收 |
 | `real_demo` | 模型失败降级到确定性组件并标记 `degraded` | 演示兜底 |
 
@@ -212,7 +212,7 @@ python scripts/run_regression.py --tier fast    # fast 档:单测 + 离线评测
 python scripts/run_regression.py --tier full    # full 档:fast + SCN-001/SCN-002 全链路 E2E(需全栈)
 ```
 
-- 报告写入 `reports/regression/`,记录 Git SHA / 版本 / 各阶段耗时 / 失败原因,失败时非零退出码(CI 可拦截)。
+- 报告写入 `reports/regression/`,记录 Git SHA / 版本 / 各阶段耗时 / 失败原因,失败时非零退出码。
 - 24 条离线评测 Fixture(16 索引 + 8 锁,动态 N/N)+ 处置安全套件(合法 KILL 恰一次 / 未审批禁 KILL / 负例零误杀)。
 - 关键回归项:`p95 null 不产 E1 证据且允许重采`、`已采集证据不重采`、`双 Policy 四分支`、`transport 全 mcp_stdio 无 direct`。
 
@@ -282,44 +282,33 @@ python scripts/verify-m15.py --base http://<vm-host>:8000 --order http://<vm-hos
 - 断言内容:SCN-002 完整闭环 → `replayStatus=complete` + 11 类必需步骤 + `runOutcome=recovered`;rejected 路径 → `runOutcome=rejected` 且不要求 `FIX_EXECUTED`;只读无副作用(重复读取一致 / runId 归属 404)。
 - **部署注意**:compose 部署下 ai-service 必须配 `TRACEMIND_SESSION_TERMINATOR_DB_URL`(缺省时处置 KILL 回退只读账号报 500),本地直接跑 python 用 `.env.local` 不受影响。
 
-## V1.6:CI 化回归与评测流水线(GitHub Actions)
 
-### Fast 持续门禁 + Full 手动发布验收
+## V1.6:正式迁移器 + Run Profile + 评测缺陷修复
 
-```
-Fast(fast-gate.yml,每次 PR/main push)          Full(full-e2e.yml,手动触发)
-├─ python-tests(MySQL service, ci_db profile)   ├─ preflight(无 Secret,ref/SemVer/祖先校验)
-├─ java-tests(MySQL service, surefire)          ├─ verify-fast-gate(Check Run 校验)
-├─ web-tests(typecheck + vitest + build)        └─ full-e2e(Environment Secrets)
-├─ offline-evaluation(fake LLM, 无 DB)              ├─ compose.ci 全栈(真实模型 real_strict)
-└─ ci-quality(actionlint/shellcheck/单测)          ├─ SCN-001/002 E2E + Replay Backend 验收
-   ↓ 汇聚(5 结果全 success)                          └─ 日志脱敏 + 报告 + 清理
-   fast-gate(Required Check)
-```
+### 回归测试方法(回归 V1.4/V1.5 手动验证)
 
-- **职责分离**:普通提交用不依赖真实模型和运行时外部服务的确定性测试保障快速反馈;发布前通过真实模型与真实基础设施完成全栈验收。
-- **正式迁移器**:`scripts/db/migrate.py`(唯一入口,checksum/幂等/Advisory Lock/账号 Provisioning),迁移文件 `scripts/db/migrations/`;本地/Compose/CI 共用。
+- **正式迁移器**:`scripts/db/migrate.py`(唯一入口,checksum/幂等/Advisory Lock/账号 Provisioning),迁移文件 `scripts/db/migrations/`;本地与 VM 部署共用。
 - **Run Profile**:`TRACEMIND_RUN_PROFILE = local|ci_db|offline_eval|full_e2e|production`(fail-closed:严格档缺 URL / LLM 模式不匹配即启动失败;offline_eval 禁数据库访问)。
-- **覆盖率门禁**:`evaluation/thresholds/coverage.json`(基线:Python 78.51 / Web 82.25·71.74 / Java 单测聚合),`check_coverage.py` 防下调。
+- **覆盖率基线**:`evaluation/thresholds/coverage.json`(基线:Python 78.51 / Web 82.25·71.74 / Java 单测聚合),`check_coverage.py` 防下调。
 - **契约基线**:`evaluation/contracts/`(MCP/Policy/Replay 版本与 Hash),`ci_manifest.py generate|check`。
-- **真实模型**:Full 用 `real_strict`(断言 `degraded=false`);百炼 Key 只在 full-e2e Environment,日志经脱敏后上传。
+- **离线评测缺陷修复**:fixture 的 `metrics.representativeSlowTraceId` 必须配套 `get_trace` 条目(缺则 POS 全 FAIL);新增回归测试 `test_fixture_trace_id_contract`,当前 24/24 PASS。
 
 ### 验证命令
 
 ```bash
-# Fast 本地模拟(需本地 MySQL)
-python scripts/db/migrate.py --init-db --migrations scripts/db/migrations
+# 后端单测(需本地 MySQL)
+cd ai-service && .venv/Scripts/pytest.exe tests/ -q
+# 离线评测(24 case,fake LLM,无网络)
+cd ai-service && TRACEMIND_RUN_PROFILE=offline_eval TRACEMIND_LLM_MODE=fake TRACEMIND_EVAL_MODE=true \
+  .venv/Scripts/python.exe ../scripts/eval_agent.py --mode offline --llm fake --runs 1
+# 覆盖率 + 契约校验
+python scripts/ci/check_coverage.py
 python scripts/ci/ci_manifest.py check
-python scripts/ci/scan_secrets.py
-# Full dry-run(零副作用,出阶段计划)
-bash scripts/ci/run_full_e2e.sh --dry-run --scope smoke
-# Full 真实执行(需 Docker + 真实模型凭据;VM 上叫 Smoke Rehearsal)
-bash scripts/ci/run_full_e2e.sh --scope smoke
+# 迁移器(建库 + 版本化迁移)
+python scripts/db/migrate.py --init-db --migrations scripts/db/migrations
+# VM 发布验收(V1.4/V1.5 同款,需 VM 部署)
+python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081
 ```
-
-### 手工配置
-
-详见 [`docs/ci/GITHUB_ACTIONS_SETUP.md`](docs/ci/GITHUB_ACTIONS_SETUP.md)(Environment/Secrets/分支保护限制/触发方式/Key 轮换)。
 
 ## 版本历史
 
@@ -329,4 +318,4 @@ bash scripts/ci/run_full_e2e.sh --scope smoke
 - **V1.3**:多故障场景 SCN-002 锁等待 + 双 Policy 诊断 + 处置安全 + 回归评测流水线
 - **V1.4**:真实可观测性(OTel Agent + Prometheus + Jaeger + Grafana)+ 观测审计 + 回归强制真实后端
 - **V1.5**:证据与决策链回放(调查时不可变快照 + 只读 Replay API + 前端回放页)+ Run 级版本冻结与恢复前校验
-- **V1.6**:CI 化回归与评测流水线(Fast 五 Job 持续门禁 + Full 手动发布验收)+ 正式迁移器 + Run Profile fail-closed + 覆盖率/契约基线
+- **V1.6**:正式迁移器 + Run Profile fail-closed + 覆盖率/契约基线 + 离线评测缺陷修复(fixture trace_id 契约)
