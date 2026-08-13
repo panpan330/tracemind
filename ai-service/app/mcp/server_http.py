@@ -49,8 +49,9 @@ def create_http_app() -> Starlette:
     routes = [Route("/health/live", health_live), Route("/health/ready", health_ready)]
     app = Starlette(routes=routes,
                     middleware=build_security_middleware(clients_file=s.mcp_auth_clients_file))
-    # 挂载 /mcp(Streamable HTTP 核心)于同一 ASGI 应用
-    app.mount("/mcp", core)
+    # 挂载 /mcp(Streamable HTTP 核心):core 内部路由即为 /mcp,用 Route 直接挂避免 mount 斜杠重定向
+    from starlette.routing import Route as _Route
+    app.routes.append(_Route("/mcp", core, methods=["GET", "POST"]))
     return app
 
 
