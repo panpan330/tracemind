@@ -247,6 +247,9 @@ jobs:
         run: |
           cd ai-service && uv sync --frozen
           cd ../scripts/ci && python -m pytest test_check_coverage.py -q
+        env:
+          CI_PYTHON: ${{ github.workspace }}/ai-service/.venv/bin/python
+          PATH: ${{ github.workspace }}/ai-service/.venv/bin:${{ env.PATH }}
       - name: Upload reports
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
