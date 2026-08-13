@@ -250,6 +250,38 @@ python scripts/verify-grafana-smoke.py --grafana http://127.0.0.1:3000
 python scripts/run_regression.py --tier full   # full 档强制真实后端
 ```
 
+## V1.5:证据与决策链回放(Replay)
+
+### 回放架构
+
+```
+调查时写入(不可变快照)                   读取时投影(只读,零副作用)
+Agent 节点执行 → ReplayWriter           Replay API(按 Run 限定)
+  └─ incident_replay_step(纯追加)  →     Replay Projector → Manifest/steps
+       logical_step_id × attempt_no        stepIndex/displayDurationMs/keyStepIndexes
+       phase: started → completed/failed   runOutcome/terminationReason
+前端 ReplayView(本地播放,不重算 Policy)
+  └─ position 语义(状态位置)/ 单次 setTimeout / 状态机 / 控制条
+```
+
+- **不可变证据**:`incident_replay_step` 纯追加、禁 UPDATE/DELETE;`sequence_no` 原子分配与插入同事务;每步含 `snapshotHash`(Canonical JSON SHA-256,一致性校验,非防篡改)与 `source_reference`(引用不可变版本 + 冻结摘要,不塞原始响应)。
+- **两段式 phase**:同 `logical_step_id` 先 `started` 后 `completed|failed`;按 `(logical_step_id, attempt_no)` 组装 Attempt(重试/审批拒绝→新 Attempt);`RUN_TERMINATED` 记录 `runOutcome`(recovered/failed/rejected/needs_human)与 `terminationReason`。
+- **只读 API**:`GET /api/incidents/{id}/replay`、`/replay/runs/{run_id}`、`/steps`、`/steps/{logical_step_id}`;不触发状态机、不调 LLM/MCP、不执行审批处置、不重算 Policy;`asOfSequenceNo` 保证 Manifest 与 steps 同一截面;runId 归属校验 404。
+- **版本冻结与校验**:Run 启动时冻结 `expected_*` 版本常量,Step 记录实际使用版本;恢复 Run 前校验不一致 → `version_mismatch`,停止原 Run 不按当前程序补算。
+- **前端回放页**:`web/src/views/ReplayView.vue` + `useReplayPlayback`(position 状态语义、状态机、倍速、跳转暂停);`partial` 时展示缺失部分,绝不按当前 Policy 补算;只读横幅提示"不会执行任何系统操作"。
+
+### 验证命令(V1.5)
+
+```bash
+# 本地 fixture 验收(需本地 MySQL + 三个服务已启动)
+python scripts/verify-m15.py --base http://localhost:8000 --order http://localhost:8081
+# VM 全栈验收(代码同步 + 镜像重建后执行;--order 的 host 自动作为 pymysql 直连地址)
+python scripts/verify-m15.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081
+```
+
+- 断言内容:SCN-002 完整闭环 → `replayStatus=complete` + 11 类必需步骤 + `runOutcome=recovered`;rejected 路径 → `runOutcome=rejected` 且不要求 `FIX_EXECUTED`;只读无副作用(重复读取一致 / runId 归属 404)。
+- **部署注意**:compose 部署下 ai-service 必须配 `TRACEMIND_SESSION_TERMINATOR_DB_URL`(缺省时处置 KILL 回退只读账号报 500),本地直接跑 python 用 `.env.local` 不受影响。
+
 ## 版本历史
 
 - **V1.0**:核心闭环(Java 目标系统 + LangGraph 单场景 + 人工审批 + 真实 MySQL 证据)
@@ -257,3 +289,4 @@ python scripts/run_regression.py --tier full   # full 档强制真实后端
 - **V1.2**:工具层 MCP 化(stdio,消除 direct 路径)
 - **V1.3**:多故障场景 SCN-002 锁等待 + 双 Policy 诊断 + 处置安全 + 回归评测流水线
 - **V1.4**:真实可观测性(OTel Agent + Prometheus + Jaeger + Grafana)+ 观测审计 + 回归强制真实后端
+- **V1.5**:证据与决策链回放(调查时不可变快照 + 只读 Replay API + 前端回放页)+ Run 级版本冻结与恢复前校验
