@@ -16,12 +16,21 @@ _engine = None
 
 def get_terminator_engine():
     """独立连接池,凭据仅此处持有;默认回退只读引擎(生产由 TRACEMIND_SESSION_TERMINATOR_DB_URL 提供)。
-    返回 SqlEngine 封装(提供 query_blocking/execute_kill)。"""
+    返回 SqlEngine 封装(提供 query_blocking/execute_kill)。
+    V1.6:offline_eval 禁 DB;非 local 下缺 URL 直接失败(禁止回退只读引擎)。"""
     global _engine
     if _engine is None:
         from app.db.engine import get_engine_from_url
-        from app.config import settings
-        url = getattr(settings, "session_terminator_db_url", "") or settings.readonly_db_url
+        from app.config import settings, DATABASE_ACCESS_DISABLED
+        if settings.run_profile == "offline_eval":
+            raise DATABASE_ACCESS_DISABLED(
+                f"run_profile={settings.run_profile} 禁止数据库访问(offline_eval)")
+        url = settings.session_terminator_db_url
+        if not url:
+            if settings.run_profile != "local":
+                raise ValueError(
+                    "TRACEMIND_SESSION_TERMINATOR_DB_URL 缺失(禁止回退只读引擎)")
+            url = settings.readonly_db_url
         _engine = SqlEngine(get_engine_from_url(url))
     return _engine
 
