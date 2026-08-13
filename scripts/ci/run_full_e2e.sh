@@ -13,6 +13,8 @@ SCOPE="${TRACEMIND_CI_SCOPE:-smoke}"
 FAIL_STAGE="${TRACEMIND_CI_FAIL_STAGE:-}"
 DRY_RUN=0
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Python 解释器:VM 无 python 命令(仅 python3);CI ubuntu 有 python
+if command -v python3 >/dev/null 2>&1; then PYTHON="python3"; else PYTHON="python"; fi
 REPORT_DIR="$REPO_ROOT/reports/generated"
 REPORT_FILE="$REPORT_DIR/full-e2e.json"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-tracemind-ci-local}"
@@ -43,11 +45,11 @@ stage_impl() {
       ;;
     DB_MIGRATION)
       TRACEMIND_MIGRATE_DB_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@127.0.0.1:3306/" \
-        python "$REPO_ROOT/scripts/db/migrate.py" --init-db --migrations "$REPO_ROOT/scripts/db/migrations"
+        "$PYTHON" "$REPO_ROOT/scripts/db/migrate.py" --init-db --migrations "$REPO_ROOT/scripts/db/migrations"
       TRACEMIND_MIGRATE_DB_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@127.0.0.1:3306/" \
-        python "$REPO_ROOT/scripts/db/migrate.py" --migrations "$REPO_ROOT/scripts/db/migrations"
+        "$PYTHON" "$REPO_ROOT/scripts/db/migrate.py" --migrations "$REPO_ROOT/scripts/db/migrations"
       TRACEMIND_MIGRATE_DB_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@127.0.0.1:3306/" \
-        python "$REPO_ROOT/scripts/db/migrate.py" --provision --migrations "$REPO_ROOT/scripts/db/migrations"
+        "$PYTHON" "$REPO_ROOT/scripts/db/migrate.py" --provision --migrations "$REPO_ROOT/scripts/db/migrations"
       ;;
     BUSINESS_FIXTURE_SEED)
       "${COMPOSE[@]}" run --rm seed
@@ -56,17 +58,17 @@ stage_impl() {
       (cd "$REPO_ROOT/java" && mvn --batch-mode verify)
       ;;
     RAG_SEED)
-      python "$REPO_ROOT/scripts/seed_runbook.py"
+      "$PYTHON" "$REPO_ROOT/scripts/seed_runbook.py"
       ;;
     APPLICATION_READY)
       "${COMPOSE_UP[@]}" up -d order-service inventory-service ai-service
       "${COMPOSE_UP[@]}" ps --format '{{.Name}} {{.Status}}' | grep -E 'healthy' >/dev/null || die "应用服务未 healthy"
       ;;
     MCP_PROTOCOL_SMOKE)
-      python "$REPO_ROOT/scripts/ci/check_mcp_protocol.py"
+      "$PYTHON" "$REPO_ROOT/scripts/ci/check_mcp_protocol.py"
       ;;
     OBSERVABILITY_WARMUP)
-      python "$REPO_ROOT/scripts/ci/warmup_observability.py"
+      "$PYTHON" "$REPO_ROOT/scripts/ci/warmup_observability.py"
       ;;
     MODEL_SMOKE)
       (cd "$REPO_ROOT/ai-service" && uv run python ../scripts/smoke_llm.py)
@@ -75,15 +77,15 @@ stage_impl() {
       (cd "$REPO_ROOT/ai-service" && uv run python ../scripts/eval_agent.py --mode offline --llm real_strict --runs 1)
       ;;
     SCN001_E2E)
-      python "$REPO_ROOT/scripts/verify-m14.py" --base http://localhost:8000 --order http://localhost:8081 \
+      "$PYTHON" "$REPO_ROOT/scripts/verify-m14.py" --base http://localhost:8000 --order http://localhost:8081 \
         --scenario SCN-001 --rounds "$SCN_ROUNDS" --interval 0
       ;;
     SCN002_E2E)
-      python "$REPO_ROOT/scripts/verify-m14.py" --base http://localhost:8000 --order http://localhost:8081 \
+      "$PYTHON" "$REPO_ROOT/scripts/verify-m14.py" --base http://localhost:8000 --order http://localhost:8081 \
         --scenario SCN-002 --rounds "$SCN_ROUNDS" --interval 0
       ;;
     REPLAY_BACKEND_VALIDATION)
-      python "$REPO_ROOT/scripts/verify-m15.py" --base http://localhost:8000 --order http://localhost:8081
+      "$PYTHON" "$REPO_ROOT/scripts/verify-m15.py" --base http://localhost:8000 --order http://localhost:8081
       ;;
   esac
 }
@@ -115,7 +117,7 @@ run_stage() {
 }
 
 finalize_report() {
-  python - "$REPORT_FILE" "$PRIMARY" "$SECONDARY_JSON" "$CLEANUP" "$SCOPE" <<'EOF'
+  "$PYTHON" - "$REPORT_FILE" "$PRIMARY" "$SECONDARY_JSON" "$CLEANUP" "$SCOPE" <<'EOF'
 import json, sys
 path, primary, secondary, cleanup, scope = sys.argv[1:]
 data = {"scope": scope}
