@@ -28,3 +28,22 @@ describe('replay api client', () => {
     expect(m.defaultRunId).toBeNull()
   })
 })
+
+describe('replay transport 枚举(V1.7)', () => {
+  it('tool_calls transport 承载 mcp_streamable_http 且 Replay 解析不崩', async () => {
+    const fake = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ totalSteps: 1, steps: [{
+        stepIndex: 0, logicalStepId: 'a', sourceSequenceNos: [1],
+        stepState: 'completed', stepOutcome: 'succeeded',
+        stateBefore: {}, stateAfter: {},
+        decisionSummary: { selectedTool: 'get_index_info' },
+        operationSummary: { toolCall: { toolName: 'get_index_info', transport: 'mcp_streamable_http' } },
+        sourceReferenceSummary: {}, actualDurationMs: 9, displayDurationMs: 1000, missingParts: []
+      }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const out = await fetchReplaySteps(7, 8)
+    const toolCall = (out.steps[0].operationSummary as any)?.toolCall
+    expect(toolCall?.transport).toBe('mcp_streamable_http')
+    // 旧枚举值仍被接受(向后兼容)
+    expect(typeof toolCall?.transport).toBe('string')
+  })
+})

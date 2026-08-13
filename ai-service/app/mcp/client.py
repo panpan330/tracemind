@@ -107,7 +107,7 @@ class McpClientManager:
         while True:
             attempts += 1
             try:
-                cmd = [sys.executable, "-m", "app.mcp.server"]
+                cmd = [sys.executable, "-m", "app.mcp.server_stdio"]
                 if self.fixture_file:
                     cmd += ["--fixture-file", self.fixture_file]
                 params = StdioServerParameters(command=cmd[0], args=cmd[1:],
