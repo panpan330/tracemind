@@ -23,7 +23,7 @@ def run(cmd: list[str], cwd: Path, env: dict | None = None) -> tuple[int, str]:
     if os.name == "nt" and cmd and cmd[0] == "npm":
         cmd = ["npm.cmd", *cmd[1:]]
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=full_env)
-    return r.returncode, (r.stdout + r.stderr)
+    return r.returncode, ((r.stdout or "") + (r.stderr or ""))
 
 
 # ---- Local Fast ----

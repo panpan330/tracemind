@@ -45,5 +45,6 @@ describe('replay transport 枚举(V1.7)', () => {
     expect(toolCall?.transport).toBe('mcp_streamable_http')
     // 旧枚举值仍被接受(向后兼容)
     expect(typeof toolCall?.transport).toBe('string')
+    expect(fake).toHaveBeenCalledWith('/api/incidents/7/replay/runs/8/steps', expect.anything())
   })
 })
