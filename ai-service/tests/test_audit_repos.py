@@ -22,7 +22,7 @@ class FakeEngine:
 
 def test_model_call_insert_sql(monkeypatch):
     engine = FakeEngine()
-    monkeypatch.setattr(mcr, "control_engine", engine)
+    monkeypatch.setattr(mcr, "get_control_engine", lambda: engine)
     mcr.insert(incident_id=1, run_id=1, node="hypothesize", mode="real_demo",
                provider="bailian", model="m", model_snapshot="m-snap",
                prompt_version="v1", prompt_hash="abc", tool_schema_version="v1",
@@ -39,7 +39,7 @@ def test_model_call_insert_sql(monkeypatch):
 
 def test_retrieval_insert_sql(monkeypatch):
     engine = FakeEngine()
-    monkeypatch.setattr(rcr, "control_engine", engine)
+    monkeypatch.setattr(rcr, "get_control_engine", lambda: engine)
     rcr.insert(incident_id=1, run_id=1, node="hypothesize", query_text_hash="h",
                collection_alias="alias", collection_version="v1",
                embedding_model="text-embedding-v4", dimensions=1024,
@@ -80,7 +80,7 @@ def test_fix_execution_repo_insert(monkeypatch):
         def begin(self):
             return FakeCtx()
 
-    monkeypatch.setattr(fix_execution_repo, "control_engine", FakeEngine())
+    monkeypatch.setattr(fix_execution_repo, "get_control_engine", lambda: FakeEngine())
     fix_execution_repo.create_execution(incident_id=1, fix_proposal_id=2, approval_id=3,
                                         idempotency_key="k1", blocking_relation_hash="rh",
                                         status="succeeded", execution_result="executed",

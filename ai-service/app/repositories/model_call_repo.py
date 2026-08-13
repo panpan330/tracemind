@@ -4,7 +4,7 @@ from sqlalchemy import text
 from app.db.engine import get_control_engine
 
 # 模块级 engine:懒创建(create_engine 不真连),测试可 monkeypatch 替换
-control_engine = get_control_engine()
+# 惰性获取:函数内调用 get_control_engine()(offline_eval 下模块导入不触 DB)
 
 
 def insert(*, incident_id: int, run_id: int, node: str, mode: str, provider: str,
@@ -15,6 +15,7 @@ def insert(*, incident_id: int, run_id: int, node: str, mode: str, provider: str
            latency_ms: int, input_tokens: int | None, output_tokens: int | None,
            status: str, error_code: str, degraded: bool, git_commit_sha: str,
            knowledge_chunk_ids: str) -> None:
+    control_engine = get_control_engine()
     with control_engine.begin() as conn:
         conn.execute(
             text("INSERT INTO model_call (incident_id, agent_run_id, node, mode, provider, model, "

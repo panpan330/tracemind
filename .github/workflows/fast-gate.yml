@@ -215,7 +215,7 @@ jobs:
       - name: actionlint (workflow syntax)
         run: |
           curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- 1.7.7
-          ./actionlint -color .github/workflows/
+          ./actionlint -color .github/workflows/*.yml
       - name: shellcheck
         run: |
           shellcheck scripts/ci/*.sh

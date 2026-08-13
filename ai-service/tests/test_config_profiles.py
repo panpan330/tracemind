@@ -35,13 +35,16 @@ def test_offline_eval_defines_database_access_disabled(monkeypatch):
     assert issubclass(DATABASE_ACCESS_DISABLED, Exception)
 
 
-def test_local_default_keeps_terminator_fallback():
+def test_local_default_keeps_terminator_fallback(monkeypatch):
+    monkeypatch.delenv("TRACEMIND_RUN_PROFILE", raising=False)
+    monkeypatch.delenv("TRACEMIND_LLM_MODE", raising=False)
     from app.config import Settings
     s = Settings(_env_file=None)
     assert s.run_profile == "local"
 
 
 def test_local_allows_real_strict(monkeypatch):
+    monkeypatch.delenv("TRACEMIND_RUN_PROFILE", raising=False)
     monkeypatch.setenv("TRACEMIND_LLM_MODE", "real_strict")
     from app.config import Settings
     s = Settings(_env_file=None)

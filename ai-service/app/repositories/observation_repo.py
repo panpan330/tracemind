@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app.db.engine import get_control_engine
 
-control_engine = get_control_engine()
+# 惰性获取:函数内调用 get_control_engine()(offline_eval 下模块导入不触 DB)
 
 
 def record_query(*, incident_id: int, agent_run_id: int, observation_query_id: str,
@@ -14,6 +14,7 @@ def record_query(*, incident_id: int, agent_run_id: int, observation_query_id: s
                  window_end: str | None, status: str, error_code: str | None,
                  duration_ms: int | None, result_hash: str | None,
                  trace_id: str | None, normalized_result: dict | list | None) -> None:
+    control_engine = get_control_engine()
     with control_engine.begin() as conn:
         conn.execute(
             text("INSERT INTO observation_query (incident_id, agent_run_id, "
