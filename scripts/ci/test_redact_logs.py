@@ -12,7 +12,9 @@ def run_redact(src: Path, dst: Path, secrets: list[str] | None = None) -> subpro
         env["TRACEMIND_REDACT_SECRETS"] = "|".join(secrets)
     else:
         env.pop("TRACEMIND_REDACT_SECRETS", None)
-    return subprocess.run([sys.executable, "scripts/ci/redact_logs.py", str(src), str(dst)],
+    # 脚本绝对路径(测试可能从任意 cwd 运行)
+    script = Path(__file__).resolve().parent / "redact_logs.py"
+    return subprocess.run([sys.executable, str(script), str(src), str(dst)],
                           capture_output=True, text=True, env=env)
 
 

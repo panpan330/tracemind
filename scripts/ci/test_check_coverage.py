@@ -7,11 +7,13 @@ from pathlib import Path
 
 
 def _run(current: float, base_data: dict, lang="python", metric="line") -> subprocess.CompletedProcess:
+    # 脚本绝对路径(测试可能从任意 cwd 运行,如 scripts/ci 下 pytest)
+    script = Path(__file__).resolve().parent / "check_coverage.py"
     with tempfile.TemporaryDirectory() as td:
         base = Path(td) / "coverage.json"
         base.write_text(json.dumps(base_data), encoding="utf-8")
         return subprocess.run(
-            [sys.executable, "scripts/ci/check_coverage.py",
+            [sys.executable, str(script),
              "--lang", lang, "--metric", metric, "--current", str(current),
              "--base-file", str(base)],
             capture_output=True, text=True)
