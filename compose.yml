@@ -25,7 +25,7 @@ services:
       timeout: 3s
       retries: 40
       start_period: 20s
-    networks: [tracemind]
+    networks: [tracemind, control-data-network, tool-observation-network]
 
   # 一次性灌压测数据(幂等:已有数据则跳过);容器正常退出
   seed:
@@ -68,7 +68,7 @@ services:
       retries: 12
       start_period: 30s
     mem_limit: 512m
-    networks: [tracemind, metrics-scrape-net, trace-ingest-net]
+    networks: [tracemind, metrics-scrape-net, trace-ingest-net, tool-observation-network]
 
   inventory-service:
     build:
@@ -94,7 +94,7 @@ services:
       retries: 12
       start_period: 30s
     mem_limit: 512m
-    networks: [tracemind, metrics-scrape-net, trace-ingest-net]
+    networks: [tracemind, metrics-scrape-net, trace-ingest-net, tool-observation-network]
 
   ai-service:
     build:
@@ -114,6 +114,10 @@ services:
       TRACEMIND_DEMO_KEY: demo-secret-2026
       TRACEMIND_LLM_MODE: fake
       TRACEMIND_EVAL_CHAT_MODEL: qwen3.7-plus-2026-05-26
+      # V1.7:MCP 经独立 mcp-tools 服务(Streamable HTTP 标准部署)
+      TRACEMIND_MCP_TRANSPORT: "streamable_http"
+      TRACEMIND_MCP_HTTP_URL: "http://mcp-tools:8001/mcp"
+      TRACEMIND_MCP_HTTP_BEARER_TOKEN: "${TRACEMIND_MCP_HTTP_BEARER_TOKEN:-}"
       # 真实模型验收:LLM_MODE=real_strict + RAG_MODE=required + 启动 qdrant 服务(见 README)
       TRACEMIND_RAG_MODE: off
       TRACEMIND_EVAL_MODE: "true"
@@ -142,7 +146,41 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
-    networks: [tracemind, observability-query-net]
+    networks: [tracemind, agent-mcp-network, control-data-network, llm-egress-network]
+
+  mcp-tools:
+    build:
+      context: ./ai-service
+      target: mcp-tools-runtime
+    container_name: tracemind-mcp-tools
+    # 独立 MCP 工具服务:只读调查 + 最小审计写;不含 LLM/处置凭据
+    environment:
+      TRACEMIND_MCP_TRANSPORT: "streamable_http"
+      TRACEMIND_MCP_HTTP_URL: "http://0.0.0.0:8001/mcp"
+      TRACEMIND_MCP_AUTH_CLIENTS_FILE: "/run/secrets/mcp_clients.json"
+      TRACEMIND_MCP_AUDIT_DB_URL: "mysql+pymysql://mcp_tool_auditor:${TRACEMIND_DB_MCP_AUDITOR_PASSWORD:-mcp_auditor_pwd}@mysql:3306/tracemind_control"
+      TRACEMIND_READONLY_DB_URL: "mysql+pymysql://ai_investigator:investigator_pwd@mysql:3306/tracemind_business"
+      # 调查数据源(标准 HTTP 部署切 prometheus/jaeger 真实后端)
+      TRACEMIND_METRICS_BACKEND: "prometheus"
+      TRACEMIND_TRACE_BACKEND: "jaeger"
+      TRACEMIND_PROMETHEUS_URL: "http://prometheus:9090"
+      TRACEMIND_JAEGER_QUERY_ENDPOINT: "jaeger:16685"
+      TRACEMIND_METRICS_MAX_AGE_SECONDS: "120"
+    secrets:
+      - mcp_clients.json
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    mem_limit: 256m
+    # 只加入内部网络,不映射宿主机端口,不进 LLM 出口网络
+    networks: [agent-mcp-network, control-data-network, tool-observation-network]
+    restart: unless-stopped
 
   web:
     build:
@@ -176,7 +214,7 @@ services:
     profiles: [observability-ui]
     ports:
       - "127.0.0.1:16686:16686"   # UI 仅宿主机回环;gRPC QueryService 16685 只入 observability-query-net
-    networks: [trace-ingest-net, observability-query-net]
+    networks: [trace-ingest-net, observability-query-net, tool-observation-network]
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -189,7 +227,7 @@ services:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     mem_limit: 384m
-    networks: [metrics-scrape-net, observability-query-net]
+    networks: [metrics-scrape-net, observability-query-net, tool-observation-network]
 
   grafana:
     image: grafana/grafana:11.5.0
@@ -214,6 +252,10 @@ volumes:
   prometheus-data:
   grafana-data:
 
+secrets:
+  mcp_clients.json:
+    file: ./secrets/mcp_clients.json
+
 networks:
   tracemind:
     driver: bridge
@@ -222,4 +264,13 @@ networks:
   trace-ingest-net:
     driver: bridge
   observability-query-net:
+    driver: bridge
+  # ---- V1.7:内部网络(仅 Compose 内部可达)+ LLM 出口(仅 ai-service)----
+  agent-mcp-network:
+    internal: true
+  control-data-network:
+    internal: true
+  tool-observation-network:
+    internal: true
+  llm-egress-network:
     driver: bridge
