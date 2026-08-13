@@ -1,5 +1,16 @@
-"""engine 按 Run Profile 隔离:offline_eval 禁 DB;executor 用独立 fix_executor URL。"""
+"""engine 按 Run Profile 隔离:offline_eval 允许查询禁处置;executor 用独立 fix_executor URL。"""
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_engine_cache():
+    """每个测试后清 engine lru_cache:防止 Settings(测试 env)污染全局缓存
+    (test_engines 等后续测试会用到真实 settings 的 engine)。"""
+    yield
+    from app.db import engine as engine_mod
+    engine_mod.get_control_engine.cache_clear()
+    engine_mod.get_readonly_engine.cache_clear()
+    engine_mod.get_executor_engine.cache_clear()
 
 
 def test_offline_eval_allows_query_but_disables_side_effect(monkeypatch):
