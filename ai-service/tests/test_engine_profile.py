@@ -2,17 +2,25 @@
 import pytest
 
 
-def test_offline_eval_disables_all_engines(monkeypatch):
+def test_offline_eval_allows_query_but_disables_side_effect(monkeypatch):
+    """offline_eval 允许控制/只读(Agent 调查落库),禁处置副作用(executor/terminator)。"""
     monkeypatch.setenv("TRACEMIND_RUN_PROFILE", "offline_eval")
     monkeypatch.setenv("TRACEMIND_LLM_MODE", "fake")
+    monkeypatch.setenv("TRACEMIND_CONTROL_DB_URL", "mysql+pymysql://u:p@h:3306/db")
+    monkeypatch.setenv("TRACEMIND_READONLY_DB_URL", "mysql+pymysql://u:p@h:3306/db")
+    monkeypatch.setenv("TRACEMIND_SESSION_TERMINATOR_DB_URL", "mysql+pymysql://u:p@h:3306/")
+    monkeypatch.setenv("TRACEMIND_FIX_EXECUTOR_DB_URL", "mysql+pymysql://fix:pwd@h:3306/db")
     from app.config import Settings, DATABASE_ACCESS_DISABLED
     from app.db import engine as engine_mod
     monkeypatch.setattr(engine_mod, "settings", Settings(_env_file=None))
     engine_mod.get_control_engine.cache_clear()
     engine_mod.get_readonly_engine.cache_clear()
     engine_mod.get_executor_engine.cache_clear()
-    for getter in (engine_mod.get_control_engine, engine_mod.get_readonly_engine,
-                   engine_mod.get_terminator_engine, engine_mod.get_executor_engine):
+    # 查询类允许(create_engine 惰性,不真连)
+    assert engine_mod.get_control_engine() is not None
+    assert engine_mod.get_readonly_engine() is not None
+    # 处置类禁用(副作用)
+    for getter in (engine_mod.get_terminator_engine, engine_mod.get_executor_engine):
         with pytest.raises(DATABASE_ACCESS_DISABLED):
             getter()
 

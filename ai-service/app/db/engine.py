@@ -6,9 +6,17 @@ from app.config import DATABASE_ACCESS_DISABLED, settings
 
 
 def _deny_if_offline() -> None:
+    """offline_eval 是评测环境:允许控制/只读查询(Agent 调查落库是核心),
+    但处置类连接(executor/terminator)禁用——评测不得触发 KILL 等副作用。
+    V1.6 修正:早期设计"offline_eval 禁全部 DB"与 Agent 落库冲突。"""
+    return
+
+
+def _deny_side_effect_if_offline() -> None:
+    """处置副作用连接:offline_eval 下禁用。"""
     if settings.run_profile == "offline_eval":
         raise DATABASE_ACCESS_DISABLED(
-            f"run_profile={settings.run_profile} 禁止数据库访问(offline_eval)")
+            f"run_profile={settings.run_profile} 禁止处置类数据库访问(executor/terminator)")
 
 
 @lru_cache
@@ -29,7 +37,7 @@ def get_readonly_engine() -> Engine:
 def get_executor_engine() -> Engine:
     """fix_executor:仅目标表 INDEX 权限,只允许 execute_fix Action 使用。
     V1.6:使用独立 fix_executor_db_url,禁止从 control URL 派生(设计 §5)。"""
-    _deny_if_offline()
+    _deny_side_effect_if_offline()
     url = settings.fix_executor_db_url
     if not url:
         if settings.run_profile != "local":
@@ -43,8 +51,8 @@ def get_executor_engine() -> Engine:
 
 def get_terminator_engine() -> Engine:
     """session_terminator:会话终止专用连接(按需,不缓存——由 session_terminator 模块使用)。
-    V1.6:offline_eval 禁 DB;非 local 下缺 URL 直接失败(禁止回退只读引擎)。"""
-    _deny_if_offline()
+    V1.6:offline_eval 禁处置(副作用);非 local 下缺 URL 直接失败。"""
+    _deny_side_effect_if_offline()
     url = settings.session_terminator_db_url
     if not url:
         if settings.run_profile != "local":
@@ -55,5 +63,5 @@ def get_terminator_engine() -> Engine:
 
 def get_engine_from_url(url: str) -> Engine:
     """按 URL 创建独立连接(不缓存);供 session_terminator 等按需连接使用。"""
-    _deny_if_offline()
+    _deny_side_effect_if_offline()
     return create_engine(url, pool_pre_ping=True, pool_recycle=1800)

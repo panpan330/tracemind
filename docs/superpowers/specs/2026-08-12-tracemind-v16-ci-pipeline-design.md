@@ -214,8 +214,8 @@ services:
 
 #### 3.2.4 offline-evaluation(无 DB)
 
-- **Run Profile `offline_eval`**:数据库访问禁用,代码意外访问 → `DATABASE_ACCESS_DISABLED`;LLM=fake。
-- 已核实:`eval_agent.py` 用 `InMemorySaver()` + fixture 文件,不落控制库、结果只写文件 → 无需 MySQL。
+- **Run Profile `offline_eval`**:评测环境——允许控制库/只读查询(Agent 调查落库是核心,非外部服务),**禁用处置副作用**(executor/terminator → `DATABASE_ACCESS_DISABLED`);LLM=fake。
+- 已核实:`eval_agent.py` 用 `InMemorySaver()` + fixture 文件,但 Agent 调查会写控制库(evidence/hypothesis/proposal)——需 MySQL service 提供控制库。
 - **评测数量动态化**:版本化 Case Manifest 声明 `expectedCases`;执行时动态发现 N 条并断言 `discovered == expected && executed == discovered`;新增 SCN-003 不需改 workflow。
 - **契约校验对比"已提交基线"**(`evaluation/contracts/`):
   - `mcp-tool-contract.json`:当前 schema 重算 Hash ≠ 已提交 Hash → 失败;Version 升但 Hash 没变 → 警告/失败;工具数量以 Manifest 为准。
@@ -434,13 +434,13 @@ CLEANUP_FAILED
 |---|---|---|---|
 | `local` | 可默认 localhost | `fake` / `real_demo` / `real_strict` | 允许 |
 | `ci_db` | 全部 URL 必填 | `fake` | 禁止默认 |
-| `offline_eval` | **禁用**(访问→`DATABASE_ACCESS_DISABLED`) | `fake` | 禁止创建 engine |
+| `offline_eval` | 允许控制/只读;禁处置(executor/terminator) | `fake` | 控制库必填 |
 | `full_e2e` | 全部 URL 必填 | `real_strict`(必须断言 `degraded=false`) | 禁止默认 |
 | `production` | 全部 URL 必填 | 按部署策略显式选择(不写模糊 `real`) | 禁止默认 |
 
 - LLM 模式沿用 V1.1 既有定义:`fake` / `real_demo`(模型失败降级并标记 `degraded`)/ `real_strict`(失败即 needs_human,禁降级)。**不在 V1.6 引入未定义的 `real`**。
 - Run Profile 负责基础设施配置,LLM Mode 负责模型失败与降级语义,两者**保持正交**。
-- 关键:`offline_eval` 下代码意外访问数据库抛 `DATABASE_ACCESS_DISABLED`,不偷偷连 localhost。
+- 关键:`offline_eval` 下处置类连接(executor/terminator)抛 `DATABASE_ACCESS_DISABLED`(评测不得触发 KILL 副作用);控制/只读查询允许(Agent 调查落库)。
 
 ### 5.2 迁移器(见 §2.3)
 

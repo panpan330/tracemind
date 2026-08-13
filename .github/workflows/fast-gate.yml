@@ -175,6 +175,16 @@ jobs:
   offline-evaluation:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0.39
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pwd
+          MYSQL_DATABASE: tracemind_control
+          TZ: UTC
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d
@@ -183,14 +193,28 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - name: Offline evaluation (no DB, fake LLM)
+      - name: Install deps (uv sync)
+        run: |
+          cd ai-service
+          uv sync --frozen
+      - name: Init CI DB (评测落控制库)
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pwd
+          TRACEMIND_DB_CONTROL_APP_PASSWORD: ci_control_pwd
+          TRACEMIND_DB_APP_BUSINESS_PASSWORD: ci_business_pwd
+          TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD: ci_investigator_pwd
+          TRACEMIND_DB_FIX_EXECUTOR_PASSWORD: ci_fix_pwd
+          TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD: ci_terminator_pwd
+          CI_PYTHON: ${{ github.workspace }}/ai-service/.venv/bin/python
+        run: bash scripts/ci/init_ci_db.sh
+      - name: Offline evaluation (fake LLM, 控制库落库)
         env:
           TRACEMIND_RUN_PROFILE: offline_eval
           TRACEMIND_LLM_MODE: fake
           TRACEMIND_EVAL_MODE: "true"
+          TRACEMIND_CONTROL_DB_URL: mysql+pymysql://tracemind_control_app:ci_control_pwd@127.0.0.1:3306/tracemind_control
         run: |
           cd ai-service
-          uv sync --frozen
           uv run python ../scripts/ci/ci_manifest.py check
           uv run python ../scripts/eval_agent.py --mode offline --llm fake --runs 1
       - name: Upload reports
@@ -221,7 +245,8 @@ jobs:
           shellcheck scripts/ci/*.sh
       - name: CI 自身测试 (unit)
         run: |
-          cd scripts/ci && python -m pytest test_check_coverage.py -q
+          cd ai-service && uv sync --frozen
+          cd ../scripts/ci && python -m pytest test_check_coverage.py -q
       - name: Upload reports
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
