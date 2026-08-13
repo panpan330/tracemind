@@ -1,0 +1,88 @@
+# CI 覆盖:显式服务 + 资源限制 + 零真实凭据(变量引用,值来自 Job Env / GitHub Secrets)。
+# 用法:
+#   docker compose -f compose.yml -f compose.ci.yml up -d --build mysql qdrant prometheus \
+#     otel-collector jaeger order-service inventory-service ai-service
+# 注意:jaeger 在 compose.yml 有 profiles:[observability-ui],CI 启动需 --profile observability-ui
+#      (compose 的 profile 合并取并集,无法在覆盖文件中移除)。
+services:
+  mysql:
+    image: ${TRACEMIND_MYSQL_IMAGE:-mysql:8.0.39}
+    mem_limit: 1024m
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?required}
+      MYSQL_DATABASE: tracemind_control
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+
+  # qdrant:基础 compose 无此服务,CI 补定义(Full E2E 真实模型 + RAG 需要)
+  qdrant:
+    image: qdrant/qdrant:v1.9.7
+    container_name: tracemind-qdrant
+    mem_limit: 512m
+    ports:
+      - "6333:6333"
+    networks: [tracemind]
+
+  prometheus:
+    mem_limit: 384m
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2h
+      - --storage.tsdb.path=/prometheus
+
+  jaeger:
+    mem_limit: 512m
+    environment:
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "20000"
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  otel-collector:
+    mem_limit: 192m
+
+  order-service:
+    mem_limit: 1024m
+    environment:
+      ORDER_SERVICE_PORT: "8081"
+      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      BUSINESS_DB_USER: app_business
+      BUSINESS_DB_PASSWORD: ${TRACEMIND_DB_APP_BUSINESS_PASSWORD:?required}
+      INVENTORY_SERVICE_URL: "http://inventory-service:8082"
+
+  inventory-service:
+    mem_limit: 1024m
+    environment:
+      INVENTORY_SERVICE_PORT: "8082"
+      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      BUSINESS_DB_USER: app_business
+      BUSINESS_DB_PASSWORD: ${TRACEMIND_DB_APP_BUSINESS_PASSWORD:?required}
+      DEMO_MODE: "true"
+      DEMO_KEY: demo-secret-2026
+
+  ai-service:
+    # 覆盖基础 env_file:.env.vm 在 CI 不存在;全部凭据走变量注入
+    env_file: []
+    environment:
+      TRACEMIND_RUN_PROFILE: full_e2e
+      TRACEMIND_LLM_MODE: real_strict
+      TRACEMIND_CONTROL_DB_URL: "mysql+pymysql://tracemind_control_app:${TRACEMIND_DB_CONTROL_APP_PASSWORD:?required}@mysql:3306/tracemind_control"
+      TRACEMIND_READONLY_DB_URL: "mysql+pymysql://ai_investigator:${TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD:?required}@mysql:3306/tracemind_business"
+      TRACEMIND_SESSION_TERMINATOR_DB_URL: "mysql+pymysql://session_terminator:${TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD:?required}@mysql:3306/"
+      TRACEMIND_FIX_EXECUTOR_DB_URL: "mysql+pymysql://fix_executor:${TRACEMIND_DB_FIX_EXECUTOR_PASSWORD:?required}@mysql:3306/tracemind_business"
+      TRACEMIND_ORDER_SERVICE_URL: "http://order-service:8081"
+      TRACEMIND_INVENTORY_SERVICE_URL: "http://inventory-service:8082"
+      TRACEMIND_DEMO_MODE: "true"
+      TRACEMIND_DEMO_KEY: demo-secret-2026
+      TRACEMIND_CHAT_API_KEY: ${TRACEMIND_CHAT_API_KEY:?required}
+      TRACEMIND_CHAT_BASE_URL: ${TRACEMIND_CHAT_BASE_URL:?required}
+      TRACEMIND_CHAT_MODEL: ${TRACEMIND_CHAT_MODEL:?required}
+      TRACEMIND_EVAL_CHAT_MODEL: ${TRACEMIND_EVAL_CHAT_MODEL:?required}
+      TRACEMIND_EMBEDDING_MODEL: text-embedding-v4
+      TRACEMIND_EMBEDDING_DIMENSIONS: "1024"
+      TRACEMIND_METRICS_BACKEND: prometheus
+      TRACEMIND_TRACE_BACKEND: jaeger
+      TRACEMIND_PROMETHEUS_URL: "http://prometheus:9090"
+      TRACEMIND_JAEGER_QUERY_ENDPOINT: "jaeger:16685"
