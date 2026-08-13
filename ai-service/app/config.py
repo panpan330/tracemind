@@ -1,13 +1,21 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class DATABASE_ACCESS_DISABLED(RuntimeError):
+    """offline_eval profile 下访问数据库的统一异常。"""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TRACEMIND_", env_file=".env.local", extra="ignore")
+
+    # ---- Run Profile(local|ci_db|offline_eval|full_e2e|production)----
+    run_profile: str = "local"
 
     control_db_url: str = "mysql+pymysql://tracemind_control_app:control_app_pwd@localhost:3306/tracemind_control"
     readonly_db_url: str = "mysql+pymysql://ai_investigator:investigator_pwd@localhost:3306/tracemind_business"
     # 会话终止专用账号(TRACEMIND_SESSION_TERMINATOR_DB_URL);为空时回退只读引擎(仅查询,无法 KILL)
     session_terminator_db_url: str = ""
+    fix_executor_db_url: str = ""
     order_service_url: str = "http://localhost:8081"
     inventory_service_url: str = "http://localhost:8082"
     demo_mode: bool = False
@@ -85,6 +93,29 @@ class Settings(BaseSettings):
     @property
     def chat_model_resolved(self) -> str:
         return self.chat_model or self.llm_model
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._fail_closed_check()
+
+    def _fail_closed_check(self) -> None:
+        """Run Profile fail-closed:严格 profile 缺 URL / LLM 模式不匹配 → 启动失败。"""
+        required = {
+            "ci_db": ["control_db_url", "readonly_db_url",
+                      "session_terminator_db_url", "fix_executor_db_url"],
+            "full_e2e": ["control_db_url", "readonly_db_url",
+                         "session_terminator_db_url", "fix_executor_db_url"],
+            "production": ["control_db_url", "readonly_db_url",
+                           "session_terminator_db_url", "fix_executor_db_url"],
+        }
+        for name in required.get(self.run_profile, []):
+            if not getattr(self, name):
+                raise ValueError(f"[{self.run_profile}] 缺少 TRACEMIND_{name.upper()}")
+        llm_ok = {"ci_db": {"fake"}, "offline_eval": {"fake"}, "full_e2e": {"real_strict"}}
+        allowed = llm_ok.get(self.run_profile)
+        if allowed and self.llm_mode not in allowed:
+            raise ValueError(
+                f"[{self.run_profile}] LLM 模式必须为 {sorted(allowed)},当前 {self.llm_mode}")
 
 
 settings = Settings()
