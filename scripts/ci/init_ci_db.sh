@@ -8,6 +8,14 @@ DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-3306}"
 MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:?需设置 MYSQL_ROOT_PASSWORD}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# Python 解释器:可注入(CI 用 ai-service venv);缺省优先 python3(VM)
+if [ -n "${CI_PYTHON:-}" ]; then
+  PYTHON="$CI_PYTHON"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON="python3"
+else
+  PYTHON="python"
+fi
 
 mysql_() {
   mysql --host="$DB_HOST" --port="$DB_PORT" --user="$1" "--password=$2" "${@:3}"
@@ -24,9 +32,9 @@ done
 
 echo "[init_ci_db] 2) 建库 + 迁移 + 账号 Provisioning"
 export TRACEMIND_MIGRATE_DB_URL="mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@${DB_HOST}:${DB_PORT}/"
-python "$REPO_ROOT/scripts/db/migrate.py" --init-db --migrations "$REPO_ROOT/scripts/db/migrations"
-python "$REPO_ROOT/scripts/db/migrate.py" --migrations "$REPO_ROOT/scripts/db/migrations"
-python "$REPO_ROOT/scripts/db/migrate.py" --provision --migrations "$REPO_ROOT/scripts/db/migrations"
+"$PYTHON" "$REPO_ROOT/scripts/db/migrate.py" --init-db --migrations "$REPO_ROOT/scripts/db/migrations"
+"$PYTHON" "$REPO_ROOT/scripts/db/migrate.py" --migrations "$REPO_ROOT/scripts/db/migrations"
+"$PYTHON" "$REPO_ROOT/scripts/db/migrate.py" --provision --migrations "$REPO_ROOT/scripts/db/migrations"
 
 echo "[init_ci_db] 3) 最小确定性 fixture(可选:由调用方提供 SQL)"
 if [ -n "${CI_FIXTURE_SQL:-}" ] && [ -f "$CI_FIXTURE_SQL" ]; then

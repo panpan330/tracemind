@@ -34,6 +34,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - name: Install deps (uv sync)
+        run: |
+          cd ai-service
+          uv sync --frozen
       - name: Init CI DB
         env:
           MYSQL_ROOT_PASSWORD: ci_root_pwd
@@ -42,6 +46,8 @@ jobs:
           TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD: ci_investigator_pwd
           TRACEMIND_DB_FIX_EXECUTOR_PASSWORD: ci_fix_pwd
           TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD: ci_terminator_pwd
+          # 用 ai-service venv 的 python(pymysql 依赖在其中)
+          CI_PYTHON: ${{ github.workspace }}/ai-service/.venv/bin/python
         run: bash scripts/ci/init_ci_db.sh
       - name: Python tests (ci_db profile, coverage)
         env:
@@ -56,7 +62,6 @@ jobs:
           TRACEMIND_EVAL_MODE: "true"
         run: |
           cd ai-service
-          uv sync --frozen
           uv run pytest --cov=app --cov-report=xml:../reports/generated/coverage-python/coverage.xml tests/ -q
       - name: Check python coverage
         run: |
@@ -108,7 +113,9 @@ jobs:
           TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD: ci_investigator_pwd
           TRACEMIND_DB_FIX_EXECUTOR_PASSWORD: ci_fix_pwd
           TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD: ci_terminator_pwd
-        run: bash scripts/ci/init_ci_db.sh
+        run: |
+          pip install --quiet pymysql
+          bash scripts/ci/init_ci_db.sh
       - name: Maven unit tests (surefire only)
         env:
           BUSINESS_DB_URL: jdbc:mysql://127.0.0.1:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
@@ -207,7 +214,7 @@ jobs:
           python-version: "3.12"
       - name: actionlint (workflow syntax)
         run: |
-          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- v1.7.7
+          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- 1.7.7
           ./actionlint -color .github/workflows/
       - name: shellcheck
         run: |

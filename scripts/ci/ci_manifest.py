@@ -22,7 +22,9 @@ def canonical(obj) -> str:
 
 
 def sha256_bytes(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+    """规范化后 hash:CRLF→LF(gitattributes eol=lf 使 CI checkout 为 LF;
+    本地 Windows 文件可能 CRLF,不规范化会导致 CI/本地 hash 不一致)。"""
+    return hashlib.sha256(b.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def _extract_const(path: Path, name: str) -> str:
