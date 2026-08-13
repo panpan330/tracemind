@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 // 完整演示闭环冒烟:重置 → 健康负载 → 注入 → 创建 → 调查(+故障负载) → 审批 → 恢复 → 报告
 // 需要后端全栈已运行(docker compose up -d,全部 healthy);负载经 order-service HTTP 直打
 
-const ORDER_URL = process.env.ORDER_URL || 'http://192.168.88.10:8081'
+const ORDER_URL = process.env.ORDER_URL || 'http://localhost:8081'
 
 async function runLoad(seconds = 8, qps = 15) {
   const deadline = Date.now() + seconds * 1000

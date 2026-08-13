@@ -3,7 +3,7 @@
 前置:docker compose 全部 healthy;AI 服务 :8000、order :8081 可从本机访问。
 用法:
   python scripts/verify-m5.py                                # localhost 全栈
-  python scripts/verify-m5.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081
+  python scripts/verify-m5.py --base http://<vm-host>:8000 --order http://<vm-host>:8081
 """
 import argparse
 import os

@@ -1,5 +1,5 @@
 """V1.4 观测弹性验收:停/复 Prometheus、Jaeger、Collector,验证不回退 internal 观测。
-用法(VM): python scripts/verify-observability-resilience.py --base http://192.168.88.10:8000
+用法(VM): python scripts/verify-observability-resilience.py --base http://<vm-host>:8000
 依赖:VM 上 docker 可操作(docker compose stop/start 观测服务)。
 """
 import argparse

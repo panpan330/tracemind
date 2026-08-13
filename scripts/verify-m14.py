@@ -1,7 +1,7 @@
 """V1.4 观测验收:SCN-001/SCN-002 各 3 轮 + 观测后端证据断言。
 用法:
   本地 fixture 冒烟: python scripts/verify-m14.py --base http://localhost:8000 --order http://localhost:8081 --fixture
-  VM 全量验收:    python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081
+  VM 全量验收:    python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081
 前提:全栈已部署(compose up);真实模式要求 metrics_backend=prometheus + trace_backend=jaeger。
 """
 import argparse
@@ -131,7 +131,9 @@ def main() -> int:
     p.add_argument("--scenario", choices=["SCN-001", "SCN-002", "all"], default="all")
     args = p.parse_args()
     args.order_host = args.order.replace("http://", "").split(":")[0]
-    args.jaeger_host = "192.168.88.10" if not args.fixture else "localhost"
+    # jaeger 与 ai-service 同机(VM 验收):从 --base 推导,避免硬编码内部 IP
+    args.jaeger_host = (args.base.replace("http://", "").split(":")[0]
+                        if not args.fixture else "localhost")
     scenarios = ["SCN-001", "SCN-002"] if args.scenario == "all" else [args.scenario]
     try:
         for sc in scenarios:

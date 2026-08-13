@@ -26,7 +26,7 @@
 
 - **复用已有仓库**:`https://github.com/panpan330/tracemind.git`。本地无 remote → `git remote add origin <该地址>` 重新绑定;不新建、不覆盖远端。绑定前对比本地与远端提交历史,确认推送策略。
 - **首次推送前敏感信息扫描**(`.gitignore` 拦不住 git 历史):
-  - 工作区当前文件:`sk-` / `Bearer` / `panhangyu` / `192.168.88.10` / `demo-secret` / 百炼 key 等模式。
+  - 工作区当前文件:`sk-` / `Bearer` / VM 口令 / VM 地址 / `demo-secret` / 百炼 key 等模式。
   - **git 历史**:`git log -p` 全历史 grep `.env` / key / 密码;若历史已含真实凭据 → `git filter-repo` 清理或换新 key。
   - `reports/` 与评测输出(现状已查无 `sk-` / VM 地址,仍列入扫描清单)。
 - **私有仓分支保护限制(文档写清,不承诺)**:GitHub Free 私有仓 Actions 可用,但 Branch Protection / Rulesets 通常需 Pro(Free 主要面向公开仓)。开发期私有无 Pro → fast-gate 会执行但可能无法强制阻断合并;求职前转公开或升级 Pro 后启用 Required Check。

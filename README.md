@@ -244,8 +244,8 @@ ai-service(TRACEMIND_METRICS_BACKEND / TRACE_BACKEND 切换)
 # 本地 fixture 冒烟(不需要 Prometheus/Jaeger)
 python scripts/verify-m14.py --base http://localhost:8000 --order http://localhost:8081 --fixture --rounds 1
 # VM 全量验收(全栈 + 观测栈;要求 metrics_backend=prometheus + trace_backend=jaeger)
-python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081
-python scripts/verify-observability-resilience.py --base http://192.168.88.10:8000
+python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081
+python scripts/verify-observability-resilience.py --base http://<vm-host>:8000
 python scripts/verify-grafana-smoke.py --grafana http://127.0.0.1:3000
 python scripts/run_regression.py --tier full   # full 档强制真实后端
 ```
@@ -276,11 +276,50 @@ Agent 节点执行 → ReplayWriter           Replay API(按 Run 限定)
 # 本地 fixture 验收(需本地 MySQL + 三个服务已启动)
 python scripts/verify-m15.py --base http://localhost:8000 --order http://localhost:8081
 # VM 全栈验收(代码同步 + 镜像重建后执行;--order 的 host 自动作为 pymysql 直连地址)
-python scripts/verify-m15.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081
+python scripts/verify-m15.py --base http://<vm-host>:8000 --order http://<vm-host>:8081
 ```
 
 - 断言内容:SCN-002 完整闭环 → `replayStatus=complete` + 11 类必需步骤 + `runOutcome=recovered`;rejected 路径 → `runOutcome=rejected` 且不要求 `FIX_EXECUTED`;只读无副作用(重复读取一致 / runId 归属 404)。
 - **部署注意**:compose 部署下 ai-service 必须配 `TRACEMIND_SESSION_TERMINATOR_DB_URL`(缺省时处置 KILL 回退只读账号报 500),本地直接跑 python 用 `.env.local` 不受影响。
+
+## V1.6:CI 化回归与评测流水线(GitHub Actions)
+
+### Fast 持续门禁 + Full 手动发布验收
+
+```
+Fast(fast-gate.yml,每次 PR/main push)          Full(full-e2e.yml,手动触发)
+├─ python-tests(MySQL service, ci_db profile)   ├─ preflight(无 Secret,ref/SemVer/祖先校验)
+├─ java-tests(MySQL service, surefire)          ├─ verify-fast-gate(Check Run 校验)
+├─ web-tests(typecheck + vitest + build)        └─ full-e2e(Environment Secrets)
+├─ offline-evaluation(fake LLM, 无 DB)              ├─ compose.ci 全栈(真实模型 real_strict)
+└─ ci-quality(actionlint/shellcheck/单测)          ├─ SCN-001/002 E2E + Replay Backend 验收
+   ↓ 汇聚(5 结果全 success)                          └─ 日志脱敏 + 报告 + 清理
+   fast-gate(Required Check)
+```
+
+- **职责分离**:普通提交用不依赖真实模型和运行时外部服务的确定性测试保障快速反馈;发布前通过真实模型与真实基础设施完成全栈验收。
+- **正式迁移器**:`scripts/db/migrate.py`(唯一入口,checksum/幂等/Advisory Lock/账号 Provisioning),迁移文件 `scripts/db/migrations/`;本地/Compose/CI 共用。
+- **Run Profile**:`TRACEMIND_RUN_PROFILE = local|ci_db|offline_eval|full_e2e|production`(fail-closed:严格档缺 URL / LLM 模式不匹配即启动失败;offline_eval 禁数据库访问)。
+- **覆盖率门禁**:`evaluation/thresholds/coverage.json`(基线:Python 78.51 / Web 82.25·71.74 / Java 单测聚合),`check_coverage.py` 防下调。
+- **契约基线**:`evaluation/contracts/`(MCP/Policy/Replay 版本与 Hash),`ci_manifest.py generate|check`。
+- **真实模型**:Full 用 `real_strict`(断言 `degraded=false`);百炼 Key 只在 full-e2e Environment,日志经脱敏后上传。
+
+### 验证命令
+
+```bash
+# Fast 本地模拟(需本地 MySQL)
+python scripts/db/migrate.py --init-db --migrations scripts/db/migrations
+python scripts/ci/ci_manifest.py check
+python scripts/ci/scan_secrets.py
+# Full dry-run(零副作用,出阶段计划)
+bash scripts/ci/run_full_e2e.sh --dry-run --scope smoke
+# Full 真实执行(需 Docker + 真实模型凭据;VM 上叫 Smoke Rehearsal)
+bash scripts/ci/run_full_e2e.sh --scope smoke
+```
+
+### 手工配置
+
+详见 [`docs/ci/GITHUB_ACTIONS_SETUP.md`](docs/ci/GITHUB_ACTIONS_SETUP.md)(Environment/Secrets/分支保护限制/触发方式/Key 轮换)。
 
 ## 版本历史
 
@@ -290,3 +329,4 @@ python scripts/verify-m15.py --base http://192.168.88.10:8000 --order http://192
 - **V1.3**:多故障场景 SCN-002 锁等待 + 双 Policy 诊断 + 处置安全 + 回归评测流水线
 - **V1.4**:真实可观测性(OTel Agent + Prometheus + Jaeger + Grafana)+ 观测审计 + 回归强制真实后端
 - **V1.5**:证据与决策链回放(调查时不可变快照 + 只读 Replay API + 前端回放页)+ Run 级版本冻结与恢复前校验
+- **V1.6**:CI 化回归与评测流水线(Fast 五 Job 持续门禁 + Full 手动发布验收)+ 正式迁移器 + Run Profile fail-closed + 覆盖率/契约基线
