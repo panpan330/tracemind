@@ -1,10 +1,15 @@
--- V1.3 迁移:fix_proposal.blocking_relation_hash + fix_execution + lock_observation(幂等)
-SET @schema := IF(DATABASE() = '', 'tracemind_control', DATABASE());
-SET @ddl1 := CONCAT('ALTER TABLE ', @schema, '.fix_proposal ADD COLUMN blocking_relation_hash VARCHAR(64) NULL');
-PREPARE stmt1 FROM @ddl1;
--- MySQL 无 ADD COLUMN IF NOT EXISTS:用存储过程/异常捕获,或直接执行(重跑报错)。
--- 简化:直接建表(IF NOT EXISTS)+ 列检测由初始化脚本跳过已有列。
-DEALLOCATE PREPARE stmt1;
+-- V1.3 迁移:fix_proposal.blocking_relation_hash + fix_execution + lock_observation
+-- 幂等:用 information_schema 判断列是否存在(与 005 同风格,可重复执行)
+USE tracemind_control;
+
+-- fix_proposal.blocking_relation_hash(若不存在则添加)
+SET @have_col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA='tracemind_control' AND TABLE_NAME='fix_proposal'
+                    AND COLUMN_NAME='blocking_relation_hash');
+SET @ddl := IF(@have_col = 0,
+  'ALTER TABLE tracemind_control.fix_proposal ADD COLUMN blocking_relation_hash VARCHAR(64) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 CREATE TABLE IF NOT EXISTS fix_execution (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,

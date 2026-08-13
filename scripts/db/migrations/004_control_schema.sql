@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS incident_event (
 ) ENGINE=InnoDB;
 
 -- model_call:LLM 逻辑调用审计(含每次尝试)
-CREATE TABLE tracemind_control.model_call (
+CREATE TABLE IF NOT EXISTS tracemind_control.model_call (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   incident_id BIGINT NOT NULL,
   agent_run_id BIGINT NOT NULL,
@@ -181,7 +181,7 @@ CREATE TABLE tracemind_control.model_call (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- retrieval_record:RAG 检索审计(知识参考,不参与 E 闸门)
-CREATE TABLE tracemind_control.retrieval_record (
+CREATE TABLE IF NOT EXISTS tracemind_control.retrieval_record (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   incident_id BIGINT NOT NULL,
   agent_run_id BIGINT NOT NULL,

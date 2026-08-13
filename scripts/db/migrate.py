@@ -7,6 +7,8 @@
 import argparse
 import hashlib
 import os
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -14,6 +16,9 @@ from pathlib import Path
 import pymysql
 
 DEFAULT_MIGRATIONS = Path(__file__).parent / "migrations"
+
+# 当前连接配置(供 _apply 的 CLI 分支复用)
+_conn_cfg: dict = {}
 
 # (用户名, 密码环境变量, 角色) —— 与 002_users_roles.sql 的 Role 对应
 ACCOUNTS = [
@@ -42,10 +47,14 @@ def _parse_url(url: str) -> dict:
 
 
 def _connect(url: str) -> pymysql.connections.Connection:
-    cfg = _parse_url(url)
+    global _conn_cfg
+    _conn_cfg = _parse_url(url)
+    cfg = _conn_cfg
+    # MULTI_STATEMENTS:迁移文件含 USE + 多条 DDL,一次 execute 需启用
     return pymysql.connect(host=cfg["host"], port=cfg["port"], user=cfg["user"],
                            password=cfg["password"], database=cfg["db"] or None,
-                           charset="utf8mb4", autocommit=False)
+                           charset="utf8mb4", autocommit=False,
+                           client_flag=pymysql.constants.CLIENT.MULTI_STATEMENTS)
 
 
 def _checksum(path: Path) -> str:
@@ -73,11 +82,25 @@ def _sorted_migrations(migrations_dir: Path) -> list[Path]:
     return files
 
 
-def _apply(cur, path: Path) -> None:
-    """整文件执行:05/06 迁移用 PREPARE/EXECUTE 多语句,pymysql 一次 execute 可处理。
-    不 split(';') —— 避免注释/DELIMITER 误切。"""
-    sql = path.read_text(encoding="utf-8")
-    cur.execute(sql)
+def _apply(cur, conn, path: Path) -> None:
+    """执行迁移文件:全部走 mysql CLI(独立进程)。
+    原因:pymysql 多语句 'USE db; DDL' 会挂起;Windows 下 subprocess stdin 管道喂 SQL
+    给 mysql 也会挂起 → 用 --execute="SOURCE <abs_path>"(CLI 原生读文件,不经 stdin)。
+    CLI 独立进程,天然支持多语句文件(USE/PREPARE/EXECUTE),不污染连接状态。"""
+    import shutil
+    exe = shutil.which("mysql")
+    if not exe:
+        raise RuntimeError("需要 mysql CLI(迁移执行器依赖)")
+    cfg = _conn_cfg
+    env = dict(os.environ, MYSQL_PWD=cfg["password"])
+    cmd = [exe, "--host", cfg["host"], "--port", str(cfg["port"]),
+           "--user", cfg["user"], "--default-character-set=utf8mb4",
+           "--execute", f"SOURCE {path.resolve()}"]
+    if cfg.get("db"):
+        cmd.append(cfg["db"])
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise RuntimeError(f"mysql CLI 执行失败: {r.stderr[:500]}")
 
 
 def run_migrations(conn, migrations_dir: Path, dry_run: bool = False) -> int:
@@ -112,7 +135,7 @@ def run_migrations(conn, migrations_dir: Path, dry_run: bool = False) -> int:
                 conn.commit()
                 t0 = time.time()
                 try:
-                    _apply(cur, path)
+                    _apply(cur, conn, path)
                     cur.execute(
                         "UPDATE schema_migrations SET status='applied', applied_at=NOW(), "
                         "execution_ms=%s WHERE filename=%s",
@@ -132,15 +155,75 @@ def run_migrations(conn, migrations_dir: Path, dry_run: bool = False) -> int:
             cur.execute("SELECT RELEASE_LOCK('tracemind_migrations')")
 
 
+def _init_databases(conn) -> int:
+    """执行 scripts/db/create_databases.sql(建库,连接可不带库名)。走 mysql CLI
+    --execute="SOURCE <abs>"(pymysql 多语句建库挂起,stdin 管道在 Windows 也挂起)。"""
+    path = Path(__file__).parent / "create_databases.sql"
+    if not path.exists():
+        print(f"FATAL: {path} 不存在", file=sys.stderr)
+        return 1
+    import shutil
+    exe = shutil.which("mysql")
+    if not exe:
+        print("FATAL: 需要 mysql CLI", file=sys.stderr)
+        return 1
+    cfg = _conn_cfg
+    env = dict(os.environ, MYSQL_PWD=cfg["password"])
+    r = subprocess.run([exe, "--host", cfg["host"], "--port", str(cfg["port"]),
+                        "--user", cfg["user"], "--default-character-set=utf8mb4",
+                        "--execute", f"SOURCE {path.resolve()}"],
+                       capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        print(f"FATAL: mysql CLI 建库失败: {r.stderr[:500]}", file=sys.stderr)
+        return 1
+    print("INIT-DB create_databases.sql OK")
+    return 0
+
+
 def run_provision(conn) -> int:
-    """账号 Provisioning:密码只来自环境变量,参数化,不拼进 SQL 文件。幂等。"""
+    """账号 Provisioning:密码只来自环境变量,参数化,不拼进 SQL 文件。幂等。
+    自包含:确保角色存在(不依赖迁移文件已执行),再建用户/绑定角色/授权。"""
+    # (角色, 授权语句列表) —— 与 003_users_roles.sql 保持同步(迁移文件对角色做相同授权)
+    ROLE_GRANTS = {
+        "role_control_app": [
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_control.* TO 'role_control_app'",
+            "GRANT CREATE TEMPORARY TABLES ON tracemind_control.* TO 'role_control_app'",
+        ],
+        "role_app_business": [
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_business.* TO 'role_app_business'",
+            "GRANT INDEX ON tracemind_business.* TO 'role_app_business'",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON tracemind_business_test.* TO 'role_app_business'",
+        ],
+        "role_ai_investigator": [
+            "GRANT SELECT ON tracemind_business.* TO 'role_ai_investigator'",
+            "GRANT SELECT ON tracemind_business_test.* TO 'role_ai_investigator'",
+            "GRANT SELECT ON performance_schema.* TO 'role_ai_investigator'",
+            "GRANT PROCESS ON *.* TO 'role_ai_investigator'",
+        ],
+        "role_fix_executor": [
+            "GRANT INDEX ON tracemind_business.* TO 'role_fix_executor'",
+        ],
+        "role_session_terminator": [
+            "GRANT SELECT ON performance_schema.* TO 'role_session_terminator'",
+            "GRANT PROCESS ON *.* TO 'role_session_terminator'",
+            "GRANT CONNECTION_ADMIN ON *.* TO 'role_session_terminator'",
+        ],
+    }
     with conn.cursor() as cur:
+        # 1) 确保角色存在 + 授权
+        for role, grants in ROLE_GRANTS.items():
+            cur.execute("CREATE ROLE IF NOT EXISTS %s", (role,))
+            for g in grants:
+                cur.execute(g)
+            conn.commit()
+        # 2) 创建/更新账号 + 绑定角色
         for user, pwd_env, role in ACCOUNTS:
             pwd = os.environ.get(pwd_env)
             if not pwd:
                 print(f"FATAL: 缺 {pwd_env}", file=sys.stderr)
                 return 1
             cur.execute("CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY %s", (user, pwd))
+            cur.execute("ALTER USER %s@'%%' IDENTIFIED BY %s", (user, pwd))
             cur.execute("GRANT %s TO %s@'%%'", (role, user))
             cur.execute("SET DEFAULT ROLE ALL TO %s@'%%'", (user,))
             conn.commit()
@@ -158,6 +241,8 @@ def main() -> int:
     ap.add_argument("--migrations", default=str(DEFAULT_MIGRATIONS))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--provision", action="store_true")
+    ap.add_argument("--init-db", action="store_true",
+                    help="先执行 create_databases.sql 建库(与连接同 host,不依赖连接库存在)")
     args = ap.parse_args()
 
     url = os.environ.get("TRACEMIND_MIGRATE_DB_URL")
@@ -166,6 +251,16 @@ def main() -> int:
         return 1
     conn = _connect(url)
     try:
+        if args.init_db:
+            rc = _init_databases(conn)
+            if rc != 0:
+                return rc
+        # 确保 pymysql 有默认库(URL 无库名时切控制库,供 schema_migrations 访问)
+        with conn.cursor() as cur:
+            cur.execute("SELECT DATABASE()")
+            if not cur.fetchone()[0]:
+                cur.execute("USE tracemind_control")
+                conn.commit()
         if args.provision:
             return run_provision(conn)
         if args.cmd == "repair":

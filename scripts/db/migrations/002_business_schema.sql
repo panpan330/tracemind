@@ -1,4 +1,4 @@
--- TraceMind:业务表 DDL(幂等)
+-- TraceMind 业务库 DDL(幂等);账号与密码由 migrate.py --provision 处理,本文件不含密码
 USE tracemind_business;
 
 CREATE TABLE IF NOT EXISTS inventory (
@@ -37,6 +37,3 @@ CREATE TABLE IF NOT EXISTS scenario_audit (
   detail JSON NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
-
--- fix_executor 仅拥有目标表的 INDEX 权限(依赖 inventory 表已存在)
-GRANT INDEX ON tracemind_business.inventory TO 'fix_executor'@'%';
