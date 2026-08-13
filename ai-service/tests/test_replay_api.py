@@ -16,7 +16,7 @@ def _make_run_with_steps() -> tuple[int, int]:
     from datetime import datetime
     with Session(get_control_engine()) as s:
         r = AgentRun(incident_id=999007, thread_id=f"t-api-{uuid.uuid4().hex[:8]}",
-                     status="completed", finished_at=datetime.utcnow())
+                     status="recovered", finished_at=datetime.utcnow())
         s.add(r)
         s.commit()
         s.refresh(r)
@@ -29,6 +29,10 @@ def _make_run_with_steps() -> tuple[int, int]:
             state_before={"facts": {}})
     w.complete("INCIDENT_INGESTED", "ls-a", outcome="succeeded",
                state_after={"facts": {}})
+    # 终态步骤:完整闭环 recovered + terminationReason(供 runOutcome/terminationReason 断言)
+    w.write("RUN_TERMINATED", "completed", logical_step_id=f"ls-term-{run_id}",
+            step_outcome="succeeded",
+            decision={"runStatus": "recovered", "terminationReason": None})
     return 999007, run_id
 
 
@@ -38,6 +42,12 @@ def test_replay_manifest_and_steps():
     assert r.status_code == 200
     m = r.json()
     assert m["defaultRunId"] == run_id
+
+    rm = client.get(f"/api/incidents/{incident_id}/replay/runs/{run_id}").json()
+    assert rm["replayStatus"] == "complete"
+    assert rm["runStatus"] == "terminated"
+    assert rm["runOutcome"] == "recovered"  # spec:Manifest 单独返回 runOutcome
+    assert rm["terminationReason"] is None
 
     r2 = client.get(f"/api/incidents/{incident_id}/replay/runs/{run_id}/steps")
     assert r2.status_code == 200

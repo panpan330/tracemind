@@ -75,6 +75,27 @@ def test_check_replay_status_complete():
     assert status["replayStatus"] == "complete"
 
 
+def test_check_replay_status_returns_run_outcome_and_termination_reason():
+    """spec:Manifest 必须单独返回 runOutcome/terminationReason,避免'完整记录'被误读为'调查成功'。"""
+    # 完整闭环 recovered → runOutcome=recovered
+    status = _evaluate({"a": {"started", "completed"}}, "recovered", True,
+                       termination_reason=None)
+    assert status["runStatus"] == "terminated"
+    assert status["runOutcome"] == "recovered"
+    assert status["terminationReason"] is None
+
+    # rejected 路径 → runOutcome=rejected
+    status = _evaluate({"a": {"started", "completed"}}, "rejected", True,
+                       termination_reason="approval_rejected")
+    assert status["runOutcome"] == "rejected"
+    assert status["terminationReason"] == "approval_rejected"
+
+    # 未终止 Run → runOutcome=None(语义:调查还在进行,无结果)
+    status = _evaluate({"a": {"started"}}, "investigating", False)
+    assert status["runOutcome"] is None
+    assert status["terminationReason"] is None
+
+
 def test_key_step_indexes_selection():
     run = _run_id()
     rows = [

@@ -50,6 +50,7 @@ def replay_complete(base, incident_id):
     rm = api(base, "GET", f"/api/incidents/{incident_id}/replay/runs/{run_id}")
     assert rm["replayStatus"] == "complete", f"replayStatus={rm['replayStatus']}"
     assert rm["runStatus"] == "terminated"
+    assert rm.get("runOutcome") == "recovered", f"runOutcome={rm.get('runOutcome')}"
 
     steps = api(base, "GET", f"/api/incidents/{incident_id}/replay/runs/{run_id}/steps")
     assert steps["totalSteps"] >= 8, f"步骤过少: {steps['totalSteps']}"
@@ -193,6 +194,9 @@ def main():
     types2 = {st["stepType"] for st in steps2["steps"]}
     assert "APPROVAL_DECIDED" in types2
     assert "FIX_EXECUTED" not in types2 or steps2["keyStepIndexes"].get("execution") is None
+    # spec:Manifest 单独返回 runOutcome,rejected 路径必须是 rejected
+    assert rm.get("runOutcome") == "rejected", f"runOutcome={rm.get('runOutcome')}"
+    assert rm.get("runStatus") == "terminated"
     p(f"rejected 路径 PASS(runOutcome={rm.get('runOutcome')})")
 
     p("PASS: V1.5 回放验收全部通过")
