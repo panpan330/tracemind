@@ -5,6 +5,32 @@
   "expected": "needs_human",
   "severity": "medium",
   "tool_fixtures": {
+    "get_index_info:4da3506338b9": {
+      "ok": true,
+      "data": {
+        "indexes": []
+      }
+    },
+    "get_lock_waiters:a7b2cb65e797": {
+      "ok": true,
+      "data": {
+        "observed_at": "2026-08-11T00:00:00Z",
+        "snapshot_expires_at": "2026-08-11T00:00:20Z",
+        "waits": []
+      }
+    },
+    "get_query_plan:fd000bb90389": {
+      "ok": true,
+      "data": {
+        "explain": {
+          "query_block": {
+            "table": {
+              "access_type": "ALL"
+            }
+          }
+        }
+      }
+    },
     "get_service_metrics:0da4e0513f47": {
       "ok": true,
       "data": {
@@ -13,6 +39,17 @@
       }
     },
     "get_trace:02507a7aaf0e": {
+      "ok": true,
+      "data": {
+        "sourceBackend": "fixture",
+        "targetDbDurationMs": 20,
+        "dbDominanceRatio": 0.17,
+        "targetDbSpanId": "s3",
+        "normalizationRuleVersion": "TRACE_NORMALIZER_V1",
+        "inventoryServerDurationMs": 120
+      }
+    },
+    "get_trace:680c57fead83": {
       "ok": true,
       "data": {
         "sourceBackend": "fixture",
@@ -32,32 +69,6 @@
           "count_delta": 10
         }
       ]
-    },
-    "get_query_plan:fd000bb90389": {
-      "ok": true,
-      "data": {
-        "explain": {
-          "query_block": {
-            "table": {
-              "access_type": "ALL"
-            }
-          }
-        }
-      }
-    },
-    "get_index_info:4da3506338b9": {
-      "ok": true,
-      "data": {
-        "indexes": []
-      }
-    },
-    "get_lock_waiters:a7b2cb65e797": {
-      "ok": true,
-      "data": {
-        "observed_at": "2026-08-11T00:00:00Z",
-        "snapshot_expires_at": "2026-08-11T00:00:20Z",
-        "waits": []
-      }
     }
   }
 }

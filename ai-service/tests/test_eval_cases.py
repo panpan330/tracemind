@@ -34,6 +34,32 @@ def test_coverage_matrix():
     assert pos == 7 and neg == 17   # 7 正例(4 SCN-001 + 2 锁 + 1 INDEX-ONLY)+ 17 负例
 
 
+def test_fixture_trace_id_contract():
+    """回归:metrics 的 representativeSlowTraceId 引用的 get_trace 条目必须存在。
+    V1.6 深修:planner 在 E1 后按 trace_id 调 get_trace,fixture 若缺该 key 会
+    FIXTURE_NOT_FOUND → E2 采不到 → POS 全 FAIL(既有缺陷,7 正例被掩盖)。"""
+    import hashlib
+
+    def fixture_key(tool: str, args: dict) -> str:
+        return tool + ":" + hashlib.sha256(
+            json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+
+    files = sorted(CASES_DIR.glob("*.json"))
+    cases = [json.loads(f.read_text(encoding="utf-8")) for f in files]
+    for c in cases:
+        fx = c["tool_fixtures"]
+        for k, v in fx.items():
+            if not k.startswith("get_service_metrics:"):
+                continue
+            tid = (v.get("data") or {}).get("representativeSlowTraceId")
+            if not tid:
+                continue
+            assert fixture_key("get_trace", {"trace_id": tid}) in fx, (
+                f"{c['case_id']}: metrics 引用 representativeSlowTraceId={tid},"
+                f"但缺 get_trace:{fixture_key('get_trace', {'trace_id': tid})} 条目"
+            )
+
+
 RAG_CAL = Path(__file__).resolve().parents[2] / "data" / "retrieval_calibration_cases.json"
 RAG_TEST = Path(__file__).resolve().parents[2] / "data" / "retrieval_test_cases.json"
 
