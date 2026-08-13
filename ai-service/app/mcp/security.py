@@ -27,6 +27,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._clients = clients
 
     async def dispatch(self, request, call_next):
+        # /health/* 为运维端点,不认证(仅存活/就绪探针)
+        if request.url.path.startswith("/health"):
+            return await call_next(request)
         # Origin 校验:存在必须命中精确 Allowlist;缺失 → 认证后放行(服务间调用)
         origin = request.headers.get("origin")
         if origin is not None and "__origins__" in self._clients \

@@ -83,3 +83,13 @@ def test_client_errors_retryable_map():
     e = ClientError(MCP_DISCONNECTED, retryable=True)
     assert e.retryable is True
     assert ClientError(MCP_AUTH_FAILED, retryable=False).retryable is False
+
+
+def test_health_endpoint_skips_auth():
+    async def ok(request):
+        return JSONResponse({"status": "ready"})
+    app = Starlette(routes=[Route("/health/ready", ok)],
+                    middleware=build_security_middleware(clients_file=None))
+    with TestClient(app) as c:
+        r = c.get("/health/ready")
+        assert r.status_code == 200
