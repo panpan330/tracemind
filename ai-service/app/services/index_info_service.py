@@ -1,7 +1,7 @@
 from sqlalchemy import text
 
 from app.db.engine import get_readonly_engine
-from app.tools.schemas import TABLE_REF_WHITELIST
+from app.tools_core.schemas import TABLE_REF_WHITELIST
 
 
 def get_index_info(table_ref: str) -> dict:

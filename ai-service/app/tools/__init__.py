@@ -4,8 +4,8 @@ from app.services import (index_info_service, metrics_service, query_plan_servic
                           recovery_service, slow_query_service, fix_service,
                           trace_service)
 from app.tools import lock_queries
-from app.tools.registry import TOOL_REGISTRY, ToolSpec
-from app.tools.schemas import (ExecuteFixIn, GetIndexInfoIn, GetLockWaitersIn,
+from app.tools_core.registry import TOOL_REGISTRY, ToolSpec
+from app.tools_core.schemas import (ExecuteFixIn, GetIndexInfoIn, GetLockWaitersIn,
                                GetQueryPlanIn, GetServiceMetricsIn,
                                GetTraceIn, GetTransactionDetailsIn, ListDigestsIn,
                                VerifyRecoveryIn)

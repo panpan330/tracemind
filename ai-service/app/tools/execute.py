@@ -8,8 +8,8 @@ from pydantic import ValidationError
 
 from app.repositories.event_repo import append_event
 from app.repositories.tool_repo import record_tool_call
-from app.tools.registry import TOOL_REGISTRY
-from app.tools.schemas import ToolResult
+from app.tools_core.registry import TOOL_REGISTRY
+from app.tools_core.schemas import ToolResult
 
 # 离线评测 Fixture:key = f"{tool_name}:{sha256(args_json)[:12]}"
 _EVAL_FIXTURE: dict = {}

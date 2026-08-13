@@ -1,7 +1,7 @@
 from sqlalchemy import text
 
 from app.db.engine import get_readonly_engine
-from app.tools.schemas import QUERY_REF_WHITELIST
+from app.tools_core.schemas import QUERY_REF_WHITELIST
 
 # 服务端固化 SQL 模板,LLM 永远无法提交完整 SQL
 QUERY_REGISTRY = {

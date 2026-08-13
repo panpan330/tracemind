@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any
 
-from app.tools.registry import TOOL_REGISTRY
+from app.tools_core.registry import TOOL_REGISTRY
 
 MCP_TOOL_CONTRACT_VERSION = "2.1.0"
 SERVER_NAME = "tracemind-tools"
