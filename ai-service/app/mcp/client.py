@@ -57,10 +57,13 @@ def _spawn_env() -> dict:
 class McpClientManager:
     def __init__(self, fixture_file: str | None = None) -> None:
         self.fixture_file = fixture_file
+        # V1.7:传输由配置决定(stdio | streamable_http)
+        self.transport = getattr(settings, "mcp_transport", "stdio") or "stdio"
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._session = None
         self._stdio_ctx = None
+        self._http = None
         self._sem = threading.Semaphore(1)
         self.is_ready = False
         self.protocol_version: str | None = None
@@ -68,6 +71,9 @@ class McpClientManager:
         self._timeout = settings.mcp_timeout_seconds
         self.max_restart = settings.mcp_max_restart
         self._invocation_id = 0
+
+    def get_transport_name(self) -> str:
+        return "mcp_streamable_http" if self.transport == "streamable_http" else "mcp_stdio"
 
     def _run_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -86,6 +92,14 @@ class McpClientManager:
                 pass
 
     async def _start_session(self) -> None:
+        # V1.7:streamable_http 走独立 HTTP transport
+        if self.transport == "streamable_http":
+            from app.config.mcp import McpClientSettings
+            from app.mcp.client_transport_http import McpHttpTransport
+            self._http = McpHttpTransport(McpClientSettings())
+            await self._http.connect()
+            self.protocol_version = self._http.protocol_version
+            return
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -120,6 +134,12 @@ class McpClientManager:
                 await asyncio.sleep(0.5)
 
     async def _close_session(self) -> None:
+        if self._http is not None:
+            try:
+                await self._http.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._http = None
         if self._session:
             try:
                 await self._session.__aexit__(None, None, None)
@@ -159,6 +179,8 @@ class McpClientManager:
                   **business: Any) -> dict:
         """同步工具调用:注入上下文 + 桥接到后台 loop,单会话串行。
         断线/超时/协议错误:重启会话后重试一次(同一 mcp_invocation_id),不降级 direct。"""
+        if self.transport == "streamable_http":
+            return self._call_http(name, incident_id, agent_run_id, business)
         self._invocation_id += 1
         mcp_invocation_id = f"mcp-{self._invocation_id}-{uuid.uuid4().hex[:8]}"
         args: dict = {"incident_id": incident_id, "agent_run_id": agent_run_id, **business}
@@ -186,6 +208,29 @@ class McpClientManager:
                     raise MCPError(MCP_DISCONNECTED,
                                    f"MCP 重启失败,不降级 direct: {exc}") from exc
                 raise
+
+    def _call_http(self, name: str, incident_id: int, agent_run_id: int,
+                   business: dict) -> dict:
+        """streamable_http 路径:逐请求构造 ClientInvocationContext,桥接到后台 loop。"""
+        if self._http is None or self._loop is None:
+            raise MCPError(MCP_DISCONNECTED, "MCP HTTP 会话未就绪")
+        from app.tools_core.context import ClientInvocationContext
+        ctx = ClientInvocationContext(incident_id=incident_id or 0,
+                                      agent_run_id=agent_run_id or 0,
+                                      tool_call_id=f"tc-{uuid.uuid4().hex[:12]}",
+                                      purpose="investigation")
+        future = asyncio.run_coroutine_threadsafe(
+            self._http.call_tool(name, business, ctx), self._loop)
+        try:
+            result = future.result(timeout=self._timeout)
+        except asyncio.TimeoutError as exc:
+            future.cancel()
+            raise MCPError(MCP_TIMEOUT, str(exc)) from exc
+        except MCPError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise MCPError(MCP_TOOL_ERROR, str(exc)) from exc
+        return result
 
     def _restart_session(self, timeout: float = 10.0) -> bool:
         """在后台 loop 重建 MCP 会话(供断线重试);成功返回 True。"""

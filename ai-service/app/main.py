@@ -17,6 +17,11 @@ mcp_manager: McpClientManager | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global mcp_manager
+    # V1.7 fail-closed:vm_release/production 必须 streamable_http,禁止 stdio
+    from app.config import settings
+    profile = getattr(settings, "run_profile", "local")
+    if profile in ("vm_release", "production") and settings.mcp_transport != "streamable_http":
+        raise RuntimeError("vm_release/production 必须使用 mcp_transport=streamable_http,禁止 stdio")
     # MCP Server 启动/契约校验失败 → start() 抛异常 → 应用启动失败(readiness=false)
     mcp_manager = McpClientManager()
     await mcp_manager.start()

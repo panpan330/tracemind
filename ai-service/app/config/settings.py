@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     mcp_max_restart: int = 1            # Server 启动/初始化失败最多重启次数
     mcp_ready: bool = False             # 运行时:契约校验通过后置 True
 
+    # ---- V1.7:MCP 传输(stdio | streamable_http)----
+    mcp_transport: str = "stdio"
+    mcp_http_url: str = ""
+    mcp_http_bearer_token: str = ""
+    mcp_http_connect_timeout_seconds: float = 5.0
+    mcp_http_request_timeout_seconds: float = 30.0
+    mcp_http_max_retries: int = 3
+    mcp_auth_clients_file: str = ""
+    mcp_max_request_bytes: int = 262144
+    mcp_max_result_bytes: int = 1048576
+    mcp_audit_db_url: str = ""
+
     # ---- V1.0 旧 LLM 字段(deprecated fallback)----
     llm_base_url: str = ""
     llm_api_key: str = ""
