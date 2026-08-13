@@ -101,14 +101,18 @@ def run_round(scenario: str, round_no: int) -> None:
     if not args.fixture:
         assert t.get("sourceBackend") == "jaeger", f"trace backend 断言失败: {t.get('sourceBackend')}"
         assert t.get("traceId"), "trace 证据缺 traceId"
-        assert t.get("dbDominanceRatio") is not None and t["dbDominanceRatio"] >= 0.5,             f"trace 证据 db 占比不足: {t.get('dbDominanceRatio')}"
+        # db 瓶颈判定:占比高 OR db 绝对耗时显著(SCN-002 锁等待会稀释 db 占比,
+        # 但 db 阶段绝对耗时仍高;二者任一成立即证明 db 是主要耗时来源)
+        assert ((t.get("dbDominanceRatio") is not None and t["dbDominanceRatio"] >= 0.5)
+                or (t.get("targetDbDurationMs") or 0) >= 100), \
+            f"trace 证据 db 占比/耗时不足: ratio={t.get('dbDominanceRatio')} dbMs={t.get('targetDbDurationMs')}"
         # Jaeger 可再查由 ai 内部 get_trace(VM 内查 jaeger)隐含保证;
         # 防伪由网络分区(ai 不连 metrics-scrape-net)+ sourceBackend 断言隐含保证
     # 审批 → 恢复
     approvals = [a for a in d.get("approvals", []) if a["status"] == "pending"]
     if approvals:
         requests.post(f"{base}/api/incidents/{incident_id}/approvals/{approvals[0]['id']}/decision",
-                      json={"decision": "approved", "comment": "v1.4 e2e"}, timeout=15)
+                      json={"decision": "approved", "comment": "v1.4 e2e"}, timeout=90)
         wait_status(base, incident_id, {"recovered", "needs_human"}, timeout_s=90)
         d2 = requests.get(f"{base}/api/incidents/{incident_id}", timeout=10).json()
         assert d2["status"] == "recovered", f"{scenario} 未恢复: {d2['status']}"

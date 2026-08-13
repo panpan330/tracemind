@@ -60,6 +60,21 @@ def test_write_report_demo_falls_back_to_template():
     assert report["content"]
 
 
+def test_select_tool_llm_empty_falls_back_to_planner():
+    """真实 LLM 连续不返回 tool_calls(偶发不稳定)→ 确定性 planner 兜底,不抛 ModelDegradedError。
+    修复前:strict 模式抛 ModelDegradedError → collect_evidence llm_unavailable → needs_human
+    (VM 真实模型验收偶发失败:incident llm_unavailable)。工具选择用 planner 不构成根因降级
+    (根因判定在 diagnose 由确定性 policy 完成),只保证证据收集不因 LLM 输出波动中断。"""
+    from app.agent.llm_client import ChatResult
+    client = StubClient([ChatResult(content=None), ChatResult(content=None),
+                         ChatResult(content=None)])
+    llm = OpenAICompatibleLLM(client=client, strict=True)
+    out = llm.select_tool({"evidence": [], "evidence_gate": {}},
+                          "prompt", {"get_service_metrics", "get_index_info"})
+    assert isinstance(out, list)  # 不抛异常,planner 兜底
+    assert len(client.calls) == 3
+
+
 def test_get_llm_unknown_mode_raises(monkeypatch):
     from app.agent.llm import get_llm
     from app.config import settings

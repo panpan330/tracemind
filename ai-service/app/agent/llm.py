@@ -147,7 +147,10 @@ class OpenAICompatibleLLM:
 
     def select_tool(self, state: dict, prompt: str, eligible_tools: set[str]) -> list[dict]:
         """真实模型:返回 tool_calls 列表;demo 降级:确定性规划器。
-        TOOL_SCHEMAS 由 T5(tool_calling)提供;未落地时走降级分支。"""
+        TOOL_SCHEMAS 由 T5(tool_calling)提供;未落地时走降级分支。
+        修复:LLM 连续不返回 tool_calls(真实模型偶发不稳定)→ 确定性 planner 兜底,
+        不抛 ModelDegradedError——工具选择用 planner 不构成根因降级(根因判定在
+        diagnose 由确定性 policy 完成),只保证证据收集不因 LLM 输出波动中断。"""
         try:
             from app.mcp.contract import llm_tool_schemas
         except ImportError:
@@ -164,7 +167,7 @@ class OpenAICompatibleLLM:
                         for tc in result.tool_calls]
             logger.warning("select_tool 未返回 tool_calls(第 %d/%d 次)", attempt + 1,
                            self.MAX_RETRIES + 1)
-        self._degrade("select_tool")
+        logger.warning("select_tool LLM 连续失败,确定性规划器兜底(strict 模式)")
         return self._planner.choose(state, eligible_tools)
 
     def write_report(self, state: dict) -> dict:
