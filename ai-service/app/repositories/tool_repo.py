@@ -9,11 +9,17 @@ def record_tool_call(incident_id: int | None, tool_name: str,
                      agent_run_id: int | None = None,
                      transport: str = "legacy_direct",
                      mcp_invocation_id: str | None = None,
-                     mcp_attempt: int | None = None) -> ToolCall:
+                     mcp_attempt: int | None = None,
+                     tool_call_id: str | None = None,
+                     purpose: str = "investigation",
+                     context_version: str | None = None) -> ToolCall:
     with Session(get_control_engine()) as session:
         call = ToolCall(
             incident_id=incident_id,
             agent_run_id=agent_run_id,
+            tool_call_id=tool_call_id,
+            purpose=purpose,
+            context_version=context_version,
             tool_name=tool_name,
             input=input_data,
             output=output,

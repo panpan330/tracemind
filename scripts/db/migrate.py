@@ -27,6 +27,7 @@ ACCOUNTS = [
     ("ai_investigator", "TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD", "role_ai_investigator"),
     ("fix_executor", "TRACEMIND_DB_FIX_EXECUTOR_PASSWORD", "role_fix_executor"),
     ("session_terminator", "TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD", "role_session_terminator"),
+    ("mcp_tool_auditor", "TRACEMIND_DB_MCP_AUDITOR_PASSWORD", "role_mcp_tool_auditor"),
 ]
 
 
@@ -207,6 +208,14 @@ def run_provision(conn) -> int:
             "GRANT SELECT ON performance_schema.* TO 'role_session_terminator'",
             "GRANT PROCESS ON *.* TO 'role_session_terminator'",
             "GRANT CONNECTION_ADMIN ON *.* TO 'role_session_terminator'",
+        ],
+        # V1.7:MCP Server 审计最小权限(不授 tool_call 的 UPDATE/INSERT,避免与 AI 侧双写)
+        "role_mcp_tool_auditor": [
+            "GRANT SELECT ON tracemind_control.incident TO 'role_mcp_tool_auditor'",
+            "GRANT SELECT ON tracemind_control.agent_run TO 'role_mcp_tool_auditor'",
+            "GRANT SELECT ON tracemind_control.tool_call TO 'role_mcp_tool_auditor'",
+            "GRANT SELECT, INSERT, UPDATE ON tracemind_control.tool_call_attempt TO 'role_mcp_tool_auditor'",
+            "GRANT INSERT ON tracemind_control.observation_query TO 'role_mcp_tool_auditor'",
         ],
     }
     with conn.cursor() as cur:

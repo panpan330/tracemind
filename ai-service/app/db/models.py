@@ -86,6 +86,10 @@ class ToolCall(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     agent_run_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # V1.7:逻辑工具调用业务 ID(重试不变)、purpose、context_version
+    tool_call_id: Mapped[Optional[str]] = mapped_column(String(64))
+    purpose: Mapped[Optional[str]] = mapped_column(String(32))
+    context_version: Mapped[Optional[str]] = mapped_column(String(16))
     tool_name: Mapped[str] = mapped_column(String(64))
     input: Mapped[Optional[dict]] = mapped_column(JSON)
     output: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -95,6 +99,32 @@ class ToolCall(Base):
     mcp_invocation_id: Mapped[Optional[str]] = mapped_column(String(64))
     mcp_attempt: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ToolCallAttempt(Base):
+    """V1.7:MCP Server 侧传输与执行尝试审计(mcp_tool_auditor 最小权限写入)。"""
+    __tablename__ = "tool_call_attempt"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tool_call_pk: Mapped[int] = mapped_column(BigInteger)
+    tool_call_id: Mapped[str] = mapped_column(String(64))
+    attempt_no: Mapped[int] = mapped_column(Integer)
+    client_attempt_id: Mapped[str] = mapped_column(String(64))
+    mcp_request_id: Mapped[str] = mapped_column(String(64))
+    incident_id: Mapped[int] = mapped_column(BigInteger)
+    agent_run_id: Mapped[int] = mapped_column(BigInteger)
+    purpose: Mapped[str] = mapped_column(String(32))
+    transport: Mapped[str] = mapped_column(String(32))
+    outcome: Mapped[str] = mapped_column(String(24))  # started/completed/failed/outcome_unknown
+    error_code: Mapped[Optional[str]] = mapped_column(String(64))
+    retryable: Mapped[Optional[bool]] = mapped_column(Boolean)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    protocol_version: Mapped[Optional[str]] = mapped_column(String(32))
+    server_instance_id: Mapped[Optional[str]] = mapped_column(String(64))
+    trace_id: Mapped[Optional[str]] = mapped_column(String(64))
+    request_hash: Mapped[Optional[str]] = mapped_column(String(16))
+    result_hash: Mapped[Optional[str]] = mapped_column(String(16))
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class FixDefinition(Base):
