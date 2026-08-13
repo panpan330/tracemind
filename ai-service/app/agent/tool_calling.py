@@ -23,13 +23,18 @@ EVIDENCE_TOOL = {
 
 def compute_eligible_tools(state: dict) -> set[str]:
     """独立资格判断:每轮把所有满足条件的工具暴露给 LLM(不退化为固定顺序)。
-    evidence_gate 兼容大写(E1)与小写(e1)两种写法。"""
+    evidence_gate 兼容大写(E1)与小写(e1)两种写法。
+    修复:已采集证据(无论 passed)即不再 eligible——passed=False 是确定性否定(如
+    SCN-001 无锁等待、SCN-002 端点未降级),不应重采;否则 LLM 反复选已调用工具
+    → duplicate_tool_call(真实模型验收暴露)。暂态无数据(空窗口/无 trace)不产出
+    evidence,由 collect_evidence 的 no_progress 特判重采。"""
     gate = state.get("evidence_gate") or {}
+    evidence = {e.get("key"): e for e in state.get("evidence") or []}
 
     def satisfied(key: str) -> bool:
-        return bool(gate.get(key, gate.get(key.upper(), False)))
+        # 已采集(evidence 存在)→ 满足;否则看 gate(passed 兼容大写/小写)
+        return key in evidence or bool(gate.get(key, gate.get(key.upper(), False)))
 
-    evidence = {e.get("key"): e for e in state.get("evidence") or []}
     eligible: set[str] = set()
     if not satisfied("e1"):
         eligible.add("get_service_metrics")
@@ -53,9 +58,7 @@ def compute_eligible_tools(state: dict) -> set[str]:
     if not satisfied("e5"):
         eligible.add("get_index_info")
     # 锁调查工具资格(V1.3,独立判断,不退化为固定顺序)
-    # 修复:l1 已采集(无论 passed)即不再 eligible——SCN-001 无锁等待 passed=False 时,
-    # 若仍 eligible 会导致 LLM 反复选已调用工具 → duplicate_tool_call(真实模型验收暴露)
-    if "l1" not in evidence and not satisfied("l1"):
+    if not satisfied("l1"):
         eligible.add("get_lock_waiters")
     if not satisfied("l2"):
         l1_ev = (evidence.get("l1") or {}).get("content") or {}

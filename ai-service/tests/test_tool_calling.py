@@ -115,6 +115,17 @@ def test_lock_waiters_not_eligible_when_l1_collected_false():
     assert "get_query_plan" in eligible  # E4 未采集仍可补
 
 
+def test_metrics_not_eligible_when_e1_collected_false():
+    """SCN-002 回归:get_service_metrics 已采集但 passed=False(端点未降级)→ 不应再 eligible。
+    否则 LLM 反复选它 → duplicate_tool_call(真实模型验收暴露,与 L1 同源)。"""
+    state = {"evidence_gate": {"e1": False},
+             "evidence": [{"key": "e1",
+                           "content": {"p95Ms": 50, "sourceBackend": "prometheus"},
+                           "passed": False}]}
+    eligible = tool_calling.compute_eligible_tools(state)
+    assert "get_service_metrics" not in eligible
+
+
 def test_resolve_lock_tools_parameters():
     state = {"service_ref": "inventory-service",
              "evidence": [{"key": "l1", "content": {"waits": [{"blocker_ref": "blk_1",
