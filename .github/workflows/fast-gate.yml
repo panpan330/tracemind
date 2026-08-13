@@ -1,0 +1,253 @@
+name: fast-gate
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0.39   # 与 compose.ci.yml 的 TRACEMIND_MYSQL_IMAGE 同步固定
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pwd
+          MYSQL_DATABASE: tracemind_control
+          TZ: UTC
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d
+        with:
+          version: "0.4.x"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Init CI DB
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pwd
+          TRACEMIND_DB_CONTROL_APP_PASSWORD: ci_control_pwd
+          TRACEMIND_DB_APP_BUSINESS_PASSWORD: ci_business_pwd
+          TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD: ci_investigator_pwd
+          TRACEMIND_DB_FIX_EXECUTOR_PASSWORD: ci_fix_pwd
+          TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD: ci_terminator_pwd
+        run: bash scripts/ci/init_ci_db.sh
+      - name: Python tests (ci_db profile, coverage)
+        env:
+          TRACEMIND_RUN_PROFILE: ci_db
+          TRACEMIND_LLM_MODE: fake
+          TRACEMIND_CONTROL_DB_URL: mysql+pymysql://tracemind_control_app:ci_control_pwd@127.0.0.1:3306/tracemind_control
+          TRACEMIND_READONLY_DB_URL: mysql+pymysql://ai_investigator:ci_investigator_pwd@127.0.0.1:3306/tracemind_business
+          TRACEMIND_SESSION_TERMINATOR_DB_URL: mysql+pymysql://session_terminator:ci_terminator_pwd@127.0.0.1:3306/
+          TRACEMIND_FIX_EXECUTOR_DB_URL: mysql+pymysql://fix_executor:ci_fix_pwd@127.0.0.1:3306/tracemind_business
+          TRACEMIND_METRICS_BACKEND: fixture
+          TRACEMIND_TRACE_BACKEND: fixture
+          TRACEMIND_EVAL_MODE: "true"
+        run: |
+          cd ai-service
+          uv sync --frozen
+          uv run pytest --cov=app --cov-report=xml:../reports/generated/coverage-python/coverage.xml tests/ -q
+      - name: Check python coverage
+        run: |
+          python - <<'EOF'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('reports/generated/coverage-python/coverage.xml').getroot()
+          line = float(root.get('line-rate')) * 100
+          print(f"python line coverage: {line:.2f}%")
+          import subprocess, sys
+          sys.exit(subprocess.call([sys.executable, 'scripts/ci/check_coverage.py',
+                                    '--lang', 'python', '--metric', 'line', '--current', str(line)]))
+          EOF
+      - name: Upload coverage
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fast-python-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/generated/coverage-python
+          if-no-files-found: warn
+
+  java-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0.39
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pwd
+          MYSQL_DATABASE: tracemind_control
+          TZ: UTC
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Init CI DB
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pwd
+          TRACEMIND_DB_CONTROL_APP_PASSWORD: ci_control_pwd
+          TRACEMIND_DB_APP_BUSINESS_PASSWORD: ci_business_pwd
+          TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD: ci_investigator_pwd
+          TRACEMIND_DB_FIX_EXECUTOR_PASSWORD: ci_fix_pwd
+          TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD: ci_terminator_pwd
+        run: bash scripts/ci/init_ci_db.sh
+      - name: Maven unit tests (surefire only)
+        env:
+          BUSINESS_DB_URL: jdbc:mysql://127.0.0.1:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+          BUSINESS_DB_USER: app_business
+          BUSINESS_DB_PASSWORD: ci_business_pwd
+        run: |
+          cd java && mvn --batch-mode test
+      - name: Check java coverage
+        run: |
+          python - <<'EOF'
+          import xml.etree.ElementTree as ET
+          import subprocess, sys
+          for mod in ['common', 'order-service', 'inventory-service']:
+              import os
+              p = os.path.join('java', mod, 'target', 'site', 'jacoco', 'jacoco.xml')
+              if not os.path.exists(p):
+                  print(f"WARN: {p} 不存在"); continue
+              root = ET.parse(p).getroot()
+              c = root.find(".//counter[@type='LINE']")
+              covered = int(c.get('covered')); total = covered + int(c.get('missed'))
+              print(f"{mod}: {covered}/{total}")
+          sys.exit(0)
+          EOF
+      - name: Upload reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fast-java-${{ github.run_id }}-${{ github.run_attempt }}
+          path: java/*/target/surefire-reports
+          if-no-files-found: warn
+
+  web-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Typecheck + test + build
+        run: |
+          cd web
+          npm ci
+          npm run typecheck
+          npm run test
+          npm run build
+      - name: Upload reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fast-web-${{ github.run_id }}-${{ github.run_attempt }}
+          path: web/reports
+          if-no-files-found: warn
+
+  offline-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d
+        with:
+          version: "0.4.x"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Offline evaluation (no DB, fake LLM)
+        env:
+          TRACEMIND_RUN_PROFILE: offline_eval
+          TRACEMIND_LLM_MODE: fake
+          TRACEMIND_EVAL_MODE: "true"
+        run: |
+          cd ai-service
+          uv sync --frozen
+          uv run python ../scripts/ci/ci_manifest.py check
+          uv run python ../scripts/eval_agent.py --mode offline --llm fake --runs 1
+      - name: Upload reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fast-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/generated
+          if-no-files-found: warn
+
+  ci-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d
+        with:
+          version: "0.4.x"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: actionlint (workflow syntax)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash -s -- v1.7.7
+          ./actionlint -color .github/workflows/
+      - name: shellcheck
+        run: |
+          shellcheck scripts/ci/*.sh
+      - name: CI 自身测试 (unit)
+        run: |
+          cd scripts/ci && python -m pytest test_check_coverage.py -q
+      - name: Upload reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fast-ci-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/generated
+          if-no-files-found: warn
+
+  fast-gate:
+    needs: [python-tests, java-tests, web-tests, offline-evaluation, ci-quality]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_RESULT: ${{ needs.python-tests.result }}
+      JAVA_RESULT: ${{ needs.java-tests.result }}
+      WEB_RESULT: ${{ needs.web-tests.result }}
+      EVALUATION_RESULT: ${{ needs.offline-evaluation.result }}
+      CI_QUALITY_RESULT: ${{ needs.ci-quality.result }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Download all fast artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          path: fast-artifacts
+          pattern: fast-*-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Aggregate report
+        run: bash scripts/ci/aggregate_fast_report.sh fast-artifacts fast-summary
+      - name: Upload summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: fast-gate-summary-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: fast-summary
+          if-no-files-found: warn
+      - name: Check gate (5 results)
+        run: bash scripts/ci/check_fast_gate.sh
