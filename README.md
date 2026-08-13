@@ -308,6 +308,51 @@ python scripts/db/migrate.py --init-db --migrations scripts/db/migrations
 python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081
 ```
 
+## V1.7:MCP Streamable HTTP 远程传输与服务化
+
+MCP 工具服务从"AI 服务内部 spawn 的 stdio 子进程"升级为**独立容器、独立镜像、Streamable HTTP 标准传输**的远程只读工具服务(工具实现唯一,stdio 与 HTTP 只是两个 Transport Adapter,零 direct bypass)。
+
+### 传输定位
+
+| 环境 | 传输 |
+|---|---|
+| 本地开发 / 离线评测 | stdio(Fixture Server) |
+| **VM 标准部署(演示/验收)** | **Streamable HTTP** |
+
+- 标准部署只走 Streamable HTTP,网络错误**不降级** stdio/direct(`direct_fallback=false`)。
+- `execute_fix` / `verify_recovery` 不暴露为远程 MCP Tool(仍是 AI 服务内部确定性安全节点)。
+- 无状态(`stateless_http=True`),支持独立部署与水平扩展基础。
+
+### 关键配置
+
+```bash
+# ai-service(标准部署)
+TRACEMIND_MCP_TRANSPORT=streamable_http
+TRACEMIND_MCP_HTTP_URL=http://mcp-tools:8001/mcp
+TRACEMIND_MCP_HTTP_BEARER_TOKEN=<部署时生成>
+
+# mcp-tools(独立容器,见 compose.yml)
+TRACEMIND_MCP_AUTH_CLIENTS_FILE=/run/secrets/mcp_clients.json   # Token Fingerprint → Principal+Scopes
+TRACEMIND_MCP_AUDIT_DB_URL=mysql+pymysql://mcp_tool_auditor:...@mysql:3306/tracemind_control
+```
+
+- 认证:内部 Opaque Token(不做 JWT/OAuth);`client_id` 只从认证结果派生;Token 不进 LLM Prompt/Schema/审计/日志。
+- 审计唯一所有者:AI 服务写 `tool_call`,MCP Server 写 `tool_call_attempt`(两段式,`mcp_tool_auditor` 最小权限)。
+- 版本四维度:Tool Schema / MCP Protocol / SDK Version(读实际安装包)/ InvocationContext。
+
+### 验证命令(V1.7)
+
+```bash
+# 统一三层验收入口(Python 编排,人工触发自动执行)
+python scripts/verify-m17.py --tier fast        # 本地快速回归(后端全量 + Vue typecheck + 离线评测 N/N)
+python scripts/verify-m17.py --tier vm-smoke    # VM 标准部署(独立容器 + HTTP 探针 + SCN 闭环 + 凭据隔离)
+python scripts/verify-m17.py --tier release     # 真实模型发布验收(real_strict,发版前)
+```
+
+**Release 前绑定断言**(打 V1.7 Tag 前):工作树干净;报告 Git SHA == 当前 HEAD;镜像 label Git SHA == HEAD;Digest 已写入报告;Tag 指向已验收 Commit。
+
+**设计文档**:`docs/superpowers/specs/2026-08-13-tracemind-v17-mcp-streamable-http-design.md`
+
 ## 版本历史
 
 - **V1.0**:核心闭环(Java 目标系统 + LangGraph 单场景 + 人工审批 + 真实 MySQL 证据)
