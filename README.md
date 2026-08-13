@@ -289,8 +289,6 @@ python scripts/verify-m15.py --base http://<vm-host>:8000 --order http://<vm-hos
 
 - **正式迁移器**:`scripts/db/migrate.py`(唯一入口,checksum/幂等/Advisory Lock/账号 Provisioning),迁移文件 `scripts/db/migrations/`;本地与 VM 部署共用。
 - **Run Profile**:`TRACEMIND_RUN_PROFILE = local|ci_db|offline_eval|full_e2e|production`(fail-closed:严格档缺 URL / LLM 模式不匹配即启动失败;offline_eval 禁数据库访问)。
-- **覆盖率基线**:`evaluation/thresholds/coverage.json`(基线:Python 78.51 / Web 82.25·71.74 / Java 单测聚合),`check_coverage.py` 防下调。
-- **契约基线**:`evaluation/contracts/`(MCP/Policy/Replay 版本与 Hash),`ci_manifest.py generate|check`。
 - **离线评测缺陷修复**:fixture 的 `metrics.representativeSlowTraceId` 必须配套 `get_trace` 条目(缺则 POS 全 FAIL);新增回归测试 `test_fixture_trace_id_contract`,当前 24/24 PASS。
 
 ### 验证命令
@@ -301,9 +299,8 @@ cd ai-service && .venv/Scripts/pytest.exe tests/ -q
 # 离线评测(24 case,fake LLM,无网络)
 cd ai-service && TRACEMIND_RUN_PROFILE=offline_eval TRACEMIND_LLM_MODE=fake TRACEMIND_EVAL_MODE=true \
   .venv/Scripts/python.exe ../scripts/eval_agent.py --mode offline --llm fake --runs 1
-# 覆盖率 + 契约校验
-python scripts/ci/check_coverage.py
-python scripts/ci/ci_manifest.py check
+# 覆盖率:ai-service 测试 238 passed + pytest-cov(可选)
+cd ai-service && .venv/Scripts/pytest.exe tests/ -q
 # 迁移器(建库 + 版本化迁移)
 python scripts/db/migrate.py --init-db --migrations scripts/db/migrations
 # VM 发布验收(V1.4/V1.5 同款,需 VM 部署)
@@ -318,4 +315,4 @@ python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-hos
 - **V1.3**:多故障场景 SCN-002 锁等待 + 双 Policy 诊断 + 处置安全 + 回归评测流水线
 - **V1.4**:真实可观测性(OTel Agent + Prometheus + Jaeger + Grafana)+ 观测审计 + 回归强制真实后端
 - **V1.5**:证据与决策链回放(调查时不可变快照 + 只读 Replay API + 前端回放页)+ Run 级版本冻结与恢复前校验
-- **V1.6**:正式迁移器 + Run Profile fail-closed + 覆盖率/契约基线 + 离线评测缺陷修复(fixture trace_id 契约)
+- **V1.6**:正式迁移器 + Run Profile fail-closed + 离线评测缺陷修复(fixture trace_id 契约)
