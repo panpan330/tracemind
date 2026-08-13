@@ -204,17 +204,23 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
                 "decision_attempt_count": decision, "investigation_started_at": started}
 
     eligible = compute_eligible_tools(state)
-    prompt = _build_collect_prompt(state, eligible)
-    try:
-        if hasattr(llm, "select_tool"):
-            calls = llm.select_tool(state, prompt, eligible)
-        else:
-            # FakeLLM/确定性路径:规划器按 E1→E5 顺序补缺失证据(不伪装成模型)
-            calls = planner.choose(state, eligible)
-    except ModelDegradedError:
-        # real_strict 模型失败:优雅转 needs_human,不让调查崩溃
-        return {"status": "needs_human", "termination_reason": "llm_unavailable",
-                "investigation_started_at": state.get("investigation_started_at")}
+    if len(eligible) == 1:
+        # 确定性兜底:唯一可选项不依赖 LLM 自觉——真实模型可能在多轮里反复选已采集工具
+        # (SCN-001 暴露:get_query_plan 唯一 eligible 时 LLM 仍可能返回重复调用 → duplicate_tool_call)
+        calls = [{"id": "deterministic-single", "name": next(iter(eligible)),
+                  "arguments": {}}]
+    else:
+        prompt = _build_collect_prompt(state, eligible)
+        try:
+            if hasattr(llm, "select_tool"):
+                calls = llm.select_tool(state, prompt, eligible)
+            else:
+                # FakeLLM/确定性路径:规划器按 E1→E5 顺序补缺失证据(不伪装成模型)
+                calls = planner.choose(state, eligible)
+        except ModelDegradedError:
+            # real_strict 模型失败:优雅转 needs_human,不让调查崩溃
+            return {"status": "needs_human", "termination_reason": "llm_unavailable",
+                    "investigation_started_at": state.get("investigation_started_at")}
 
     out = {"decision_attempt_count": decision,
            "investigation_started_at": started,

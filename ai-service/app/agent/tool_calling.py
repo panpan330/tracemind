@@ -53,7 +53,9 @@ def compute_eligible_tools(state: dict) -> set[str]:
     if not satisfied("e5"):
         eligible.add("get_index_info")
     # 锁调查工具资格(V1.3,独立判断,不退化为固定顺序)
-    if not satisfied("l1"):
+    # 修复:l1 已采集(无论 passed)即不再 eligible——SCN-001 无锁等待 passed=False 时,
+    # 若仍 eligible 会导致 LLM 反复选已调用工具 → duplicate_tool_call(真实模型验收暴露)
+    if "l1" not in evidence and not satisfied("l1"):
         eligible.add("get_lock_waiters")
     if not satisfied("l2"):
         l1_ev = (evidence.get("l1") or {}).get("content") or {}

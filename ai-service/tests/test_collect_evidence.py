@@ -69,6 +69,31 @@ def test_budget_exhausted_sets_needs_human():
     assert out.get("status") == "needs_human"
 
 
+def test_sole_eligible_deterministic_execution():
+    """E1-E5(除 E4)+L1 已采集后,eligible 只剩 get_query_plan → 确定性执行(不依赖 LLM 自觉)。
+    真实模型验收暴露:LLM 在 r3-r5 反复选已采集工具,最终 duplicate_tool_call → needs_human。"""
+    state = base_state(
+        evidence_gate={"E1": True, "E2": True, "E3": True, "E5": True, "L1": False},
+        evidence=[
+            {"id": "E1", "key": "e1", "source": "get_service_metrics",
+             "content": {"p95Ms": 200}, "passed": True},
+            {"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
+             "content": {"query_ref": "INVENTORY_LOOKUP"}, "passed": True},
+            {"id": "E2", "key": "e2", "source": "get_trace", "content": {}, "passed": True},
+            {"id": "E5", "key": "e5", "source": "get_index_info", "content": {}, "passed": True},
+            {"id": "L1", "key": "l1", "source": "get_lock_waiters",
+             "content": {"waits": []}, "passed": False},
+        ],
+    )
+    # LLM 不配合(试图重复调用已采集工具);唯一 eligible 应被确定性执行
+    llm = StubLLM([[{"id": "c1", "name": "get_lock_waiters", "arguments": {}}]])
+    tools = StubTools([{"ok": True, "evidence": [{"key": "e4", "source": "get_query_plan",
+                                                  "content": {"plan": {"access_type": "ALL"}},
+                                                  "passed": True}]}])
+    out = collect_evidence(state, llm=llm, tools=tools)
+    assert tools.executed == ["get_query_plan"]
+
+
 def test_noop_two_rounds_sets_needs_human():
     # V1.4:无进展阈值 2→4(给观测 trace 导出留重试窗口)
     state = base_state(consecutive_no_progress_count=3)

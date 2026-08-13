@@ -104,6 +104,17 @@ def test_transaction_details_eligible_after_lock_waiters():
     assert "get_transaction_details" in eligible
 
 
+def test_lock_waiters_not_eligible_when_l1_collected_false():
+    """SCN-001 回归:get_lock_waiters 已采集但 passed=False(无锁等待)→ 不应再 eligible。
+    否则 LLM 反复选已调用工具 → duplicate_tool_call → needs_human(真实模型验收暴露)。"""
+    state = {"evidence_gate": {"e1": True, "e2": True, "e3": True, "e5": True, "l1": False},
+             "evidence": [{"key": "e3", "content": {"query_ref": "INVENTORY_LOOKUP"}, "passed": True},
+                          {"key": "l1", "content": {"waits": []}, "passed": False}]}
+    eligible = tool_calling.compute_eligible_tools(state)
+    assert "get_lock_waiters" not in eligible
+    assert "get_query_plan" in eligible  # E4 未采集仍可补
+
+
 def test_resolve_lock_tools_parameters():
     state = {"service_ref": "inventory-service",
              "evidence": [{"key": "l1", "content": {"waits": [{"blocker_ref": "blk_1",
