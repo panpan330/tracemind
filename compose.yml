@@ -97,6 +97,7 @@ services:
     networks: [tracemind, metrics-scrape-net, trace-ingest-net, tool-observation-network]
 
   ai-service:
+    image: tracemind-ai-service:${TRACEMIND_IMAGE_SHA:-latest}
     build:
       context: ./ai-service
     container_name: tracemind-ai
@@ -149,6 +150,7 @@ services:
     networks: [tracemind, agent-mcp-network, control-data-network, llm-egress-network]
 
   mcp-tools:
+    image: tracemind-mcp-tools:${TRACEMIND_IMAGE_SHA:-latest}
     build:
       context: ./ai-service
       target: mcp-tools-runtime
