@@ -29,8 +29,10 @@ class ClientInvocationContext:
     purpose: str
 
     def __post_init__(self) -> None:
-        if not (self.incident_id > 0 and self.agent_run_id > 0):
-            raise ValueError("incident_id/agent_run_id 必须为正整数")
+        # incident_id/agent_run_id = 0 表示"无审计上下文"(legacy/手动执行);
+        # 负数拒绝;Server 场景的正数与归属校验由 IncidentRunPort 把关
+        if not (self.incident_id >= 0 and self.agent_run_id >= 0):
+            raise ValueError("incident_id/agent_run_id 不能为负")
         if not self.tool_call_id or len(self.tool_call_id) > 64:
             raise ValueError("tool_call_id 非法")
         if self.purpose not in {p.value for p in Purpose}:

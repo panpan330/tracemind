@@ -1,82 +1,23 @@
-import hashlib
-import json
-import time
-import uuid
-from typing import Any
+"""execute_tool 薄封装:委托给 tools_core.ToolExecutionService(保持既有调用方兼容)。"""
+from app.tools_core.context import ClientInvocationContext
+from app.tools_core.service import ToolExecutionService
 
-from pydantic import ValidationError
-
-from app.repositories.event_repo import append_event
-from app.repositories.tool_repo import record_tool_call
-from app.tools_core.registry import TOOL_REGISTRY
-from app.tools_core.schemas import ToolResult
-
-# 离线评测 Fixture:key = f"{tool_name}:{sha256(args_json)[:12]}"
-_EVAL_FIXTURE: dict = {}
+_service = ToolExecutionService(ports={}, runtime="real")
 
 
 def set_eval_fixture(fixture: dict | None) -> None:
-    """离线评测注入:fixture = {f"{tool_name}:{canonical_args_hash}": {"ok":..., "data":...}}"""
-    global _EVAL_FIXTURE
-    _EVAL_FIXTURE = fixture or {}
+    """离线评测注入(仅 fixture runtime 允许;主进程 real runtime 下调用会抛 FIXTURE_FORBIDDEN)。"""
+    _service.set_fixture(fixture)
 
 
 def execute_tool(tool_name: str, incident_id: int | None = None,
                  agent_run_id: int | None = None, transport: str = "legacy_direct",
                  mcp_invocation_id: str | None = None,
-                 mcp_attempt: int | None = None, **kwargs: Any) -> dict:
-    """统一工具执行:参数校验、计时、成功/失败封装、审计落库。
-
-    incident_id 由调用方显式传入(路径参数),kwargs 中出现的 incident_id
-    一律剔除(防伪造);工具 schema 需要 incident_id 时自动注入。
-    agent_run_id/transport/mcp_invocation_id/mcp_attempt 为审计上下文,由调用方
-    (MCP Client 或安全控制节点)注入,不参与 Fixture 参数哈希。
-    """
-    # 离线评测 Fixture 命中优先;fixture 非空时不再补真实数据
-    args = {k: v for k, v in kwargs.items() if k != "incident_id" and v is not None}
-    key = tool_name + ":" + hashlib.sha256(
-        json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
-    if key in _EVAL_FIXTURE:
-        fx = _EVAL_FIXTURE[key]
-        # fixture 统一包装为 ToolResult 结构(与真实工具契约一致)
-        return ToolResult(
-            success=bool(fx.get("ok", True)),
-            data=fx.get("data"),
-            error_code=fx.get("error_code") or ("" if fx.get("ok") else "FIXTURE_FAILED"),
-            error_message=fx.get("error", ""),
-        ).model_dump()
-    if _EVAL_FIXTURE:
-        return ToolResult(success=False, error_code="FIXTURE_NOT_FOUND",
-                          error_message="fixture 未命中(离线模式不补真实数据)").model_dump()
-    spec = TOOL_REGISTRY.get(tool_name)
-    if spec is None:
-        return ToolResult(success=False, error_code="UNKNOWN_TOOL",
-                          error_message=f"unknown tool: {tool_name}").model_dump()
-    kwargs.pop("incident_id", None)
-    if incident_id is not None and "incident_id" in spec.input_schema.model_fields:
-        kwargs["incident_id"] = incident_id
-    try:
-        parsed = spec.input_schema(**kwargs)
-    except ValidationError as e:
-        return ToolResult(success=False, error_code="VALIDATION_ERROR",
-                          error_message=str(e)).model_dump()
-    start = time.monotonic()
-    try:
-        data = spec.fn(**parsed.model_dump())
-        result = ToolResult(tool_call_id=str(uuid.uuid4())[:8], success=True,
-                            duration_ms=int((time.monotonic() - start) * 1000), data=data)
-    except ValueError as e:
-        result = ToolResult(tool_call_id=str(uuid.uuid4())[:8], success=False,
-                            duration_ms=int((time.monotonic() - start) * 1000),
-                            error_code=str(e), error_message=str(e))
-    except Exception as e:  # noqa: BLE001
-        result = ToolResult(tool_call_id=str(uuid.uuid4())[:8], success=False,
-                            duration_ms=int((time.monotonic() - start) * 1000),
-                            error_code="TOOL_ERROR", error_message=str(e))
-    if incident_id is not None:
-        record_tool_call(incident_id, tool_name, kwargs, result.model_dump(),
-                         agent_run_id=agent_run_id, transport=transport,
-                         mcp_invocation_id=mcp_invocation_id, mcp_attempt=mcp_attempt)
-        append_event(incident_id, "tool_call",
-                     {"tool": tool_name, "result": result.model_dump()})
-    return result.model_dump()
+                 mcp_attempt: int | None = None, **kwargs) -> dict:
+    """统一工具执行入口(兼容 V1.0-V1.6 签名):委托 ToolExecutionService。"""
+    ctx = ClientInvocationContext(incident_id=incident_id or 0,
+                                  agent_run_id=agent_run_id or 0,
+                                  tool_call_id=f"legacy-{mcp_invocation_id or 'direct'}",
+                                  purpose="investigation")
+    return _service.execute(tool_name, kwargs, ctx, transport=transport,
+                            mcp_invocation_id=mcp_invocation_id, mcp_attempt=mcp_attempt)
