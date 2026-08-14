@@ -161,6 +161,8 @@ services:
       TRACEMIND_MCP_HTTP_URL: "http://0.0.0.0:8001/mcp"
       TRACEMIND_MCP_AUTH_CLIENTS_FILE: "/run/secrets/mcp_clients.json"
       TRACEMIND_MCP_AUDIT_DB_URL: "mysql+pymysql://mcp_tool_auditor:${TRACEMIND_DB_MCP_AUDITOR_PASSWORD:-mcp_auditor_pwd}@mysql:3306/tracemind_control"
+      # control 连接也用 mcp_tool_auditor 最小权限(观测审计/读 incident;非 control_app 完整权限)
+      TRACEMIND_CONTROL_DB_URL: "mysql+pymysql://mcp_tool_auditor:${TRACEMIND_DB_MCP_AUDITOR_PASSWORD:-mcp_auditor_pwd}@mysql:3306/tracemind_control"
       TRACEMIND_READONLY_DB_URL: "mysql+pymysql://ai_investigator:investigator_pwd@mysql:3306/tracemind_business"
       # 调查数据源(标准 HTTP 部署切 prometheus/jaeger 真实后端)
       TRACEMIND_METRICS_BACKEND: "prometheus"
