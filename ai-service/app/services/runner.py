@@ -92,6 +92,7 @@ async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> 
         "thread_id": thread_id,
         "severity": inc.severity if inc else "medium",
         "service_ref": inc.service_ref if inc else "inventory-service",
+        "affected_operation_ref": inc.affected_operation_ref if inc else None,
         "status": "created",
     }
     task = asyncio.create_task(_run_graph(incident_id, run_id, thread_id, initial))

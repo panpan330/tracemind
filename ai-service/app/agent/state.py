@@ -22,6 +22,7 @@ class IncidentState(TypedDict, total=False):
     thread_id: str
     severity: str
     service_ref: str
+    affected_operation_ref: str | None
     status: str
     investigation_round: int
     max_investigation_rounds: int

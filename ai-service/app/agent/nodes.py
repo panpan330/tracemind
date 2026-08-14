@@ -412,9 +412,15 @@ def _evaluate_trace(result: dict, state: dict) -> list[dict]:
 def _evaluate_digests(result: dict, state: dict) -> list[dict]:
     digests = (result.get("data") or []) if result.get("success") else []
     top = digests[0] if digests else {}
-    # 暂态:故障负载尚未进入 performance_schema(增量全 0)时不产证据,触发重采
-    # (真实后端验收暴露:digest 采集早于负载 → 增量 0 被误判为确定性否定)
+    op = state.get("affected_operation_ref") or ""
     if not result.get("success") or top.get("rows_examined_delta", 0) <= 0:
+        # 锁场景(INVENTORY_RESERVATION):无慢查询增量是确定性否定(锁阻塞不产生慢查询),
+        # 产 E3=False 证据,继续采集 L1/L2
+        if op == "INVENTORY_RESERVATION":
+            return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
+                     "content": {"top": top, "query_ref": "INVENTORY_LOOKUP"}, "passed": False}]
+        # 慢查询场景:增量 0 是暂态(故障负载尚未进入 performance_schema),触发重采
+        # (真实后端验收暴露:digest 采集早于负载 → 增量 0 被误判为确定性否定)
         return []
     e3 = top.get("rows_examined_delta", 0) > 1000
     # 单场景:高扫描行数的 digest 即目标查询(系统内只有 INVENTORY_LOOKUP 一个慢查询场景)

@@ -5,7 +5,15 @@ from app.agent.nodes import _evaluate_digests
 def test_digest_delta_zero_is_transient():
     r = {"success": True, "data": [{"digest": "SELECT ... FOR SHARE",
                                     "rows_examined_delta": 0}]}
-    assert _evaluate_digests(r, {}) == []
+    assert _evaluate_digests(r, {"affected_operation_ref": "INVENTORY_LOOKUP"}) == []
+
+
+def test_digest_delta_zero_is_negative_for_lock_scenario():
+    """锁场景(INVENTORY_RESERVATION)无慢查询增量是确定性否定,产 E3=False 继续锁证据。"""
+    r = {"success": True, "data": [{"digest": "SELECT ... FOR SHARE",
+                                    "rows_examined_delta": 0}]}
+    ev = _evaluate_digests(r, {"affected_operation_ref": "INVENTORY_RESERVATION"})
+    assert len(ev) == 1 and ev[0]["passed"] is False
 
 
 def test_digest_delta_large_is_positive():
