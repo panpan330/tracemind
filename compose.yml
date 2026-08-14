@@ -141,6 +141,8 @@ services:
         condition: service_healthy
       inventory-service:
         condition: service_healthy
+      qdrant:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
       interval: 10s
@@ -250,11 +252,22 @@ services:
     mem_limit: 256m
     networks: [observability-query-net]
 
+  qdrant:
+    image: qdrant/qdrant:v1.15.2
+    container_name: tracemind-qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    mem_limit: 512m
+    networks: [tracemind]
+
 volumes:
   mysql-data:
   ai-checkpoints:
   prometheus-data:
   grafana-data:
+  qdrant-data:
 
 secrets:
   mcp_clients.json:
