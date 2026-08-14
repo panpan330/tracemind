@@ -45,6 +45,11 @@ function syncUrl() {
   router.replace({ path: '/replay', query: { incidentId: manifest.value?.incidentId, runId: activeRunId.value, position: String(position.value) } })
 }
 
+function goObservation() {
+  if (!activeRunId.value || !manifest.value) return
+  router.push(`/incidents/${manifest.value.incidentId}/runs/${activeRunId.value}/observation`)
+}
+
 async function loadStepDetail(step: ReplayStep) {
   showTech.value = true
   if (!manifest.value) return
@@ -66,6 +71,7 @@ onMounted(load)
         <span v-if="runManifest.runOutcome">· 调查结果: {{ runManifest.runOutcome }}</span>
         <span v-if="runManifest.replayStatus === 'partial'" class="missing-flag">部分审计记录缺失</span>
         <span v-if="runManifest.replayStatus === 'in_progress'" class="stale">调查尚未结束</span>
+        <el-button v-if="activeRunId" size="small" @click="goObservation">运行观测</el-button>
       </div>
 
       <!-- 顶部时间轴 -->
