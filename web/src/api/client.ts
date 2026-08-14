@@ -1,4 +1,4 @@
-import type { CreateIncidentInput, IncidentDetail, IncidentListItem, IncidentReplayManifest, ReplayRunManifest, ReplayStepsResponse, ScenarioStatus } from './types'
+import type { CreateIncidentInput, IncidentDetail, IncidentListItem, IncidentReplayManifest, ReplayRunManifest, ReplayStepsResponse, RunObservation, ScenarioStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(url, {
@@ -68,4 +68,9 @@ export function fetchReplayStepDetail(
   incidentId: number, runId: number, logicalStepId: string,
 ): Promise<Record<string, unknown>> {
   return request(`/api/incidents/${incidentId}/replay/runs/${runId}/steps/${encodeURIComponent(logicalStepId)}`)
+}
+
+// ---- V1.8 运行观测 ----
+export function fetchRunObservation(incidentId: number, runId: number): Promise<RunObservation> {
+  return request(`/api/incidents/${incidentId}/runs/${runId}/observation`)
 }

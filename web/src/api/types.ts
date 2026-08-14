@@ -128,3 +128,27 @@ export interface ReplayStepsResponse {
   keyStepIndexes: Record<string, number> | null
   steps: ReplayStep[]
 }
+
+// ---- V1.8 运行观测 ----
+export interface RunObservationLlmDetail {
+  node?: string; model?: string; promptVersion?: string
+  inputTokens?: number | null; outputTokens?: number | null
+  latencyMs?: number; retries?: number; finishReason?: string
+  structuredOutputValid?: boolean; fallbackTriggered?: boolean
+  knowledgeChunkIds?: string[]
+}
+export interface RunObservationToolDetail {
+  name?: string; transport?: string; attemptNo?: number
+  outcome?: string; errorCode?: string | null; latencyMs?: number; traceId?: string
+}
+export interface RunObservationTimelineItem {
+  type: 'llm' | 'tool' | 'retrieval'; phase: string
+  startedAt: string | null; durationMs: number
+  detail: Record<string, unknown>
+}
+export interface RunObservationAnomaly { type: string; stepId: string | null; detail: string }
+export interface RunObservation {
+  run: { runId: number; status: string; terminationReason?: string | null }
+  timeline: RunObservationTimelineItem[]
+  diagnosis: { terminationReason?: string | null; bottleneckStep: string | null; anomalies: RunObservationAnomaly[] }
+}
