@@ -21,5 +21,6 @@ def aggregate_model_costs(calls: list[dict]) -> dict:
     for m, item in out.items():
         unit = MODEL_PRICE_PER_M.get(m)
         if unit:
-            item["cost"] = round(unit * (item["input_tokens"] + item["output_tokens"]) / 1_000_000, 6)
+            total = float(item["input_tokens"]) + float(item["output_tokens"])
+            item["cost"] = round(unit * total / 1_000_000, 6)
     return out

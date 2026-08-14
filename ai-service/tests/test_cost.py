@@ -25,3 +25,11 @@ def test_aggregate_unknown_model_cost_zero():
 
 def test_aggregate_empty():
     assert cost.aggregate_model_costs([]) == {}
+
+
+def test_aggregate_decimal_tokens():
+    """数据库返回 Decimal(如 SUM 聚合)→ 成本计算不崩溃。"""
+    from decimal import Decimal
+    out = cost.aggregate_model_costs(
+        [{"model": "qwen3.7-flash", "input_tokens": Decimal("100"), "output_tokens": Decimal("50")}])
+    assert out["qwen3.7-flash"]["cost"] == cost.MODEL_PRICE_PER_M["qwen3.7-flash"] * 150 / 1_000_000
