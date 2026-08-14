@@ -49,3 +49,45 @@ def test_get_llm_respects_llm_mode_config():
     settings.llm_mode = "fake"
     llm = get_llm()
     assert isinstance(llm, FakeLLM)
+
+
+def test_hypothesize_uses_routed_model(monkeypatch):
+    """V1.11:配置了 hypothesize_model 时,节点调用传给 client 的 model 是路由值。"""
+    from app.agent.llm import OpenAICompatibleLLM
+    from app.config import settings
+    monkeypatch.setattr(settings, "hypothesize_model", "qwen3.8-max")
+    captured = {}
+
+    class _Client:
+        def chat_json_with_usage(self, messages, max_tokens=600, model=None):
+            captured["model"] = model
+            return ({"hypotheses": [{"description": "h"}]},
+                    {"input_tokens": 10, "output_tokens": 5}, "stop")
+
+    llm = OpenAICompatibleLLM(client=_Client(), strict=True)
+    llm.hypothesize({"description": "库存慢", "incident_id": 1, "run_id": 1})
+    assert captured["model"] == "qwen3.8-max"
+
+
+def test_select_tool_uses_routed_model(monkeypatch):
+    from app.agent.llm import OpenAICompatibleLLM
+    from app.config import settings
+    monkeypatch.setattr(settings, "select_tool_model", "qwen3.7-flash")
+    captured = {}
+
+    class _Client:
+        def chat(self, messages, max_tokens=600, model=None, tools=None):
+            captured["model"] = model
+            from app.agent.llm_client import ChatResult
+            return ChatResult(content="", tool_calls=[], finish_reason="tool_calls",
+                              usage={}, model=model)
+
+    monkeypatch.setattr(
+        "app.mcp.contract.llm_tool_schemas",
+        lambda: [{"type": "function", "function": {
+            "name": "get_index_info", "description": "",
+            "parameters": {"type": "object", "properties": {}}}}])
+    llm = OpenAICompatibleLLM(client=_Client(), strict=True)
+    llm.select_tool({"description": "库存慢", "incident_id": 1, "run_id": 1},
+                    "prompt", {"get_index_info"})
+    assert captured["model"] == "qwen3.7-flash"

@@ -13,6 +13,7 @@ from app.agent.determinism import (DeterministicEvidencePlanner,
                                    TemplatePostmortemRenderer)
 from app.agent.evidence_summary import summarize
 from app.agent.llm_client import LLMClient
+from app.agent.model_router import route
 from app.config import settings
 from app.rag.embedder import Embedder
 from app.rag.retriever import Retriever
@@ -101,9 +102,10 @@ class OpenAICompatibleLLM:
         if self.strict:
             raise ModelDegradedError(kind)
 
-    def _chat_json_with_usage(self, messages: list[dict], max_tokens: int = 600):
+    def _chat_json_with_usage(self, messages: list[dict], max_tokens: int = 600,
+                              model: str | None = None):
         """调 chat_json_with_usage(client 层),返回 (data, usage, finish_reason)。"""
-        return self.client.chat_json_with_usage(messages, max_tokens=max_tokens)
+        return self.client.chat_json_with_usage(messages, max_tokens=max_tokens, model=model)
 
     def _audit_model_call(self, state: dict, node: str, *, attempts: int,
                           latency_ms: int, input_tokens: int, output_tokens: int,
@@ -212,7 +214,7 @@ class OpenAICompatibleLLM:
         for _ in range(self.MAX_RETRIES + 1):
             attempts += 1
             data, usage, finish = self._chat_json_with_usage(
-                [{"role": "user", "content": prompt}])
+                [{"role": "user", "content": prompt}], model=route("hypothesize"))
             tokens_in += usage.get("input_tokens") or 0
             tokens_out += usage.get("output_tokens") or 0
             hyps = (data or {}).get("hypotheses")
@@ -255,7 +257,8 @@ class OpenAICompatibleLLM:
         for attempt in range(self.MAX_RETRIES + 1):
             attempts += 1
             result = self.client.chat([{"role": "user", "content": prompt}],
-                                      tools=schemas, max_tokens=300)
+                                      tools=schemas, max_tokens=300,
+                                      model=route("select_tool"))
             if result is not None:
                 tokens_in += (result.usage or {}).get("input_tokens") or 0
                 tokens_out += (result.usage or {}).get("output_tokens") or 0
@@ -302,7 +305,8 @@ class OpenAICompatibleLLM:
         for _ in range(self.MAX_RETRIES + 1):
             attempts += 1
             data, usage, finish = self._chat_json_with_usage(
-                [{"role": "user", "content": prompt}], max_tokens=1500)
+                [{"role": "user", "content": prompt}], max_tokens=1500,
+                model=route("write_report"))
             tokens_in += usage.get("input_tokens") or 0
             tokens_out += usage.get("output_tokens") or 0
             content = (data or {}).get("content")
@@ -349,7 +353,8 @@ class OpenAICompatibleLLM:
         for _ in range(self.MAX_RETRIES + 1):
             attempts += 1
             data, usage, finish = self._chat_json_with_usage(
-                [{"role": "user", "content": prompt}], max_tokens=600)
+                [{"role": "user", "content": prompt}], max_tokens=600,
+                model=route("reflect"))
             tokens_in += usage.get("input_tokens") or 0
             tokens_out += usage.get("output_tokens") or 0
             required = ("root_cause_revisit", "evidence_gap",
