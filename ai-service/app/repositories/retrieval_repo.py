@@ -23,3 +23,13 @@ def insert(*, incident_id: int, run_id: int, node: str, query_text_hash: str,
              collection_version, embedding_model, dimensions, candidate_top_k,
              final_chunk_ids, scores, latency_ms, status, error_code, int(degraded)),
         )
+
+
+def list_retrievals_by_run(agent_run_id: int) -> list[dict]:
+    from sqlalchemy import text
+    control_engine = get_control_engine()
+    with control_engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT node, final_chunk_ids, scores, latency_ms, status, degraded, id "
+            "FROM retrieval_record WHERE agent_run_id = :r ORDER BY id"), {"r": agent_run_id})
+        return [dict(row._mapping) for row in rows]

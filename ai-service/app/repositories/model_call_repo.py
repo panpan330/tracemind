@@ -31,3 +31,17 @@ def insert(*, incident_id: int, run_id: int, node: str, mode: str, provider: str
              input_tokens, output_tokens, status, error_code, int(degraded),
              git_commit_sha, knowledge_chunk_ids),
         )
+
+
+def list_model_calls_by_run(agent_run_id: int) -> list[dict]:
+    from sqlalchemy import text
+    control_engine = get_control_engine()
+    with control_engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT node, mode, provider, model, model_snapshot, prompt_version, "
+            "prompt_hash, tool_schema_version, logical_call_id, attempts_json, "
+            "finish_reason, structured_output_valid, tool_call_count, fallback_executor, "
+            "latency_ms, input_tokens, output_tokens, status, error_code, degraded, "
+            "knowledge_chunk_ids, git_commit_sha, id "
+            "FROM model_call WHERE agent_run_id = :r ORDER BY id"), {"r": agent_run_id})
+        return [dict(row._mapping) for row in rows]

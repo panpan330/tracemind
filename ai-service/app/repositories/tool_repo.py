@@ -41,3 +41,16 @@ def list_tool_calls(incident_id: int) -> list[ToolCall]:
         return list(session.scalars(
             select(ToolCall).filter(ToolCall.incident_id == incident_id)
             .order_by(ToolCall.id.asc())).all())
+
+
+def list_tool_call_attempts_by_run(agent_run_id: int) -> list[dict]:
+    from sqlalchemy import text
+    control_engine = get_control_engine()
+    with control_engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT a.attempt_no, a.client_attempt_id, a.mcp_request_id, a.outcome, "
+            "a.error_code, a.retryable, a.latency_ms, a.protocol_version, a.trace_id, "
+            "t.tool_name, t.transport, a.id "
+            "FROM tool_call_attempt a JOIN tool_call t ON a.tool_call_pk = t.id "
+            "WHERE a.agent_run_id = :r ORDER BY a.id"), {"r": agent_run_id})
+        return [dict(row._mapping) for row in rows]
