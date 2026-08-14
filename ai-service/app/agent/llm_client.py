@@ -111,7 +111,24 @@ class LLMClient:
                     time.sleep(1 << attempt)
                     continue
                 logger.warning("LLM chat 调用失败(第 %d 次): %s", attempt + 1, exc)
-                return None
+                break
+        # V1.11 容灾:主模型重试耗尽(RETRY_STATUS 类错误)→ 切 fallback 模型重试 1 次
+        fallback = settings.fallback_model
+        if fallback and fallback != self.model:
+            logger.warning("主模型 %s 重试耗尽,切 fallback %s", self.model, fallback)
+            fb_payload = {**payload, "model": fallback}
+            try:
+                resp = httpx.post(f"{self.base_url}/chat/completions",
+                                  headers=self._headers(), json=fb_payload,
+                                  timeout=self.timeout)
+                if resp.status_code in self.NO_RETRY_STATUS:
+                    logger.warning("fallback 返回不可重试状态 %s", resp.status_code)
+                else:
+                    resp.raise_for_status()
+                    return self._parse(resp)
+            except httpx.HTTPError as exc:
+                logger.warning("fallback 模型调用失败: %s", exc)
+        return None
 
     def chat_json(self, messages: list[dict], max_tokens: int = 600,
                   model: str | None = None) -> dict | None:

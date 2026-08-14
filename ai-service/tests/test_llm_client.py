@@ -142,3 +142,60 @@ def test_extract_json_tolerates_prefix_text():
     from app.agent.llm_client import LLMClient
     text = '好的,结果如下: {"a": 1} 请查收。'
     assert LLMClient._extract_json(text) == {"a": 1}
+
+
+def test_chat_fallback_on_retry_exhausted(monkeypatch):
+    """V1.11:主模型 3 次 429 退避耗尽 → 切 fallback 模型重试成功。"""
+    from app.config import settings
+    monkeypatch.setattr(settings, "fallback_model", "deepseek-v4-flash-0731")
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json["model"])
+        if len(calls) <= 3:
+            return FakeResp({}, status=429)
+        return FakeResp({"choices": [{"message": {"role": "assistant",
+                                                  "content": "ok", "tool_calls": []},
+                                      "finish_reason": "stop"}],
+                         "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = LLMClient(base_url="http://llm", api_key="k", model="qwen3.8-max")
+    r = client.chat([{"role": "user", "content": "hi"}])
+    assert r is not None
+    assert r.content == "ok"
+    assert calls[-1] == "deepseek-v4-flash-0731"   # 第 4 次用 fallback
+
+
+def test_chat_fallback_not_used_when_same_model(monkeypatch):
+    """V1.11:fallback 与主模型相同 → 不额外重试(仍 3 次退避后 None)。"""
+    from app.config import settings
+    monkeypatch.setattr(settings, "fallback_model", "qwen3.8-max")
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json["model"])
+        return FakeResp({}, status=429)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = LLMClient(base_url="http://llm", api_key="k", model="qwen3.8-max")
+    r = client.chat([{"role": "user", "content": "hi"}])
+    assert r is None
+    assert len(calls) == 3   # 无 fallback 重试
+
+
+def test_chat_fallback_not_used_when_unset(monkeypatch):
+    """V1.11:fallback 未配置 → 行为与现状一致(3 次退避后 None)。"""
+    from app.config import settings
+    monkeypatch.setattr(settings, "fallback_model", "")
+    calls = []
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json["model"])
+        return FakeResp({}, status=429)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    client = LLMClient(base_url="http://llm", api_key="k", model="qwen3.8-max")
+    r = client.chat([{"role": "user", "content": "hi"}])
+    assert r is None
+    assert len(calls) == 3
