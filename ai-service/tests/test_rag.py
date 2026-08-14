@@ -70,7 +70,8 @@ def test_search_sends_read_api_key(monkeypatch):
 
     def fake_post(url, headers=None, json=None, timeout=None):
         captured["headers"] = headers
-        return FakeResp({"result": {"points": [{"payload": {"text": "t", "doc_id": "d"},
+        return FakeResp({"result": {"points": [{"payload": {"text": "t", "doc_id": "d",
+                                                            "recovered": False},
                                                 "score": 0.9}]}})
 
     monkeypatch.setattr(httpx, "post", fake_post)
@@ -79,6 +80,7 @@ def test_search_sends_read_api_key(monkeypatch):
     hits = store.search("x")
     assert captured["headers"].get("X-API-Key") == "read-secret"
     assert hits[0]["doc_id"] == "d"
+    assert hits[0]["recovered"] is False   # V1.10:透出 recovered 供避坑标注
 
 
 def test_retriever_cooldown_recovers():

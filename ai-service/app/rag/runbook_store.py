@@ -63,7 +63,8 @@ class RunbookStore:
             points = res if isinstance(res, list) else res.get("points", [])
             return [{"text": p["payload"].get("text", ""), "score": p.get("score", 0.0),
                      "doc_id": p["payload"].get("doc_id", ""),
-                     "title": p["payload"].get("title", "")}
+                     "title": p["payload"].get("title", ""),
+                     "recovered": p["payload"].get("recovered", True)}
                     for p in points]
         except (httpx.HTTPError, KeyError, IndexError) as exc:
             raise RagUnavailableError(f"Qdrant search 失败: {exc}") from exc
