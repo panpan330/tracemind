@@ -21,3 +21,12 @@ def test_route_all_empty_returns_none(monkeypatch):
     for k in model_router.NODE_MODEL_KEY.values():
         monkeypatch.setattr(settings, k, "")
     assert model_router.route("select_tool") is None
+
+
+def test_settings_has_dynamic_routing_fields():
+    """V1.12:动态路由配置字段存在且默认关。"""
+    assert hasattr(settings, "dynamic_routing")
+    assert settings.dynamic_routing is False          # 默认关
+    assert settings.routing_window == 20
+    assert settings.routing_weights == "0.6,0.25,0.15"
+    assert settings.select_tool_candidates == ""

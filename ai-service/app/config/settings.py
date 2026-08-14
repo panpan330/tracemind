@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     report_model: str = ""
     fallback_model: str = ""            # 容灾备用;空 → 不启用 fallback
 
+    # ---- V1.12 动态路由:窗口滚动评分(默认关;开启才启用)----
+    dynamic_routing: bool = False
+    routing_window: int = 20                 # 滑动窗口大小
+    routing_weights: str = "0.6,0.25,0.15"   # 成功率/时延/成本权重
+    select_tool_candidates: str = ""         # 候选模型,逗号分隔,如 "qwen3.7-flash,qwen3.8-max"
+    hypothesize_candidates: str = ""
+    reflect_candidates: str = ""
+    report_candidates: str = ""
+
     # ---- Embedding Provider(与 Chat 独立,可不同 base_url/key)----
     embedding_provider: str = "bailian"
     embedding_base_url: str = ""
