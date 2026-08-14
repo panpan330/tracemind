@@ -104,20 +104,26 @@ class OpenAICompatibleLLM:
 
     def _chat_json_with_usage(self, messages: list[dict], max_tokens: int = 600,
                               model: str | None = None):
-        """调 chat_json_with_usage(client 层),返回 (data, usage, finish_reason)。"""
-        return self.client.chat_json_with_usage(messages, max_tokens=max_tokens, model=model)
+        """调 chat_json_with_usage(client 层),返回 (data, usage, finish_reason, actual_model)。
+        actual_model:响应实际用的模型(容灾 fallback 后为备用模型名)。"""
+        out = self.client.chat_json_with_usage(messages, max_tokens=max_tokens, model=model)
+        if len(out) >= 4:
+            return out
+        data, usage, finish = out
+        return data, usage, finish, model or getattr(self.client, "model", None)
 
     def _audit_model_call(self, state: dict, node: str, *, attempts: int,
                           latency_ms: int, input_tokens: int, output_tokens: int,
                           finish_reason: str | None, structured_output_valid: bool,
-                          fallback_executor: str = "") -> None:
+                          fallback_executor: str = "", model: str | None = None,
+                          degraded: bool = False) -> None:
         from app.repositories import model_call_repo
         try:
             model_call_repo.insert(
                 incident_id=state.get("incident_id") or 0,
                 run_id=state.get("run_id") or 0,
                 node=node, mode=settings.llm_mode, provider="bailian",
-                model=settings.chat_model_resolved or "unknown",
+                model=model or settings.chat_model_resolved or "unknown",
                 model_snapshot="", prompt_version="", prompt_hash="",
                 tool_schema_version="", logical_call_id="",
                 attempts_json=json.dumps([{"n": i + 1} for i in range(attempts)]),
@@ -128,7 +134,7 @@ class OpenAICompatibleLLM:
                 input_snapshot_json="", latency_ms=latency_ms,
                 input_tokens=input_tokens or None, output_tokens=output_tokens or None,
                 status="ok" if structured_output_valid else "invalid",
-                error_code="", degraded=False,
+                error_code="", degraded=degraded,
                 git_commit_sha="", knowledge_chunk_ids="")
         except Exception:  # noqa: BLE001 审计失败不影响主流程
             logger.warning("model_call 审计写入失败", exc_info=True)
@@ -213,8 +219,9 @@ class OpenAICompatibleLLM:
         attempts = 0
         for _ in range(self.MAX_RETRIES + 1):
             attempts += 1
-            data, usage, finish = self._chat_json_with_usage(
+            data, usage, finish, actual_model = self._chat_json_with_usage(
                 [{"role": "user", "content": prompt}], model=route("hypothesize"))
+            routed = route("hypothesize")
             tokens_in += usage.get("input_tokens") or 0
             tokens_out += usage.get("output_tokens") or 0
             hyps = (data or {}).get("hypotheses")
@@ -224,7 +231,8 @@ class OpenAICompatibleLLM:
                     state, "hypothesize", attempts=attempts,
                     latency_ms=int((_t.monotonic() - start) * 1000),
                     input_tokens=tokens_in, output_tokens=tokens_out,
-                    finish_reason=finish, structured_output_valid=True)
+                    finish_reason=finish, structured_output_valid=True,
+                    model=actual_model, degraded=(routed is not None and actual_model != routed))
                 return [{"id": f"h{i + 1}", "description": h["description"],
                          "status": "proposed"} for i, h in enumerate(hyps)]
         self._audit_model_call(
@@ -256,18 +264,22 @@ class OpenAICompatibleLLM:
         attempts = 0
         for attempt in range(self.MAX_RETRIES + 1):
             attempts += 1
+            routed = route("select_tool")
             result = self.client.chat([{"role": "user", "content": prompt}],
                                       tools=schemas, max_tokens=300,
-                                      model=route("select_tool"))
+                                      model=routed)
             if result is not None:
                 tokens_in += (result.usage or {}).get("input_tokens") or 0
                 tokens_out += (result.usage or {}).get("output_tokens") or 0
             if result and result.tool_calls:
+                actual_model = result.model or routed
                 self._audit_model_call(
                     state, "select_tool", attempts=attempts,
                     latency_ms=int((_t.monotonic() - start) * 1000),
                     input_tokens=tokens_in, output_tokens=tokens_out,
-                    finish_reason=result.finish_reason, structured_output_valid=True)
+                    finish_reason=result.finish_reason, structured_output_valid=True,
+                    model=actual_model,
+                    degraded=(routed is not None and actual_model != routed))
                 return [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
                         for tc in result.tool_calls]
             logger.warning("select_tool 未返回 tool_calls(第 %d/%d 次)", attempt + 1,
@@ -304,9 +316,10 @@ class OpenAICompatibleLLM:
         attempts = 0
         for _ in range(self.MAX_RETRIES + 1):
             attempts += 1
-            data, usage, finish = self._chat_json_with_usage(
+            data, usage, finish, actual_model = self._chat_json_with_usage(
                 [{"role": "user", "content": prompt}], max_tokens=1500,
                 model=route("write_report"))
+            routed = route("write_report")
             tokens_in += usage.get("input_tokens") or 0
             tokens_out += usage.get("output_tokens") or 0
             content = (data or {}).get("content")
@@ -315,7 +328,8 @@ class OpenAICompatibleLLM:
                     state, "write_report", attempts=attempts,
                     latency_ms=int((_t.monotonic() - start) * 1000),
                     input_tokens=tokens_in, output_tokens=tokens_out,
-                    finish_reason=finish, structured_output_valid=True)
+                    finish_reason=finish, structured_output_valid=True,
+                    model=actual_model, degraded=(routed is not None and actual_model != routed))
                 return {"content": content,
                         "root_cause_summary": (data or {}).get("root_cause_summary", "")}
         self._audit_model_call(
@@ -352,9 +366,10 @@ class OpenAICompatibleLLM:
         attempts = 0
         for _ in range(self.MAX_RETRIES + 1):
             attempts += 1
-            data, usage, finish = self._chat_json_with_usage(
+            data, usage, finish, actual_model = self._chat_json_with_usage(
                 [{"role": "user", "content": prompt}], max_tokens=600,
                 model=route("reflect"))
+            routed = route("reflect")
             tokens_in += usage.get("input_tokens") or 0
             tokens_out += usage.get("output_tokens") or 0
             required = ("root_cause_revisit", "evidence_gap",
@@ -364,7 +379,8 @@ class OpenAICompatibleLLM:
                     state, "reflect", attempts=attempts,
                     latency_ms=int((_t.monotonic() - start) * 1000),
                     input_tokens=tokens_in, output_tokens=tokens_out,
-                    finish_reason=finish, structured_output_valid=True)
+                    finish_reason=finish, structured_output_valid=True,
+                    model=actual_model, degraded=(routed is not None and actual_model != routed))
                 return data
         self._audit_model_call(
             state, "reflect", attempts=attempts,
