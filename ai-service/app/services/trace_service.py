@@ -10,17 +10,22 @@ from app.services.trace_normalizer import TraceNormalizer
 
 
 def _resolve_incident_window(incident: dict) -> tuple[str, str]:
-    """按 Incident 观测窗口搜索:observed_at 起至当前时间(最多 max_trace_search_window_seconds)。"""
+    """按 Incident 观测窗口搜索:observed_at 起至当前时间(最多 max_trace_search_window_seconds)。
+    observed_at 缺失(Incident 创建时未观测到故障时间)时,退化为最近 max_trace_search_window_seconds,
+    而非 0 宽度窗口——否则 get_trace 永远查不到 trace(真实后端验收暴露)。"""
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc)
     end = now.isoformat()
-    start_iso = incident.get("observed_at") or end
-    try:
-        start_dt = datetime.datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=datetime.timezone.utc)  # DB naive datetime 视为 UTC
-    except ValueError:
+    start_iso = incident.get("observed_at")
+    if not start_iso:
         start_dt = now - datetime.timedelta(seconds=settings.max_trace_search_window_seconds)
+    else:
+        try:
+            start_dt = datetime.datetime.fromisoformat(str(start_iso).replace("Z", "+00:00"))
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=datetime.timezone.utc)  # DB naive datetime 视为 UTC
+        except ValueError:
+            start_dt = now - datetime.timedelta(seconds=settings.max_trace_search_window_seconds)
     if (now - start_dt).total_seconds() > settings.max_trace_search_window_seconds:
         start_dt = now - datetime.timedelta(seconds=settings.max_trace_search_window_seconds)
     return start_dt.isoformat(), end
