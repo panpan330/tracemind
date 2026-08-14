@@ -6,7 +6,7 @@ from fastapi import FastAPI
 # 先触发工具注册(app.tools.__init__ 填充 TOOL_REGISTRY),再定义 app 实例
 import app.tools  # noqa: E402,F401
 
-from app.api import approvals, demo, incidents, observation, replay, runs, stream  # noqa: E402
+from app.api import approvals, demo, evals, incidents, observation, replay, runs, stream  # noqa: E402
 from app.mcp.client import McpClientManager, set_mcp_client  # noqa: E402
 from app.services import runner  # noqa: E402
 from app.services.approval_scanner import scanner_loop  # noqa: E402
@@ -50,3 +50,4 @@ app.include_router(stream.router)
 app.include_router(demo.router)
 app.include_router(replay.router)
 app.include_router(observation.router)
+app.include_router(evals.router)
