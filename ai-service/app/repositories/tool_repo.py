@@ -54,3 +54,13 @@ def list_tool_call_attempts_by_run(agent_run_id: int) -> list[dict]:
             "FROM tool_call_attempt a JOIN tool_call t ON a.tool_call_pk = t.id "
             "WHERE a.agent_run_id = :r ORDER BY a.id"), {"r": agent_run_id})
         return [dict(row._mapping) for row in rows]
+
+
+def list_tool_calls_by_run(agent_run_id: int) -> list[dict]:
+    from sqlalchemy import text
+    control_engine = get_control_engine()
+    with control_engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT tool_name, transport, status, duration_ms, output, id "
+            "FROM tool_call WHERE agent_run_id = :r ORDER BY id"), {"r": agent_run_id})
+        return [dict(row._mapping) for row in rows]

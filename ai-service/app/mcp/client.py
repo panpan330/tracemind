@@ -230,6 +230,15 @@ class McpClientManager:
             raise
         except Exception as exc:  # noqa: BLE001
             raise MCPError(MCP_TOOL_ERROR, str(exc)) from exc
+        # AI 侧写 tool_call(调查工具经 MCP 执行,审计由 AI 侧唯一落库;传输 attempt 由 MCP 侧)
+        try:
+            from app.repositories.tool_repo import record_tool_call
+            record_tool_call(incident_id or 0, name, business, result or {},
+                             agent_run_id=agent_run_id or 0,
+                             transport="mcp_streamable_http",
+                             tool_call_id=ctx.tool_call_id, purpose="investigation")
+        except Exception:  # noqa: BLE001  审计失败不影响工具结果
+            logger.warning("tool_call 审计写入失败", exc_info=True)
         return result
 
     def _restart_session(self, timeout: float = 10.0) -> bool:
