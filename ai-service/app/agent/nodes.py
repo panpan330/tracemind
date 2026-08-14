@@ -649,6 +649,8 @@ def report(state: IncidentState, llm=None) -> dict:
         result = llm.write_report(state)
         content = {"status": "ready", **result}
         postmortem_repo.create_postmortem(incident_id=state["incident_id"], content=content)
+        from app.agent.memory import record_case
+        record_case(state)   # 仅 recovered 沉淀;失败不阻塞诊断
         event_repo.append_event(state["incident_id"], "incident_finished",
                                 {"status": state.get("status")})
         state["report"] = content
