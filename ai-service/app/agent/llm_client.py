@@ -120,6 +120,14 @@ class LLMClient:
             return None
         return self._extract_json(result.content)
 
+    def chat_json_with_usage(self, messages: list[dict], max_tokens: int = 600,
+                             model: str | None = None):
+        """同 chat_json,但顺带返回 usage/finish_reason(供 model_call 审计)。"""
+        result = self.chat(messages, max_tokens=max_tokens, model=model)
+        if result is None or not result.content:
+            return None, {}, None
+        return self._extract_json(result.content), result.usage or {}, result.finish_reason
+
     @staticmethod
     def _extract_json(text: str) -> dict | None:
         """健壮 JSON 提取:容忍 markdown fence / 前后说明文字(真实模型常见行为)。"""

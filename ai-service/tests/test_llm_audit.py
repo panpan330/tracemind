@@ -9,7 +9,14 @@ class _FakeClient:
         self._content = content
         self._tool_calls = tool_calls or []
 
-    def chat(self, messages, max_tokens=600, model=None, tools=None):
+    def chat_json_with_usage(self, messages, max_tokens=600, model=None):
+        import json
+        import re
+        m = re.search(r"\{.*\}", self._content or "", re.DOTALL)
+        data = json.loads(m.group(0)) if m else None
+        return data, {"input_tokens": 100, "output_tokens": 20}, "stop"
+
+    def chat(self, messages, tools=None, max_tokens=600, model=None):
         return ChatResult(content=self._content, tool_calls=self._tool_calls,
                           finish_reason="stop",
                           usage={"input_tokens": 100, "output_tokens": 20},

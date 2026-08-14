@@ -14,6 +14,11 @@ class StubClient:
         self.calls.append((messages, max_tokens))
         return self.responses.pop(0) if self.responses else None
 
+    def chat_json_with_usage(self, messages, max_tokens=600, model=None):
+        self.calls.append((messages, max_tokens))
+        r = self.responses.pop(0) if self.responses else None
+        return r, {}, None
+
     def chat(self, messages, tools=None, max_tokens=600, model=None):
         self.calls.append((messages, max_tokens))
         r = self.responses.pop(0) if self.responses else None
@@ -66,6 +71,7 @@ def test_select_tool_llm_empty_falls_back_to_planner():
     (VM 真实模型验收偶发失败:incident llm_unavailable)。工具选择用 planner 不构成根因降级
     (根因判定在 diagnose 由确定性 policy 完成),只保证证据收集不因 LLM 输出波动中断。"""
     from app.agent.llm_client import ChatResult
+    import app.tools  # noqa: F401  注册 TOOL_REGISTRY(llm_tool_schemas 依赖)
     client = StubClient([ChatResult(content=None), ChatResult(content=None),
                          ChatResult(content=None)])
     llm = OpenAICompatibleLLM(client=client, strict=True)

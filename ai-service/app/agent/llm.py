@@ -91,11 +91,8 @@ class OpenAICompatibleLLM:
             raise ModelDegradedError(kind)
 
     def _chat_json_with_usage(self, messages: list[dict], max_tokens: int = 600):
-        """调 chat 拿 ChatResult(含 usage),解析 JSON,返回 (data, usage, finish_reason)。"""
-        result = self.client.chat(messages, max_tokens=max_tokens)
-        if result is None or not result.content:
-            return None, {}, None
-        return LLMClient._extract_json(result.content), result.usage or {}, result.finish_reason
+        """调 chat_json_with_usage(client 层),返回 (data, usage, finish_reason)。"""
+        return self.client.chat_json_with_usage(messages, max_tokens=max_tokens)
 
     def _audit_model_call(self, state: dict, node: str, *, attempts: int,
                           latency_ms: int, input_tokens: int, output_tokens: int,
