@@ -136,6 +136,20 @@ class OpenAICompatibleLLM:
                 status="ok" if structured_output_valid else "invalid",
                 error_code="", degraded=degraded,
                 git_commit_sha="", knowledge_chunk_ids="")
+            # V1.12 动态路由:审计落库后更新评分(基于最终结果)
+            from app.agent.model_router import scorer
+            from app.agent.cost import MODEL_PRICE_PER_M
+            try:
+                _m = model or settings.chat_model_resolved or "unknown"
+                unit = MODEL_PRICE_PER_M.get(_m)
+                _cost = (unit * ((input_tokens or 0) + (output_tokens or 0)) / 1_000_000
+                         if unit else 0.0)
+                scorer.update(
+                    node, _m,
+                    {"success": structured_output_valid, "latency_ms": latency_ms,
+                     "cost": _cost})
+            except Exception:  # noqa: BLE001 评分失败不影响主流程
+                logger.warning("动态路由评分更新失败", exc_info=True)
         except Exception:  # noqa: BLE001 审计失败不影响主流程
             logger.warning("model_call 审计写入失败", exc_info=True)
 

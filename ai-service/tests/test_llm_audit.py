@@ -118,3 +118,20 @@ def test_hypothesize_records_fallback_degraded(monkeypatch):
 
     assert recorded["model"] == "deepseek-v4-flash-0731"
     assert recorded["degraded"] is True
+
+
+def test_audit_updates_scorer(monkeypatch):
+    """V1.12:审计落库后触发 ModelScorer.update(成功结果)。"""
+    from app.agent import model_router
+    from app.agent.model_scorer import ModelScorer
+    sc = ModelScorer()
+    monkeypatch.setattr(model_router, "scorer", sc)
+    calls = []
+    monkeypatch.setattr(model_call_repo, "insert", lambda **kw: calls.append(kw))
+    _silence_retrieval(monkeypatch)
+    l = _mk_llm(_FakeClient(content='{"hypotheses":[{"description":"缺联合索引"}]}'))
+    l.hypothesize({"incident_id": 1, "run_id": 2, "description": "慢查询"})
+    keys = [k for k in sc._windows if k[0] == "hypothesize"]
+    assert keys, "scorer 应收到 hypothesize 的 update"
+    assert len(sc._windows[keys[0]]) == 1
+    assert sc._windows[keys[0]][0]["success"] is True
