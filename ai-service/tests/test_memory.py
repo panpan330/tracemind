@@ -15,12 +15,17 @@ def test_case_text_contains_fingerprint():
 
 def test_case_payload_fields():
     state = {"run_id": 7, "root_cause_code": "INDEX_MISSING",
-             "fault_category": "SCN-001"}
+             "fault_category": "SCN-001", "description": "库存慢",
+             "evidence": [], "fix_execution": {"status": "succeeded"},
+             "recovery": {"status": "recovered"}}
     payload = mem._case_payload(state)
     assert payload["root_cause_code"] == "INDEX_MISSING"
     assert payload["fault_category"] == "SCN-001"
     assert payload["recovered"] is True
     assert payload["run_id"] == 7
+    assert payload["doc_id"] == "case-7"
+    assert payload["title"] == "历史诊断案例"
+    assert "INDEX_MISSING" in payload["text"]   # 案例文本供检索后注入
 
 
 def test_record_case_skips_non_recovered(monkeypatch):

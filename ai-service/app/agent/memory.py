@@ -23,7 +23,10 @@ def _case_text(state: dict) -> str:
 
 
 def _case_payload(state: dict) -> dict:
-    return {"root_cause_code": state.get("root_cause_code", ""),
+    return {"doc_id": f"case-{state.get('run_id', 0)}",
+            "title": "历史诊断案例",
+            "text": _case_text(state),
+            "root_cause_code": state.get("root_cause_code", ""),
             "fault_category": state.get("fault_category") or state.get("root_cause_code", ""),
             "recovered": True,
             "ts": datetime.now(timezone.utc).isoformat(),
