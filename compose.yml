@@ -125,11 +125,9 @@ services:
       TRACEMIND_QDRANT_URL: "http://qdrant:6333"
       TRACEMIND_EMBEDDING_MODEL: text-embedding-v4
       TRACEMIND_EMBEDDING_DIMENSIONS: "1024"
-      # V1.4 可观测性后端(默认 fixture;真实验收切 prometheus/jaeger,见 README)
+      # V1.4 可观测性:调查数据源经 mcp-tools(标准 HTTP 模式,ai 不直连观测后端)
       TRACEMIND_METRICS_BACKEND: fixture
       TRACEMIND_TRACE_BACKEND: fixture
-      TRACEMIND_PROMETHEUS_URL: "http://prometheus:9090"
-      TRACEMIND_JAEGER_QUERY_ENDPOINT: "jaeger:16685"
     ports:
       - "8000:8000"
     volumes:

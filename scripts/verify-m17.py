@@ -63,20 +63,24 @@ def _vm(command: str) -> tuple[int, str]:
 def tier_vm_smoke() -> dict:
     summary = {"tier": "vm-smoke", "steps": {}}
     for name, cmd in [
-        ("mcp_tools_health", "curl -sf http://127.0.0.1:8001/health/ready >/dev/null && echo OK"),
+        # mcp-tools 不映射宿主机端口;经容器内探针验证
+        ("mcp_tools_health",
+         "docker exec tracemind-mcp-tools python -c \"import urllib.request; "
+         "urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=5)\" && echo OK"),
         ("ai_health", "curl -sf http://127.0.0.1:8000/api/health >/dev/null && echo OK"),
         ("no_stdio_spawn",
-         "docker exec tracemind-ai sh -c 'ps aux | grep -c \"app.mcp.server_stdio\"' | tr -d ' '"),
+         "docker exec tracemind-ai sh -c 'ps aux 2>/dev/null | grep -c \"app.mcp.server_stdio\" || echo 0'"),
     ]:
         code, out = _vm(cmd)
         summary["steps"][name] = {"exit": code, "out": out.strip()[:200]}
-    # SCN-001/002 各一次闭环(复用 verify-m14 单轮,fake 或少量 real)
-    code, out = _vm("python scripts/verify-m14.py --base http://192.168.88.10:8000 "
-                    "--order http://192.168.88.10:8081 --rounds 1")
+    # SCN-001/002 各一次闭环:本地 python 连 VM 服务(fake 或少量 real)
+    code, out = run([sys.executable, str(REPO / "scripts/verify-m14.py"),
+                     "--base", "http://192.168.88.10:8000",
+                     "--order", "http://192.168.88.10:8081", "--rounds", "1"], REPO)
     summary["steps"]["scn_rounds"] = {"exit": code,
                                       "tail": (out.splitlines()[-5:] if out else [])}
-    # 凭据隔离布尔(只输出两布尔,不 dump 完整 env)
-    code, out = _vm("python scripts/check_credential_isolation.py")
+    # 凭据隔离布尔(本地脚本 ssh VM 检查,只输出两布尔)
+    code, out = run([sys.executable, str(REPO / "scripts/check_credential_isolation.py")], REPO)
     summary["credential_isolation"] = out.strip()
     summary["ok"] = all(s.get("exit") == 0 for s in summary["steps"].values())
     return summary
