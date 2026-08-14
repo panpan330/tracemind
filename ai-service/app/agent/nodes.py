@@ -807,6 +807,31 @@ def _record_fix_execution(state: IncidentState, proposal: dict, approval: dict,
         pass
 
 
+@_replay_node("REFLECTION_EVALUATED")
+def reflect(state: IncidentState) -> dict:
+    """V1.10 反思节点:修复失败后调用 LLM 复盘证据链,生成修正策略。
+    LLM 不可用/结构化输出失败 → needs_human(reflection_llm_unavailable),不阻塞、不崩溃。"""
+    from app.agent.llm import ModelDegradedError
+    llm = get_llm()
+    try:
+        data = llm.reflect(state)
+    except Exception as exc:  # noqa: BLE001 反思失败降级
+        logger.warning("反思失败(降级 needs_human): %s", exc)
+        state["status"] = "needs_human"
+        state["termination_reason"] = "reflection_llm_unavailable"
+        _emit_status(state)
+        return state
+    entry = {
+        "attempt_no": (state.get("reflection_count") or 0) + 1,
+        "reason": data.get("root_cause_revisit", ""),
+        "new_hypothesis": data.get("new_hypothesis", ""),
+        "strategy_change": data.get("adjust_strategy", ""),
+    }
+    state["reflection_log"] = [*(state.get("reflection_log") or []), entry]
+    state["reflection_count"] = (state.get("reflection_count") or 0) + 1
+    return state
+
+
 @_replay_node("RECOVERY_VERIFIED")
 def verify_recovery_node(state: IncidentState) -> dict:
     """恢复验证。按根因分发:锁根因 → 目标范围六项验证(设计 V1.3 §6);

@@ -53,6 +53,15 @@ class FakeLLM:
         from app.agent.fix_registry import build_proposal
         return build_proposal(state)
 
+    def reflect(self, state: dict) -> dict:
+        """V1.10 反思:修复失败后复盘。fake 模式返回固定结构化反思。"""
+        return {
+            "root_cause_revisit": "根因判断方向正确,证据链仍需补强",
+            "evidence_gap": "缺少关键指标对比",
+            "new_hypothesis": "维持原假设,补充缺失证据后重试",
+            "adjust_strategy": "重新收集关键证据后再次验证",
+        }
+
     def write_report(self, state: dict) -> dict:
         evidence_lines = []
         for ev in state.get("evidence") or []:
@@ -305,6 +314,53 @@ class OpenAICompatibleLLM:
             fallback_executor="template_postmortem_renderer")
         self._degrade("write_report")
         return self._report_renderer.render(state)
+
+    def reflect(self, state: dict) -> dict:
+        """V1.10 反思:修复失败后复盘证据链,输出结构化修正策略。
+        重试后仍失败:降级并抛 ModelDegradedError(由 reflect 节点转 needs_human)。"""
+        from app.agent.evidence_summary import summarize
+        ev_summary = summarize(state.get("evidence") or [])
+        prompt = (
+            "你是故障诊断复盘专家。修复未恢复,请基于证据链结构化复盘。\n"
+            "只输出 JSON,格式:{\"root_cause_revisit\":\"根因修正/确认\","
+            "\"evidence_gap\":\"还缺什么证据\",\"new_hypothesis\":\"修正假设\","
+            "\"adjust_strategy\":\"下一步策略\"}\n"
+            "禁止编造事实,只能基于给定数据。\n\n"
+            f"故障:{state.get('description', '')}\n"
+            f"当前根因:{state.get('root_cause_code', '')}\n"
+            f"证据摘要:{json.dumps(ev_summary, ensure_ascii=False, default=str)}\n"
+            f"已执行修复:{json.dumps(state.get('fix_execution') or {}, ensure_ascii=False, default=str)}\n"
+            f"恢复验证:{json.dumps(state.get('recovery') or {}, ensure_ascii=False, default=str)}\n"
+            f"已反思轮次:{state.get('reflection_count', 0)}/3"
+        )
+        import time as _t
+        start = _t.monotonic()
+        tokens_in = tokens_out = 0
+        finish = None
+        attempts = 0
+        for _ in range(self.MAX_RETRIES + 1):
+            attempts += 1
+            data, usage, finish = self._chat_json_with_usage(
+                [{"role": "user", "content": prompt}], max_tokens=600)
+            tokens_in += usage.get("input_tokens") or 0
+            tokens_out += usage.get("output_tokens") or 0
+            required = ("root_cause_revisit", "evidence_gap",
+                        "new_hypothesis", "adjust_strategy")
+            if data and all(isinstance(data.get(k), str) and data[k] for k in required):
+                self._audit_model_call(
+                    state, "reflect", attempts=attempts,
+                    latency_ms=int((_t.monotonic() - start) * 1000),
+                    input_tokens=tokens_in, output_tokens=tokens_out,
+                    finish_reason=finish, structured_output_valid=True)
+                return data
+        self._audit_model_call(
+            state, "reflect", attempts=attempts,
+            latency_ms=int((_t.monotonic() - start) * 1000),
+            input_tokens=tokens_in, output_tokens=tokens_out,
+            finish_reason=finish, structured_output_valid=False,
+            fallback_executor="none")
+        self._degrade("reflect")
+        raise ModelDegradedError("reflect 结构化输出无效")
 
 
 def _build_retriever():
