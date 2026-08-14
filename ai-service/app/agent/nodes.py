@@ -336,6 +336,10 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
         # digest 增量全 0 是暂态(故障负载尚未进入 performance_schema),等待重采
         noop = 0
         _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
+    elif name == "get_lock_waiters":
+        # 锁场景:锁等待未达阈值是暂态(等待累积中),等待重采
+        noop = 0
+        _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
     elif noop >= MAX_CONSECUTIVE_NO_PROGRESS and name != "get_service_metrics":
         return {**out, "status": "needs_human", "termination_reason": "no_progress",
                 "consecutive_no_progress_count": noop}
@@ -448,14 +452,24 @@ def _evaluate_index(result: dict, state: dict) -> list[dict]:
 
 
 def _evaluate_lock_waiters(result: dict, state: dict) -> list[dict]:
-    """L1:目标 inventory 记录上的锁等待(等待语句匹配库存预占,wait_duration ≥ 3s)。"""
+    """L1:目标 inventory 记录上的锁等待(等待语句匹配库存预占,wait_duration ≥ 3s)。
+    锁场景(INVENTORY_RESERVATION):锁等待未达阈值是暂态(等待累积中),触发重采。"""
     data = result.get("data") or {}
     waits = data.get("waits") or []
     target = [w for w in waits
               if w.get("object_schema") == "tracemind_business"
               and w.get("object_table") == "inventory"
               and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
-    passed = bool(target and any((w.get("wait_duration_ms") or 0) >= 3000 for w in target))
+    op = state.get("affected_operation_ref") or ""
+    reached = any((w.get("wait_duration_ms") or 0) >= 3000 for w in target)
+    if reached:
+        passed = True
+    elif op == "INVENTORY_RESERVATION":
+        # 锁场景:锁等待未达阈值(尚未产生或等待累积中)是暂态,触发重采
+        return []
+    else:
+        # 慢查询场景:无目标锁等待是确定性否定
+        passed = False
     return [{"id": "L1", "key": "l1", "source": "get_lock_waiters",
              "content": data, "passed": passed}]
 
