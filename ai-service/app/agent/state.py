@@ -54,3 +54,6 @@ class IncidentState(TypedDict, total=False):
     recovery: dict | None
     report: dict | None
     error: str | None
+    # V1.10 反思循环:每轮反思追加一条;count 达上限转 needs_human
+    reflection_log: Annotated[list[dict], append_records]
+    reflection_count: int
