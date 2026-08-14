@@ -7,11 +7,12 @@ from app.tools_core.ports import DigestPort
 def build(ports: dict) -> dict:
     d = ports.get("digest")
 
-    def list_expensive_query_digests(window_seconds: int | None = None) -> dict:
+    def list_expensive_query_digests(incident_id: int | None = None,
+                                     window_seconds: int | None = None) -> dict:
         if d is None:
             raise ToolBusinessError("PORT_UNAVAILABLE", "digest 端口未配置", retryable=False)
         try:
-            return d.list_expensive_digests(window_seconds)
+            return d.list_expensive_digests(incident_id, window_seconds)
         except ToolBusinessError:
             raise
         except Exception as e:  # noqa: BLE001

@@ -44,7 +44,7 @@ class GetTraceIn(BaseModel):
 
 
 class ListDigestsIn(BaseModel):
-    incident_id: int = Field(gt=0)
+    incident_id: int | None = Field(default=None, gt=0)  # 审计上下文注入(由 service 从可信 ctx 注入)
 
 
 class GetQueryPlanIn(BaseModel):

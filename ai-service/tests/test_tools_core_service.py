@@ -53,3 +53,22 @@ def test_legacy_execute_thin_wrapper():
     r = execute_tool("get_service_metrics", incident_id=None, service_ref="inventory-service",
                      window_seconds=300)
     assert isinstance(r, dict) and "success" in r
+
+
+def test_digest_handler_receives_incident_id():
+    """digest 工具强依赖 incident_id(基线差值),handler 必须把可信 ctx.incident_id 传给端口。"""
+    received = {}
+
+    class MemDigest:
+        def list_expensive_digests(self, incident_id, window_seconds=None):
+            received["incident_id"] = incident_id
+            return {"digests": [], "has_more": False}
+
+    import app.tools  # noqa: F401  确保 TOOL_REGISTRY 已注册
+    svc = ToolExecutionService(ports={"digest": MemDigest()}, runtime="real")
+    import uuid
+    ctx = ClientInvocationContext(incident_id=1, agent_run_id=1,
+                                  tool_call_id=f"tc-{uuid.uuid4().hex[:8]}",
+                                  purpose="investigation")
+    svc.execute("list_expensive_query_digests", {"window_seconds": 300}, ctx)
+    assert received.get("incident_id") == 1, f"digest 端口收到 incident_id={received}"

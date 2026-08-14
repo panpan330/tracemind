@@ -19,8 +19,8 @@ class _Trace(TracePort):
 
 
 class _Digest(DigestPort):
-    def list_expensive_digests(self, window_seconds=None):
-        return slow_query_service.list_expensive_digests(window_seconds)
+    def list_expensive_digests(self, incident_id=None, window_seconds=None):
+        return slow_query_service.list_expensive_digests(incident_id)
 
 
 class _Plan(PlanPort):

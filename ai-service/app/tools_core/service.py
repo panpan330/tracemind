@@ -43,14 +43,18 @@ class ToolExecutionService:
         h = hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
         return f"{tool_name}:{h}"
 
-    def _run_handler(self, name: str, parsed) -> dict:
+    def _run_handler(self, name: str, parsed, ctx: ClientInvocationContext) -> dict:
         """handler 模式:ports 非空时经 handler(新架构);剔除 context 字段(handler 为纯业务)。
+        incident_id 属可信上下文(来自受控 Header,非模型),对签名含 incident_id 的 handler 注入。
         ports 为空(legacy 薄封装)时直接走 TOOL_REGISTRY fn(与 V1.6 行为一致)。"""
         if self._use_handlers:
             fn = self._handlers.get(name)
             if fn is not None:
                 args = {k: v for k, v in parsed.model_dump().items()
                         if k not in _RESERVED_CONTEXT_FIELDS}
+                import inspect
+                if "incident_id" in inspect.signature(fn).parameters:
+                    args["incident_id"] = ctx.incident_id
                 return fn(**args)
         spec = TOOL_REGISTRY.get(name)
         if spec is None:
@@ -95,7 +99,7 @@ class ToolExecutionService:
         # 5) 执行
         start = time.monotonic()
         try:
-            data = self._run_handler(name, parsed)
+            data = self._run_handler(name, parsed, ctx)
             result = ToolResult(tool_call_id=str(uuid.uuid4())[:8], success=True,
                                 duration_ms=int((time.monotonic() - start) * 1000), data=data)
         except ToolBusinessError as e:
