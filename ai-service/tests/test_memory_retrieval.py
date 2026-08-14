@@ -45,3 +45,26 @@ def test_rag_context_case_failure_not_blocking(monkeypatch):
                                       retriever=None, case_retriever=_Boom())
     rag = llm._rag_context({"description": "库存慢", "incident_id": 1, "run_id": 1})
     assert rag == ""   # 案例检索失败不阻塞
+
+
+def test_case_references_marks_failure(monkeypatch):
+    monkeypatch.setattr(llm_mod.retrieval_repo, "insert", lambda **k: None)
+    llm = llm_mod.OpenAICompatibleLLM(
+        client=_FakeClient(), strict=True, retriever=None,
+        case_retriever=_FakeRetriever([{"doc_id": "case-10-fail", "title": "历史案例",
+                                        "text": "失败案例(避坑):库存慢", "recovered": False}]))
+    out = llm._case_references({"description": "库存慢"})
+    assert 'recovered="false"' in out
+    assert "失败案例(避坑)" in out
+    assert "不要重复" in out
+
+
+def test_case_references_success_keeps_original(monkeypatch):
+    monkeypatch.setattr(llm_mod.retrieval_repo, "insert", lambda **k: None)
+    llm = llm_mod.OpenAICompatibleLLM(
+        client=_FakeClient(), strict=True, retriever=None,
+        case_retriever=_FakeRetriever([{"doc_id": "case-7", "title": "历史案例",
+                                        "text": "缺联合索引", "recovered": True}]))
+    out = llm._case_references({"description": "库存慢"})
+    assert 'recovered="false"' not in out
+    assert "历史案例" in out
