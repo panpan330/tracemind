@@ -44,11 +44,20 @@ def create_http_app() -> Starlette:
         return JSONResponse({"status": "ready" if ok else "not_ready",
                              "detail": detail}, status_code=200 if ok else 503)
 
-    # 组合:health 路由 + 安全中间件链(认证/限流/Origin 由 security.py 提供)
+    # 组合:health 路由 + 安全中间件链 + MCP core 的 lifespan(session_manager 初始化)
+    from contextlib import asynccontextmanager
     from app.mcp.security import build_security_middleware
+
+    @asynccontextmanager
+    async def _combined_lifespan(app):
+        # 先启动 MCP session manager(core 的 lifespan 只在顶层 app 执行)
+        async with core.router.lifespan_context(app):
+            yield
+
     routes = [Route("/health/live", health_live), Route("/health/ready", health_ready)]
     app = Starlette(routes=routes,
-                    middleware=build_security_middleware(clients_file=s.mcp_auth_clients_file))
+                    middleware=build_security_middleware(clients_file=s.mcp_auth_clients_file),
+                    lifespan=_combined_lifespan)
     # 挂载 /mcp(Streamable HTTP 核心):core 内部路由即为 /mcp,用 Route 直接挂避免 mount 斜杠重定向
     from starlette.routing import Route as _Route
     app.routes.append(_Route("/mcp", core, methods=["GET", "POST"]))
