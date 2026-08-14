@@ -11,6 +11,7 @@ import logging
 from app.agent.determinism import (DeterministicEvidencePlanner,
                                    TemplateHypothesisGenerator,
                                    TemplatePostmortemRenderer)
+from app.agent.evidence_summary import summarize
 from app.agent.llm_client import LLMClient
 from app.config import settings
 from app.rag.embedder import Embedder
@@ -263,8 +264,9 @@ class OpenAICompatibleLLM:
     def write_report(self, state: dict) -> dict:
         facts = {
             "incident": state.get("description", ""),
-            "evidence": [{"id": e.get("id"), "passed": e.get("passed"),
-                          "content": e.get("content")} for e in state.get("evidence") or []],
+            "evidence": summarize([{"id": e.get("id"), "passed": e.get("passed"),
+                                    "content": e.get("content"), "key": e.get("key")}
+                                   for e in state.get("evidence") or []]),
             "fix_execution": state.get("fix_execution") or {},
             "recovery": state.get("recovery") or {},
             "degraded": state.get("degraded", False),
