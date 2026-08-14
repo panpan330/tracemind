@@ -340,6 +340,10 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
         # 锁场景:锁等待未达阈值是暂态(等待累积中),等待重采
         noop = 0
         _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
+    elif name == "get_transaction_details":
+        # 锁场景:阻塞事务年龄未达阈值是暂态(累积中),等待重采
+        noop = 0
+        _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
     elif noop >= MAX_CONSECUTIVE_NO_PROGRESS and name != "get_service_metrics":
         return {**out, "status": "needs_human", "termination_reason": "no_progress",
                 "consecutive_no_progress_count": noop}
@@ -475,9 +479,19 @@ def _evaluate_lock_waiters(result: dict, state: dict) -> list[dict]:
 
 
 def _evaluate_transaction_details(result: dict, state: dict) -> list[dict]:
-    """L2:阻塞事务详情(复合匹配见 facts/policies;此处只判定存在长事务)。"""
+    """L2:阻塞事务详情(复合匹配见 facts/policies;此处只判定存在长事务)。
+    锁场景(INVENTORY_RESERVATION):事务年龄未达阈值是暂态(累积中),触发重采。"""
     data = result.get("data") or {}
-    passed = bool(data.get("transaction_id") and (data.get("age_ms") or 0) >= 5000)
+    op = state.get("affected_operation_ref") or ""
+    has_trx = bool(data.get("transaction_id"))
+    age_ok = (data.get("age_ms") or 0) >= 5000
+    if has_trx and age_ok:
+        passed = True
+    elif op == "INVENTORY_RESERVATION" and not age_ok:
+        # 锁场景:阻塞事务年龄未达阈值(累积中)是暂态,触发重采
+        return []
+    else:
+        passed = False
     return [{"id": "L2", "key": "l2", "source": "get_transaction_details",
              "content": data, "passed": passed}]
 

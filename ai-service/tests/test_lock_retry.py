@@ -29,3 +29,27 @@ def test_lock_absent_is_negative_for_slow_scenario():
     ev = _evaluate_lock_waiters({"success": True, "data": {"waits": []}},
                                 {"affected_operation_ref": "INVENTORY_LOOKUP"})
     assert len(ev) == 1 and ev[0]["passed"] is False
+
+
+def test_trx_age_reached_is_positive():
+    from app.agent.nodes import _evaluate_transaction_details
+    ev = _evaluate_transaction_details(
+        {"success": True, "data": {"transaction_id": "t1", "age_ms": 8000}},
+        {"affected_operation_ref": "INVENTORY_RESERVATION"})
+    assert len(ev) == 1 and ev[0]["passed"] is True
+
+
+def test_trx_age_below_threshold_is_transient():
+    from app.agent.nodes import _evaluate_transaction_details
+    ev = _evaluate_transaction_details(
+        {"success": True, "data": {"transaction_id": "t1", "age_ms": 4000}},
+        {"affected_operation_ref": "INVENTORY_RESERVATION"})
+    assert ev == []
+
+
+def test_trx_absent_is_negative_for_slow_scenario():
+    from app.agent.nodes import _evaluate_transaction_details
+    ev = _evaluate_transaction_details(
+        {"success": True, "data": {}},
+        {"affected_operation_ref": "INVENTORY_LOOKUP"})
+    assert len(ev) == 1 and ev[0]["passed"] is False
