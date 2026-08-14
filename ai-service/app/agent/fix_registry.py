@@ -43,7 +43,10 @@ def _extract_lock_parameters(state: dict) -> dict:
               and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
     if not target:
         raise ValueError("无有效锁等待证据,无法构造 TERMINATE_BLOCKING_SESSION 参数")
-    w = target[0]
+    # 根阻塞者 = 只出现在 blocking 侧、不出现在 requesting 侧的 pid(锁等待链最上游)
+    req_pids = {w.get("requesting_processlist_id") for w in target}
+    w = next((x for x in target if x.get("blocking_processlist_id") not in req_pids),
+             target[0])
     tx = ev.get("l2") or {}
     # blocking_transaction_id 取 L2 证据的真实 innodb_trx.trx_id(与执行前重查的 trx_id 同一 ID 空间,
     # 用于防连接复用误杀);L2 缺失时降级用 L1 的 ENGINE id(仅信息)。

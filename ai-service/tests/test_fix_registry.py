@@ -38,3 +38,31 @@ def test_relation_hash_is_stable_and_excludes_time():
     # 时间字段不入 hash
     h3 = fix_registry.build_relation_hash({**fields, "evidence_observed_at": "x"})
     assert h1 == h3
+
+
+def test_extract_lock_parameters_picks_root_blocker():
+    """锁等待链多阻塞者时,应选根阻塞者(只 blocking 不 requesting),而非 target[0](中间层)。"""
+    from app.agent.fix_registry import _extract_lock_parameters
+    waits = [
+        # 中间层:blocking=100 且 requesting=200(既阻塞又被阻塞)
+        {"object_schema": "tracemind_business", "object_table": "inventory",
+         "waiting_query_ref": "INVENTORY_RESERVATION",
+         "blocking_processlist_id": 100, "requesting_processlist_id": 200,
+         "blocker_ref": "blk_100", "blocking_transaction_id": "tx-mid",
+         "blocking_lock_ref": "blk_100", "requesting_transaction_id": "tx-req",
+         "index_name": None},
+        # 根阻塞者:blocking=999,只 blocking 不 requesting
+        {"object_schema": "tracemind_business", "object_table": "inventory",
+         "waiting_query_ref": "INVENTORY_RESERVATION",
+         "blocking_processlist_id": 999, "requesting_processlist_id": 100,
+         "blocker_ref": "blk_999", "blocking_transaction_id": "tx-root",
+         "blocking_lock_ref": "blk_999", "requesting_transaction_id": "tx-mid",
+         "index_name": None},
+    ]
+    state = {"evidence": [
+        {"key": "l1", "content": {"waits": waits}},
+        {"key": "l2", "content": {"transaction_id": "tx-root", "age_ms": 8000}},
+    ]}
+    params = _extract_lock_parameters(state)
+    assert params["processlist_id"] == 999, f"应选根阻塞者 999,实际 {params['processlist_id']}"
+    assert params["blocking_processlist_id"] == 999

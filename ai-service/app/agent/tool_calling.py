@@ -130,7 +130,11 @@ def resolve_arguments(name: str, raw_args: dict, state: dict) -> dict:
                   and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
         if not target:
             raise ArgumentResolutionError("无有效 blocker_ref,无法调用 get_transaction_details")
-        return {"transaction_ref": target[0].get("blocker_ref")}
+        # 根阻塞者 = 只出现在 blocking 侧、不出现在 requesting 侧的 pid(锁等待链最上游)
+        req_pids = {w.get("requesting_processlist_id") for w in target}
+        root = next((w for w in target if w.get("blocking_processlist_id") not in req_pids),
+                    target[0])
+        return {"transaction_ref": root.get("blocker_ref")}
     raise ArgumentResolutionError(f"未知工具 {name}")
 
 

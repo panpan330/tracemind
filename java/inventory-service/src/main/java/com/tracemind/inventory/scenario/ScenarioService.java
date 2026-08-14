@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -94,6 +95,7 @@ public class ScenarioService {
             Connection conn = ds.getConnection();
             conn.setAutoCommit(false);
             lockConnection = conn;
+            final CountDownLatch lockAcquired = new CountDownLatch(1);
             lockTask = lockExecutor.submit(() -> {
                 try (PreparedStatement ps = conn.prepareStatement(
                         "SELECT id FROM inventory WHERE sku_id=? AND warehouse_id=? FOR UPDATE")) {
@@ -102,6 +104,8 @@ public class ScenarioService {
                     if (!ps.executeQuery().next()) {
                         throw new IllegalStateException("FOR UPDATE 未命中任何记录");
                     }
+                    // 锁已真正持有:通知主线程(同步等锁,避免 inject 返回后负载先拿到锁形成反向锁等待链)
+                    lockAcquired.countDown();
                     // 保持连接与事务不结束,直到 reset
                     while (!Thread.currentThread().isInterrupted()) {
                         Thread.sleep(1000);
@@ -115,13 +119,20 @@ public class ScenarioService {
                     lockHeld = false;
                     lockConnection = null;
                 } finally {
+                    lockAcquired.countDown();   // 失败也放行,主线程以 lockHeld 判定
                     try { conn.rollback(); } catch (Exception ignored) {}
                     try { conn.close(); } catch (Exception ignored) {}
                     lockHeld = false;
                     lockConnection = null;
                 }
             });
-            lockHeld = true;
+            // 同步等待锁真正持有(executeQuery 成功)或失败;最多 5s,超时视为注入失败
+            boolean acquired = lockAcquired.await(5, TimeUnit.SECONDS);
+            lockHeld = acquired;
+            if (!acquired) {
+                lockTask.cancel(true);
+                return new InjectResult("FAULTY", "lock_acquire_timeout");
+            }
             return new InjectResult("FAULTY", "lock_injected");
         } catch (Exception e) {
             lockHeld = false;
