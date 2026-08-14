@@ -44,12 +44,14 @@ class ToolExecutionService:
         return f"{tool_name}:{h}"
 
     def _run_handler(self, name: str, parsed) -> dict:
-        """handler 模式:ports 非空时经 handler(新架构);
+        """handler 模式:ports 非空时经 handler(新架构);剔除 context 字段(handler 为纯业务)。
         ports 为空(legacy 薄封装)时直接走 TOOL_REGISTRY fn(与 V1.6 行为一致)。"""
         if self._use_handlers:
             fn = self._handlers.get(name)
             if fn is not None:
-                return fn(**parsed.model_dump())
+                args = {k: v for k, v in parsed.model_dump().items()
+                        if k not in _RESERVED_CONTEXT_FIELDS}
+                return fn(**args)
         spec = TOOL_REGISTRY.get(name)
         if spec is None:
             raise ToolBusinessError("UNKNOWN_TOOL", f"unknown tool: {name}", retryable=False)
