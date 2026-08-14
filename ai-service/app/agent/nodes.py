@@ -332,6 +332,10 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     if name == "get_trace":
         noop = 0
         _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
+    elif name == "list_expensive_query_digests":
+        # digest 增量全 0 是暂态(故障负载尚未进入 performance_schema),等待重采
+        noop = 0
+        _time.sleep(EVIDENCE_RETRY_SLEEP_SECONDS)
     elif noop >= MAX_CONSECUTIVE_NO_PROGRESS and name != "get_service_metrics":
         return {**out, "status": "needs_human", "termination_reason": "no_progress",
                 "consecutive_no_progress_count": noop}
@@ -408,7 +412,11 @@ def _evaluate_trace(result: dict, state: dict) -> list[dict]:
 def _evaluate_digests(result: dict, state: dict) -> list[dict]:
     digests = (result.get("data") or []) if result.get("success") else []
     top = digests[0] if digests else {}
-    e3 = result.get("success") and top.get("rows_examined_delta", 0) > 1000
+    # 暂态:故障负载尚未进入 performance_schema(增量全 0)时不产证据,触发重采
+    # (真实后端验收暴露:digest 采集早于负载 → 增量 0 被误判为确定性否定)
+    if not result.get("success") or top.get("rows_examined_delta", 0) <= 0:
+        return []
+    e3 = top.get("rows_examined_delta", 0) > 1000
     # 单场景:高扫描行数的 digest 即目标查询(系统内只有 INVENTORY_LOOKUP 一个慢查询场景)
     return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
              "content": {"top": top, "query_ref": "INVENTORY_LOOKUP"}, "passed": e3}]
