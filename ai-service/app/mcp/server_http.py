@@ -18,16 +18,17 @@ def create_http_app() -> Starlette:
     audit = MySqlToolAuditPort()
     mcp = create_mcp_server(runtime="real", audit=audit)
 
-    # SDK 原生安全能力:stateless / transport_security(DNS rebinding + Origin)/ body 上限
+    # SDK 原生安全能力:stateless / transport_security(DNS rebinding + Host/Origin)/ body 上限
     mcp.settings.stateless_http = True
     mcp.settings.max_request_body_size = s.mcp_max_request_bytes
-    if hasattr(mcp.settings, "transport_security") and mcp.settings.transport_security is None:
-        from mcp.server.transport_security import TransportSecuritySettings
-        mcp.settings.transport_security = TransportSecuritySettings(
-            enable_dns_rebinding_protection=True,
-            allowed_origins=[],          # 服务间调用:Origin 缺失放行,存在需命中(空=仅缺失放行)
-            allowed_hosts=[],
-        )
+    # FastMCP 默认 transport_security 仅允许 127.0.0.1/localhost;覆盖为内部网络可达 host
+    from mcp.server.transport_security import TransportSecuritySettings
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_origins=[],          # 服务间调用:Origin 缺失放行,存在需命中(空=仅缺失放行)
+        allowed_hosts=["mcp-tools:*", "mcp-tools:8001",
+                       "127.0.0.1:*", "localhost:*"],
+    )
 
     core = mcp.streamable_http_app()   # Starlette,含 /mcp
 
