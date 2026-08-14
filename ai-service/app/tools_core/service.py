@@ -59,7 +59,13 @@ class ToolExecutionService:
         spec = TOOL_REGISTRY.get(name)
         if spec is None:
             raise ToolBusinessError("UNKNOWN_TOOL", f"unknown tool: {name}", retryable=False)
-        return spec.fn(**parsed.model_dump())
+        args = parsed.model_dump()
+        import inspect
+        # legacy fn(确定性节点 verify_recovery/execute_fix)的 incident_id 从可信 ctx 注入
+        # (V1.6 签名含 incident_id;execute_tool 薄封装把 incident_id 消耗成 ctx)
+        if "incident_id" in inspect.signature(spec.fn).parameters and args.get("incident_id") is None:
+            args["incident_id"] = ctx.incident_id
+        return spec.fn(**args)
 
     def execute(self, name: str, params: dict,
                 ctx: ClientInvocationContext,

@@ -66,11 +66,11 @@ class GetTransactionDetailsIn(BaseModel):
 
 
 class ExecuteFixIn(BaseModel):
-    incident_id: int = Field(gt=0)
+    incident_id: int | None = Field(default=None, gt=0)
     fix_proposal_id: int = Field(gt=0)
     approval_id: int = Field(gt=0)
 
 
 class VerifyRecoveryIn(BaseModel):
-    incident_id: int = Field(gt=0)
+    incident_id: int | None = Field(default=None, gt=0)  # 由 service 从可信 ctx 注入
     fix_execution_id: int = Field(gt=0)
