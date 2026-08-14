@@ -41,7 +41,8 @@ def create_mcp_server(runtime: str = "real",
                                       agent_run_id=agent_run_id or 0,
                                       tool_call_id=f"mcp-{name}-{uuid.uuid4().hex[:8]}",
                                       purpose="investigation")
-        return svc.execute(name, business, ctx, transport=transport)
+        return svc.execute(name, business, ctx, transport=transport,
+                           audit_side="mcp", mcp_attempt=1)
 
     @mcp.tool()
     def get_service_metrics(incident_id: int, agent_run_id: int,

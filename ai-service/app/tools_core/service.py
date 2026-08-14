@@ -60,7 +60,9 @@ class ToolExecutionService:
                 principal: Optional[AuthenticatedPrincipal] = None,
                 transport: str = "mcp_stdio",
                 mcp_invocation_id: Optional[str] = None,
-                mcp_attempt: Optional[int] = None) -> dict:
+                mcp_attempt: Optional[int] = None,
+                audit_side: str = "ai",
+                mcp_request_id: Optional[str] = None) -> dict:
         # 1) reserved context 字段拒绝(模型可传的只有业务参数)
         overlap = _RESERVED_CONTEXT_FIELDS & set(params)
         if overlap:
@@ -103,10 +105,23 @@ class ToolExecutionService:
             result = ToolResult(tool_call_id=str(uuid.uuid4())[:8], success=False,
                                 duration_ms=int((time.monotonic() - start) * 1000),
                                 error_code="TOOL_ERROR", error_message=str(e))
-        # 6) AI 侧审计(tool_call,先提交再返回;MCP Server 侧由 audit 端口另写 attempt)
+        # 6) 审计唯一所有者:AI 侧写 tool_call;MCP Server 侧经 audit 端口写 tool_call_attempt(两段式)
         if ctx.incident_id:
-            from app.repositories.tool_repo import record_tool_call
-            record_tool_call(ctx.incident_id, name, params, result.model_dump(),
-                             agent_run_id=ctx.agent_run_id, transport=transport,
-                             mcp_invocation_id=mcp_invocation_id, mcp_attempt=mcp_attempt)
+            if audit_side == "mcp" and self.audit is not None:
+                try:
+                    pk = self.audit.write_attempt_started(ctx, mcp_attempt or 1,
+                                                           mcp_request_id or mcp_invocation_id or "")
+                    self.audit.write_attempt_finished(
+                        pk, "completed" if result.get("success") else "failed",
+                        result=result, error_code=result.get("error_code"),
+                        retryable=bool(result.get("data", {}).get("retryable")),
+                        latency_ms=result.get("duration_ms", 0))
+                except Exception:  # noqa: BLE001  终态审计失败不改变工具结果(已有 started)
+                    pass
+            else:
+                from app.repositories.tool_repo import record_tool_call
+                record_tool_call(ctx.incident_id, name, params, result.model_dump(),
+                                 agent_run_id=ctx.agent_run_id, transport=transport,
+                                 mcp_invocation_id=mcp_invocation_id, mcp_attempt=mcp_attempt,
+                                 tool_call_id=ctx.tool_call_id, purpose=ctx.purpose)
         return result.model_dump()
