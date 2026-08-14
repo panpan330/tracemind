@@ -90,6 +90,39 @@ class OpenAICompatibleLLM:
         if self.strict:
             raise ModelDegradedError(kind)
 
+    def _chat_json_with_usage(self, messages: list[dict], max_tokens: int = 600):
+        """调 chat 拿 ChatResult(含 usage),解析 JSON,返回 (data, usage, finish_reason)。"""
+        result = self.client.chat(messages, max_tokens=max_tokens)
+        if result is None or not result.content:
+            return None, {}, None
+        return LLMClient._extract_json(result.content), result.usage or {}, result.finish_reason
+
+    def _audit_model_call(self, state: dict, node: str, *, attempts: int,
+                          latency_ms: int, input_tokens: int, output_tokens: int,
+                          finish_reason: str | None, structured_output_valid: bool,
+                          fallback_executor: str = "") -> None:
+        from app.repositories import model_call_repo
+        try:
+            model_call_repo.insert(
+                incident_id=state.get("incident_id") or 0,
+                run_id=state.get("run_id") or 0,
+                node=node, mode=settings.llm_mode, provider="bailian",
+                model=settings.chat_model_resolved or "unknown",
+                model_snapshot="", prompt_version="", prompt_hash="",
+                tool_schema_version="", logical_call_id="",
+                attempts_json=json.dumps([{"n": i + 1} for i in range(attempts)]),
+                finish_reason=finish_reason or "",
+                structured_output_valid=structured_output_valid,
+                tool_call_count=0, provider_request_id="",
+                fallback_executor=fallback_executor,
+                input_snapshot_json="", latency_ms=latency_ms,
+                input_tokens=input_tokens or None, output_tokens=output_tokens or None,
+                status="ok" if structured_output_valid else "invalid",
+                error_code="", degraded=False,
+                git_commit_sha="", knowledge_chunk_ids="")
+        except Exception:  # noqa: BLE001 审计失败不影响主流程
+            logger.warning("model_call 审计写入失败", exc_info=True)
+
     def _rag_context(self, state: dict) -> str:
         if self.retriever is None:
             return ""
@@ -135,13 +168,33 @@ class OpenAICompatibleLLM:
             f"故障现象:\n{state.get('description', '')}\n"
             + (f"\n参考知识库片段:\n{rag}\n" if rag else "")
         )
+        import time as _t
+        start = _t.monotonic()
+        tokens_in = tokens_out = 0
+        finish = None
+        attempts = 0
         for _ in range(self.MAX_RETRIES + 1):
-            data = self.client.chat_json([{"role": "user", "content": prompt}])
+            attempts += 1
+            data, usage, finish = self._chat_json_with_usage(
+                [{"role": "user", "content": prompt}])
+            tokens_in += usage.get("input_tokens") or 0
+            tokens_out += usage.get("output_tokens") or 0
             hyps = (data or {}).get("hypotheses")
             if (isinstance(hyps, list) and hyps
                     and all(isinstance(h, dict) and h.get("description") for h in hyps)):
+                self._audit_model_call(
+                    state, "hypothesize", attempts=attempts,
+                    latency_ms=int((_t.monotonic() - start) * 1000),
+                    input_tokens=tokens_in, output_tokens=tokens_out,
+                    finish_reason=finish, structured_output_valid=True)
                 return [{"id": f"h{i + 1}", "description": h["description"],
                          "status": "proposed"} for i, h in enumerate(hyps)]
+        self._audit_model_call(
+            state, "hypothesize", attempts=attempts,
+            latency_ms=int((_t.monotonic() - start) * 1000),
+            input_tokens=tokens_in, output_tokens=tokens_out,
+            finish_reason=finish, structured_output_valid=False,
+            fallback_executor="template_hypothesis_generator")
         self._degrade("hypothesize")
         return self._hyp_gen.generate(state)
 
@@ -159,15 +212,34 @@ class OpenAICompatibleLLM:
         schemas = [s for s in llm_tool_schemas() if s["function"]["name"] in eligible_tools]
         if not schemas:
             return []
+        import time as _t
+        start = _t.monotonic()
+        tokens_in = tokens_out = 0
+        attempts = 0
         for attempt in range(self.MAX_RETRIES + 1):
+            attempts += 1
             result = self.client.chat([{"role": "user", "content": prompt}],
                                       tools=schemas, max_tokens=300)
+            if result is not None:
+                tokens_in += (result.usage or {}).get("input_tokens") or 0
+                tokens_out += (result.usage or {}).get("output_tokens") or 0
             if result and result.tool_calls:
+                self._audit_model_call(
+                    state, "select_tool", attempts=attempts,
+                    latency_ms=int((_t.monotonic() - start) * 1000),
+                    input_tokens=tokens_in, output_tokens=tokens_out,
+                    finish_reason=result.finish_reason, structured_output_valid=True)
                 return [{"id": tc.id, "name": tc.name, "arguments": tc.arguments}
                         for tc in result.tool_calls]
             logger.warning("select_tool 未返回 tool_calls(第 %d/%d 次)", attempt + 1,
                            self.MAX_RETRIES + 1)
         logger.warning("select_tool LLM 连续失败,确定性规划器兜底(strict 模式)")
+        self._audit_model_call(
+            state, "select_tool", attempts=attempts,
+            latency_ms=int((_t.monotonic() - start) * 1000),
+            input_tokens=tokens_in, output_tokens=tokens_out,
+            finish_reason=None, structured_output_valid=False,
+            fallback_executor="deterministic_evidence_planner")
         return self._planner.choose(state, eligible_tools)
 
     def write_report(self, state: dict) -> dict:
@@ -185,12 +257,32 @@ class OpenAICompatibleLLM:
             "禁止编造事实,只能使用给定数据。\n\n"
             f"事实:\n{json.dumps(facts, ensure_ascii=False, default=str)}"
         )
+        import time as _t
+        start = _t.monotonic()
+        tokens_in = tokens_out = 0
+        finish = None
+        attempts = 0
         for _ in range(self.MAX_RETRIES + 1):
-            data = self.client.chat_json([{"role": "user", "content": prompt}], max_tokens=1500)
+            attempts += 1
+            data, usage, finish = self._chat_json_with_usage(
+                [{"role": "user", "content": prompt}], max_tokens=1500)
+            tokens_in += usage.get("input_tokens") or 0
+            tokens_out += usage.get("output_tokens") or 0
             content = (data or {}).get("content")
             if isinstance(content, str) and content.strip():
+                self._audit_model_call(
+                    state, "write_report", attempts=attempts,
+                    latency_ms=int((_t.monotonic() - start) * 1000),
+                    input_tokens=tokens_in, output_tokens=tokens_out,
+                    finish_reason=finish, structured_output_valid=True)
                 return {"content": content,
                         "root_cause_summary": (data or {}).get("root_cause_summary", "")}
+        self._audit_model_call(
+            state, "write_report", attempts=attempts,
+            latency_ms=int((_t.monotonic() - start) * 1000),
+            input_tokens=tokens_in, output_tokens=tokens_out,
+            finish_reason=finish, structured_output_valid=False,
+            fallback_executor="template_postmortem_renderer")
         self._degrade("write_report")
         return self._report_renderer.render(state)
 
