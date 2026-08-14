@@ -2,7 +2,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.nodes import (
     collect_evidence, diagnose, execute_fix, human_approval, hypothesize,
-    ingest, propose_fix, report, verify_recovery_node,
+    ingest, propose_fix, reflect, report, verify_recovery_node,
 )
 from app.agent.state import IncidentState
 
@@ -20,6 +20,18 @@ def _after_approval(state: IncidentState) -> str:
     """审批 resume 后的分支:approved -> execute_fix;rejected/expired -> report。"""
     approval = state.get("approval") or {}
     return "approved" if approval.get("status") == "approved" else "rejected"
+
+
+def _after_verify_recovery(state: IncidentState) -> str:
+    """V1.10 恢复验证后的分支:recovered -> report;未恢复 -> reflect 反思。
+    以 recovery.status 判定(recovery_failed 时 status=needs_human/not_recovered)。"""
+    recovery = state.get("recovery") or {}
+    return "report" if recovery.get("status") == "recovered" else "reflect"
+
+
+def _after_reflect(state: IncidentState) -> str:
+    """V1.10 反思后的分支:次数 < 3 -> 回 hypothesize 重试;>= 3 -> give_up(经 report)。"""
+    return "retry" if (state.get("reflection_count") or 0) < 3 else "give_up"
 
 
 def build_graph(checkpointer=None):
@@ -50,6 +62,16 @@ def build_graph(checkpointer=None):
         {"approved": "execute_fix", "rejected": "report"},
     )
     g.add_edge("execute_fix", "verify_recovery")
-    g.add_edge("verify_recovery", "report")
+    g.add_conditional_edges(
+        "verify_recovery",
+        _after_verify_recovery,
+        {"report": "report", "reflect": "reflect"},
+    )
+    g.add_node("reflect", reflect)
+    g.add_conditional_edges(
+        "reflect",
+        _after_reflect,
+        {"retry": "hypothesize", "give_up": "report"},
+    )
     g.add_edge("report", END)
     return g.compile(checkpointer=checkpointer)

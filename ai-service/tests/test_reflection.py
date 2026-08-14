@@ -1,5 +1,6 @@
 """V1.10 反思循环:state 字段、reflect 节点、graph 条件边。"""
 from app.agent import nodes
+from app.agent.graph import _after_reflect, _after_verify_recovery
 from app.agent.state import IncidentState, append_records
 
 
@@ -66,3 +67,21 @@ def test_reflect_llm_unavailable_degrades(monkeypatch):
     out = nodes.reflect(state)
     assert out["status"] == "needs_human"
     assert out["termination_reason"] == "reflection_llm_unavailable"
+
+
+def test_after_verify_recovery_recovered_goes_report():
+    assert _after_verify_recovery({"recovery": {"status": "recovered"}}) == "report"
+
+
+def test_after_verify_recovery_failed_goes_reflect():
+    assert _after_verify_recovery({"recovery": {"status": "needs_human"}}) == "reflect"
+    assert _after_verify_recovery({"recovery": {"status": "not_recovered"}}) == "reflect"
+
+
+def test_after_reflect_under_limit_retries():
+    assert _after_reflect({"reflection_count": 2}) == "retry"
+
+
+def test_after_reflect_at_limit_gives_up():
+    assert _after_reflect({"reflection_count": 3}) == "give_up"
+    assert _after_reflect({"reflection_count": 4}) == "give_up"
