@@ -23,13 +23,23 @@ def insert(*, incident_id: int, run_id: int, node: str, mode: str, provider: str
                  "attempts_json, finish_reason, structured_output_valid, tool_call_count, "
                  "provider_request_id, fallback_executor, input_snapshot_json, latency_ms, "
                  "input_tokens, output_tokens, status, error_code, degraded, git_commit_sha, "
-                 "knowledge_chunk_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-            (incident_id, run_id, node, mode, provider, model, model_snapshot,
-             prompt_version, prompt_hash, tool_schema_version, logical_call_id,
-             attempts_json, finish_reason, int(structured_output_valid), tool_call_count,
-             provider_request_id, fallback_executor, input_snapshot_json, latency_ms,
-             input_tokens, output_tokens, status, error_code, int(degraded),
-             git_commit_sha, knowledge_chunk_ids),
+                 "knowledge_chunk_ids) VALUES (:incident_id, :agent_run_id, :node, :mode, :provider, "
+                 ":model, :model_snapshot, :prompt_version, :prompt_hash, :tool_schema_version, "
+                 ":logical_call_id, :attempts_json, :finish_reason, :structured_output_valid, "
+                 ":tool_call_count, :provider_request_id, :fallback_executor, :input_snapshot_json, "
+                 ":latency_ms, :input_tokens, :output_tokens, :status, :error_code, :degraded, "
+                 ":git_commit_sha, :knowledge_chunk_ids)"),
+            {"incident_id": incident_id, "agent_run_id": run_id, "node": node, "mode": mode,
+             "provider": provider, "model": model, "model_snapshot": model_snapshot,
+             "prompt_version": prompt_version, "prompt_hash": prompt_hash,
+             "tool_schema_version": tool_schema_version, "logical_call_id": logical_call_id,
+             "attempts_json": attempts_json, "finish_reason": finish_reason,
+             "structured_output_valid": int(structured_output_valid),
+             "tool_call_count": tool_call_count, "provider_request_id": provider_request_id,
+             "fallback_executor": fallback_executor, "input_snapshot_json": input_snapshot_json,
+             "latency_ms": latency_ms, "input_tokens": input_tokens, "output_tokens": output_tokens,
+             "status": status, "error_code": error_code, "degraded": int(degraded),
+             "git_commit_sha": git_commit_sha, "knowledge_chunk_ids": knowledge_chunk_ids},
         )
 
 

@@ -28,14 +28,19 @@ def _wait_status(base, incident_id, targets, timeout_s=120):
 
 
 def run_one_round(base: str, scenario: str, round_no: int) -> dict:
-    _api(base, f"/api/demo/scenarios/{scenario}/reset", method="post",
-         headers={"x-demo-key": "demo-secret-2026"})
+    # 场景互斥:inject SCN-002 需 SCN-001 已恢复(反之亦然),故每轮前清两个场景
+    for s in ("SCN-001", "SCN-002"):
+        _api(base, f"/api/demo/scenarios/{s}/reset", method="post",
+             headers={"x-demo-key": "demo-secret-2026"})
     _api(base, f"/api/demo/scenarios/{scenario}/inject", method="post",
          headers={"x-demo-key": "demo-secret-2026"})
     t0 = time.time()
     inc = _api(base, "/api/incidents", method="post",
-               json={"title": f"{scenario} eval", "severity": "high",
-                     "service_ref": "inventory-service"})
+               json={"title": f"{scenario} eval", "description": f"真实模型评测 {scenario}",
+                     "severity": "high", "service_ref": "inventory-service",
+                     "affected_service_ref": "inventory-service",
+                     "affected_operation_ref": ("INVENTORY_LOOKUP" if scenario == "SCN-001"
+                                                else "INVENTORY_RESERVATION")})
     incident_id = inc["id"]
     run = _api(base, f"/api/incidents/{incident_id}/investigations", method="post")
     run_id = run["run_id"]

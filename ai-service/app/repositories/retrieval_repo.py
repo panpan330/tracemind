@@ -18,10 +18,15 @@ def insert(*, incident_id: int, run_id: int, node: str, query_text_hash: str,
             text("INSERT INTO retrieval_record (incident_id, agent_run_id, node, query_text_hash, "
                  "collection_alias, collection_version, embedding_model, embedding_dimensions, "
                  "candidate_top_k, final_chunk_ids, scores, latency_ms, status, error_code, degraded) "
-                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"),
-            (incident_id, run_id, node, query_text_hash, collection_alias,
-             collection_version, embedding_model, dimensions, candidate_top_k,
-             final_chunk_ids, scores, latency_ms, status, error_code, int(degraded)),
+                 "VALUES (:incident_id, :agent_run_id, :node, :query_text_hash, :collection_alias, "
+                 ":collection_version, :embedding_model, :embedding_dimensions, :candidate_top_k, "
+                 ":final_chunk_ids, :scores, :latency_ms, :status, :error_code, :degraded)"),
+            {"incident_id": incident_id, "agent_run_id": run_id, "node": node,
+             "query_text_hash": query_text_hash, "collection_alias": collection_alias,
+             "collection_version": collection_version, "embedding_model": embedding_model,
+             "embedding_dimensions": dimensions, "candidate_top_k": candidate_top_k,
+             "final_chunk_ids": final_chunk_ids, "scores": scores, "latency_ms": latency_ms,
+             "status": status, "error_code": error_code, "degraded": int(degraded)},
         )
 
 

@@ -34,7 +34,9 @@ def test_model_call_insert_sql(monkeypatch):
                git_commit_sha="abc", knowledge_chunk_ids="[]")
     sql, params = engine.sqls[0]
     assert "INSERT INTO model_call" in str(sql)
-    assert params[0] == 1
+    assert params["incident_id"] == 1
+    assert params["node"] == "hypothesize"
+    assert params["structured_output_valid"] == 1
 
 
 def test_retrieval_insert_sql(monkeypatch):
