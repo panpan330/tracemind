@@ -114,7 +114,7 @@ services:
       TRACEMIND_DEMO_MODE: "true"
       TRACEMIND_DEMO_KEY: demo-secret-2026
       TRACEMIND_LLM_MODE: fake
-      TRACEMIND_EVAL_CHAT_MODEL: qwen3.7-flash
+      TRACEMIND_EVAL_CHAT_MODEL: qwen3.7-max
       # V1.7:MCP 经独立 mcp-tools 服务(Streamable HTTP 标准部署)
       TRACEMIND_MCP_TRANSPORT: "streamable_http"
       TRACEMIND_MCP_HTTP_URL: "http://mcp-tools:8001/mcp"
