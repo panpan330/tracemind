@@ -49,3 +49,38 @@ def test_record_case_skips_when_embed_fails(monkeypatch):
                      "fix_execution": {"status": "succeeded"},
                      "recovery": {"status": "recovered"}, "run_id": 1})
     assert calls == []   # embedding 失败不沉淀
+
+
+class _FakeStore:
+    def __init__(self):
+        self.upserts = []
+
+    def upsert(self, point_id, vector, payload):
+        self.upserts.append({"point_id": point_id, "vector": vector, "payload": payload})
+
+
+def test_record_case_skips_non_reflection_failure():
+    """human_approval rejected(非反思失败)不沉淀失败案例。"""
+    state = {"run_id": 9, "status": "needs_human",
+             "termination_reason": "approval_rejected",
+             "reflection_count": 0, "root_cause_code": "X"}
+    store = _FakeStore()
+    mem.record_case(state, store=store)
+    assert store.upserts == []
+
+
+def test_record_case_reflection_exhausted_sinks_failure():
+    """反思用尽仍未恢复 → 沉淀 recovered=False 案例。"""
+    state = {"run_id": 10, "status": "needs_human",
+             "termination_reason": "reflection_exhausted",
+             "reflection_count": 3, "root_cause_code": "INDEX_MISSING",
+             "fault_category": "SCN-001", "description": "库存慢",
+             "reflection_log": [{"attempt_no": 1, "new_hypothesis": "连接池耗尽"}],
+             "evidence": [], "fix_execution": {"status": "failed"}}
+    store = _FakeStore()
+    mem.record_case(state, store=store)
+    assert len(store.upserts) == 1
+    payload = store.upserts[0]["payload"]
+    assert payload["recovered"] is False
+    assert payload["doc_id"] == "case-10-fail"
+    assert "reflection_exhausted" in payload["text"]
