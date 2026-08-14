@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     chat_model: str = ""
     eval_chat_model: str = ""                  # 评测固定快照;eval-* 命令必填
 
+    # ---- V1.11 多模型路由:按节点选模型(空 → 回落 chat_model_resolved)----
+    hypothesize_model: str = ""
+    select_tool_model: str = ""
+    reflect_model: str = ""
+    report_model: str = ""
+    fallback_model: str = ""            # 容灾备用;空 → 不启用 fallback
+
     # ---- Embedding Provider(与 Chat 独立,可不同 base_url/key)----
     embedding_provider: str = "bailian"
     embedding_base_url: str = ""
