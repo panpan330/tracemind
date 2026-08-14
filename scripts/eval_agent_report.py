@@ -1,0 +1,120 @@
+"""真实模型量化评测:跑 SCN-001/002 各 N 轮,拉观测数据汇总成 markdown 报告。"""
+import argparse
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import requests
+
+
+def _api(base: str, path: str, method="get", **kw):
+    fn = getattr(requests, method)
+    r = fn(f"{base}{path}", timeout=30, **kw)
+    r.raise_for_status()
+    return r.json()
+
+
+def _wait_status(base, incident_id, targets, timeout_s=120):
+    t0 = time.time()
+    status = "unknown"
+    while time.time() - t0 < timeout_s:
+        d = _api(base, f"/api/incidents/{incident_id}")
+        status = d["status"]
+        if status in targets:
+            return status
+        time.sleep(2)
+    return status
+
+
+def run_one_round(base: str, scenario: str, round_no: int) -> dict:
+    _api(base, f"/api/demo/scenarios/{scenario}/reset", method="post",
+         headers={"x-demo-key": "demo-secret-2026"})
+    _api(base, f"/api/demo/scenarios/{scenario}/inject", method="post",
+         headers={"x-demo-key": "demo-secret-2026"})
+    t0 = time.time()
+    inc = _api(base, "/api/incidents", method="post",
+               json={"title": f"{scenario} eval", "severity": "high",
+                     "service_ref": "inventory-service"})
+    incident_id = inc["id"]
+    run = _api(base, f"/api/incidents/{incident_id}/investigations", method="post")
+    run_id = run["run_id"]
+    status = _wait_status(base, incident_id, {"awaiting_approval", "needs_human", "recovered"})
+    if status == "awaiting_approval":
+        d = _api(base, f"/api/incidents/{incident_id}")
+        approvals = d.get("approvals") or []
+        if approvals:
+            _api(base, f"/api/incidents/{incident_id}/approvals/{approvals[0]['id']}/decision",
+                 method="post", json={"decision": "approved", "comment": "eval"})
+            status = _wait_status(base, incident_id, {"recovered", "needs_human"}, timeout_s=90)
+    obs = _api(base, f"/api/incidents/{incident_id}/runs/{run_id}/observation")
+    return {"scenario": scenario, "round": round_no, "status": status,
+            "elapsed": round(time.time() - t0, 1), "run_id": run_id,
+            "observation": obs}
+
+
+def aggregate(rounds: list) -> dict:
+    n = len(rounds)
+    recovered = sum(1 for r in rounds if r["status"] == "recovered")
+    elapsed = [r["elapsed"] for r in rounds]
+    in_tok = [i["detail"]["inputTokens"] for r in rounds for i in r["observation"]["timeline"]
+              if i["type"] == "llm" and i["detail"].get("inputTokens")]
+    out_tok = [i["detail"]["outputTokens"] for r in rounds for i in r["observation"]["timeline"]
+               if i["type"] == "llm" and i["detail"].get("outputTokens")]
+    tools = [i for r in rounds for i in r["observation"]["timeline"] if i["type"] == "tool"]
+    anomaly_counts = {}
+    for r in rounds:
+        for a in r["observation"]["diagnosis"].get("anomalies", []):
+            anomaly_counts[a["type"]] = anomaly_counts.get(a["type"], 0) + 1
+    return {"success_rate": recovered / n if n else 0.0,
+            "avg_elapsed": round(sum(elapsed) / n, 1) if n else 0.0,
+            "avg_input_tokens": round(sum(in_tok) / len(in_tok), 1) if in_tok else 0.0,
+            "avg_output_tokens": round(sum(out_tok) / len(out_tok), 1) if out_tok else 0.0,
+            "avg_tool_calls": round(len(tools) / n, 1) if n else 0.0,
+            "anomaly_counts": anomaly_counts}
+
+
+def render_markdown(ts: str, rounds: list, stats: dict) -> str:
+    lines = ["# TraceMind 真实模型评测报告(real_strict)", "",
+             f"- 时间:{ts}", f"- 成功率:{stats['success_rate'] * 100:.0f}%",
+             f"- 平均耗时:{stats['avg_elapsed']}s",
+             f"- 平均 tokens:{stats['avg_input_tokens']}/{stats['avg_output_tokens']}(in/out)",
+             f"- 平均工具调用:{stats['avg_tool_calls']} 次/轮",
+             f"- 卡点分布:{stats['anomaly_counts'] or '无'}", "",
+             "| 轮次 | 场景 | 终态 | 耗时 | 工具调用 |", "|---|---|---|---|---|"]
+    for r in rounds:
+        tools = sum(1 for i in r["observation"]["timeline"] if i["type"] == "tool")
+        lines.append(f"| {r['round']} | {r['scenario']} | {r['status']} | {r['elapsed']}s | {tools} |")
+    return "\n".join(lines) + "\n"
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--base", default="http://localhost:8000")
+    p.add_argument("--order", default="http://localhost:8081")
+    p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--out-dir", default="reports/evals")
+    args = p.parse_args()
+    rounds = []
+    for scenario in ("SCN-001", "SCN-002"):
+        for r in range(1, args.rounds + 1):
+            print(f"[{scenario} round{r}] ...", flush=True)
+            try:
+                rounds.append(run_one_round(args.base, scenario, r))
+            except requests.HTTPError as e:
+                if "429" in str(e) or "quota" in str(e).lower():
+                    print("额度/限流错误,停止。请核对额度或更换模型。", file=sys.stderr)
+                    return 2
+                raise
+    stats = aggregate(rounds)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = Path(args.out_dir) / f"agent-eval-{ts}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_markdown(ts, rounds, stats), encoding="utf-8")
+    print(f"\n报告已写入 {out}")
+    print(f"成功率 {stats['success_rate']*100:.0f}% 平均耗时 {stats['avg_elapsed']}s")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
