@@ -1,4 +1,4 @@
-# TraceMind
+# 慧诊 - 证据驱动的 AI 故障诊断系统
 
 ![tests](https://img.shields.io/badge/tests-436%20passed-brightgreen)
 ![version](https://img.shields.io/badge/version-v1.16-blue)
