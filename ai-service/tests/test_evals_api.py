@@ -38,3 +38,21 @@ def test_evals_detail_missing_404(monkeypatch):
     monkeypatch.setattr(eval_run_repo, "get_eval_run", lambda i: None)
     r = client.get("/api/evals/999999")
     assert r.status_code == 404
+
+
+def test_evals_run_validates_params():
+    r = client.post("/api/evals/run", json={"scenario": "BAD_SCENARIO", "rounds": 9})
+    assert r.status_code == 400
+    r2 = client.post("/api/evals/run", json={"scenario": "SCN-001", "rounds": "x"})
+    assert r2.status_code == 400
+
+
+def test_evals_run_accepts(monkeypatch):
+    started = []
+
+    def fake_run(scenario, rounds):
+        started.append((scenario, rounds))
+    monkeypatch.setattr("app.api.evals._run_eval_background", fake_run)
+    r = client.post("/api/evals/run", json={"scenario": "SCN-001", "rounds": 1})
+    assert r.status_code == 202
+    assert started == [("SCN-001", 1)]

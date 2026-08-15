@@ -174,6 +174,21 @@ def write_report(ts: str, rounds: list, stats: dict, out_dir: Path) -> Path:
     return out
 
 
+def run_evals(base: str, order: str, rounds: int, scenario: str,
+              out_dir: str = "reports/evals") -> Path:
+    """跑单场景 N 轮评测,写 md + eval_run,返回报告路径。V1.16 API 复用。"""
+    global _order_url, _order_host
+    _order_url = order
+    _order_host = order.replace("http://", "").split(":")[0]
+    collected = []
+    for r in range(1, rounds + 1):
+        print(f"[{scenario} round{r}] ...", flush=True)
+        collected.append(run_one_round(base, scenario, r))
+    stats = aggregate(collected)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return write_report(ts, collected, stats, Path(out_dir))
+
+
 def main() -> int:
     global _order_url, _order_host
     p = argparse.ArgumentParser()
