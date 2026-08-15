@@ -1,4 +1,6 @@
 """V1.11 成本统计:按模型聚合 model_call 的 token 与估算成本。"""
+from app.config import settings
+
 # 每百万 token 单价(元);按百炼公开价配置,可覆盖。未配置模型成本记 0。
 MODEL_PRICE_PER_M = {
     "qwen3.8-max": 20.0,
@@ -24,3 +26,20 @@ def aggregate_model_costs(calls: list[dict]) -> dict:
             total = float(item["input_tokens"]) + float(item["output_tokens"])
             item["cost"] = round(unit * total / 1_000_000, 6)
     return out
+
+
+def check_cost_budget(calls: list[dict]) -> bool:
+    """累计成本超预算 → 写 cost_over_budget 事件并返回 True;预算 0/未超 → False。"""
+    budget = settings.cost_budget
+    if not budget:
+        return False
+    total = sum(v["cost"] for v in aggregate_model_costs(calls).values())
+    if total <= budget:
+        return False
+    try:
+        from app.repositories import event_repo
+        event_repo.append_event(0, "cost_over_budget",
+                                {"budget": budget, "cost": round(total, 6)})
+    except Exception:  # noqa: BLE001 告警失败不影响
+        pass
+    return True
