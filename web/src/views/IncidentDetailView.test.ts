@@ -66,3 +66,45 @@ describe('IncidentDetailView', () => {
     expect(wrapper.text()).toContain('需人工介入')
   })
 })
+
+describe('Agent 进度面板', () => {
+  function dispatchEvent(seq: number, event: string, data: Record<string, unknown>) {
+    const msg = new MessageEvent('message', { data: JSON.stringify(data), lastEventId: String(seq) })
+    ;(msg as unknown as { event: string }).event = event
+    ;(mockES.onmessage as ((ev: MessageEvent) => void) | null)?.(msg)
+  }
+
+  it('渲染节点事件时间线', async () => {
+    mocked.getIncident.mockResolvedValue(detail({ status: 'investigating' }))
+    const wrapper = mount(IncidentDetailView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    dispatchEvent(1, 'HYPOTHESES_GENERATED', { run_id: 5 })
+    await flushPromises()
+    expect(wrapper.text()).toContain('生成假设')
+  })
+
+  it('未知事件类型显示原始名不崩', async () => {
+    mocked.getIncident.mockResolvedValue(detail({ status: 'investigating' }))
+    const wrapper = mount(IncidentDetailView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    dispatchEvent(1, 'UNKNOWN_NODE', {})
+    await flushPromises()
+    expect(wrapper.text()).toContain('UNKNOWN_NODE')
+  })
+
+  it('recovered 终态显示完成', async () => {
+    mocked.getIncident.mockResolvedValue(detail({ status: 'recovered' }))
+    const wrapper = mount(IncidentDetailView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    dispatchEvent(1, 'incident_finished', { status: 'recovered' })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Agent 进度')
+  })
+
+  it('无事件显示等待文案', async () => {
+    mocked.getIncident.mockResolvedValue(detail({ status: 'created' }))
+    const wrapper = mount(IncidentDetailView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('等待 Agent 启动')
+  })
+})

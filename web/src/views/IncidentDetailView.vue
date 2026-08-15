@@ -49,6 +49,24 @@
         终止原因:{{ detail.termination_reason }}
       </div>
 
+      <!-- V1.14:Agent 进度面板 — 节点级渐进展示 -->
+      <el-card shadow="never" class="section" data-testid="agent-progress">
+        <template #header>Agent 进度</template>
+        <el-timeline v-if="events.length">
+          <el-timeline-item
+            v-for="(ev, idx) in events"
+            :key="ev.sequence"
+            :type="timelineType(ev, idx)"
+            :timestamp="new Date(ev.occurredAt).toLocaleTimeString()"
+          >
+            <span :data-testid="`agent-event-${ev.sequence}`">{{ ev.label }}</span>
+            <el-tag v-if="ev.type === 'llm_degraded' || ev.type === 'rag_degraded'"
+                    type="warning" size="small" style="margin-left: 8px">降级</el-tag>
+          </el-timeline-item>
+        </el-timeline>
+        <el-empty v-else description="等待 Agent 启动…" />
+      </el-card>
+
       <el-card shadow="never" class="section">
         <template #header>根因假设</template>
         <HypothesisList :hypotheses="detail.hypotheses" />
@@ -126,10 +144,22 @@ const loading = ref(false)
 let timer: number | undefined
 
 // SSE 实时状态:状态变化立即刷新详情;轮询保留作为断线兜底
-const { status: liveStatus } = useIncidentStream(incidentId)
+const { status: liveStatus, events } = useIncidentStream(incidentId)
 watch(liveStatus, (s) => {
   if (s) refresh()
 })
+
+// V1.14:进度面板时间线类型(降级 warning / 终态 success|danger / 进行中 primary)
+function timelineType(ev: { type: string; status?: string }, idx: number) {
+  if (ev.type === 'llm_degraded' || ev.type === 'rag_degraded') return 'warning'
+  if (ev.type === 'incident_finished') {
+    return ev.status === 'recovered' ? 'success' : 'danger'
+  }
+  if (idx === events.value.length - 1 && detail.value && !isTerminal(detail.value.status)) {
+    return 'primary'
+  }
+  return ''
+}
 
 async function refresh() {
   try {
