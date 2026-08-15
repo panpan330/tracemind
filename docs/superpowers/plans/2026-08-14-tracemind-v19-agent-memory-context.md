@@ -570,7 +570,7 @@ Expected: 24 case 全 PASS
 
 VM 上:同步 V1.9 代码 → compose 加 qdrant → 切 real_strict + prometheus/jaeger + `RAG_MODE=required`(案例检索需 qdrant)→ 重建 ai-service 镜像 → 启动 → 跑一轮 SCN-001:
 
-Run: `python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081 --rounds 1 --scenario SCN-001`
+Run: `python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081 --rounds 1 --scenario SCN-001`
 Expected: PASS(recovered)
 
 随后验证:

@@ -1658,8 +1658,8 @@ SCN-001/SCN-002 压测期间指标变化可见(两次查询 P95 值不同)
 在 VM 上执行(按记忆中的部署流程:相对路径 put 同步 → `DOCKER_BUILDKIT=0 docker build` 重建 ai/inventory/order → `docker compose up -d` → `docker compose --profile observability-ui up -d`),然后:
 
 ```bash
-python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081   # 3/3 + 3/3
-python scripts/verify-observability-resilience.py --base http://192.168.88.10:8000
+python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081   # 3/3 + 3/3
+python scripts/verify-observability-resilience.py --base http://<vm-host>:8000
 python scripts/verify-grafana-smoke.py --grafana http://127.0.0.1:3000
 python scripts/run_regression.py --tier full
 docker inspect --format '{{.Name}} {{.HostConfig.Memory}}' $(docker ps -q)   # mem_limit 生效验证

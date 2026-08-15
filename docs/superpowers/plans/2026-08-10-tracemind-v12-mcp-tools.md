@@ -1164,7 +1164,7 @@ Expected: 闭环 PASS(本地 MySQL/Java/AI 需启动;若本地未启动,跳过�
 - `DOCKER_BUILDKIT=0 docker build -t tracemind-ai-service ai-service/`(pyproject 变更 → uv sync --frozen 在 Dockerfile 内执行,阿里云 pip 源)
 - 重放迁移:`docker cp scripts/sql/05-v12-mcp-migration.sql tracemind-mysql:/tmp/05.sql && docker exec tracemind-mysql sh -c 'mysql -uroot -proot_pwd_2026 < /tmp/05.sql'`
 - `docker compose up -d --no-deps --force-recreate ai-service`
-- Run 3 轮:`python scripts/verify-m3.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081` ×3,断言 `transport=mcp_stdio`、无 MCP 基础设施错误、V1.1 指标保留(召回≥80%/误修复 0%/E1~E5 100%/SO 有效率≥95%/降级率 0%)
+- Run 3 轮:`python scripts/verify-m3.py --base http://<vm-host>:8000 --order http://<vm-host>:8081` ×3,断言 `transport=mcp_stdio`、无 MCP 基础设施错误、V1.1 指标保留(召回≥80%/误修复 0%/E1~E5 100%/SO 有效率≥95%/降级率 0%)
 - 故障注入:调查中 `docker kill tracemind-ai` 内 MCP 子进程(或 `pkill -f app.mcp.server`),断言当前调用返回明确 MCP 错误、最多重启一次、**无 direct fallback**
 
 - [ ] **Step 4: README V1.2 章节**

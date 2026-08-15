@@ -562,7 +562,7 @@ timeout 60 python .reasonix/tools/vm_ssh.py run "cd ~/tracemind && sed -i 's/TRA
 - [ ] **Step 3: 跑 SCN 验收(真实模型,耗百炼额度)**
 
 ```bash
-timeout 280 python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081 --rounds 1 --scenario SCN-002
+timeout 280 python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081 --rounds 1 --scenario SCN-002
 ```
 
 Expected: 至少一轮 recovered。**若遇 429/额度错误:立即停止并告知用户核对额度/充值(见 tracemind-real-model-quota),不要反复重试。**

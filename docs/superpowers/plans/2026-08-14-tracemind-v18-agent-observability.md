@@ -902,7 +902,7 @@ Expected: typecheck 无错误 + 全部单测 PASS(新增 observation.test.ts + R
 
 VM 上切换到真实模型(改 compose 的 `TRACEMIND_LLM_MODE: real_strict` + `METRICS_BACKEND: prometheus` + `TRACE_BACKEND: jaeger`,见记忆 `tracemind-real-model-quota`),重启 ai-service 后:
 
-Run: `python scripts/eval_agent_report.py --base http://192.168.88.10:8000 --rounds 3`
+Run: `python scripts/eval_agent_report.py --base http://<vm-host>:8000 --rounds 3`
 Expected: 生成 `reports/evals/agent-eval-*.md`,含成功率/耗时/token/卡点分布;SCN-001 + SCN-002 各 3 轮。
 遇 429/额度错误立即停下并告知用户。
 

@@ -6,13 +6,13 @@
 
 - Dockerfile 覆盖四个组件(Java 双服务多阶段构建、AI 服务、前端 node→nginx)。
 - `docker-compose.yml` 一键拉起 MySQL 8 + order-service + inventory-service + ai-service + web,依赖顺序与健康检查完备。
-- 在 VM(192.168.88.10,Docker 29.1.4)上真实 `docker compose up` 部署,`verify-m5.py` 跑通完整闭环。
+- 在 VM(<vm-host>,Docker 29.1.4)上真实 `docker compose up` 部署,`verify-m5.py` 跑通完整闭环。
 - Testcontainers 集成测试与 Playwright E2E 冒烟:能跑则跑,受环境限制(内存/浏览器)则标注降级路径。
 - README(架构图 + 快速开始 + 演示脚本 + 安全设计 + 简历亮点)、`docs/architecture.md`。
 
 ## 环境事实(已探测)
 
-- VM:192.168.88.10 / panpan,Docker 29.1.4,Compose v5.0.1,x86_64,4 核,3.8G 内存(可用约 2G),15G 磁盘。
+- VM:<vm-host> / <user>,Docker 29.1.4,Compose v5.0.1,x86_64,4 核,3.8G 内存(可用约 2G),15G 磁盘。
 - VM 无 node/npm;docker pull、npm registry、download.docker.com 均可达。
 - VM 原生 mysqld 占用宿主 3306 → compose MySQL 容器**映射 33061:3306**,容器内互联仍用 `mysql:3306`。
 - Windows 侧用 `.reasonix/tools/vm_ssh.py`(paramiko)执行 VM 命令与 scp。
@@ -70,7 +70,7 @@ git commit -m "feat(docker): 四个组件的 Dockerfile 与 .dockerignore"
 **Interfaces:**
 - scp 源码到 VM `~/tracemind`(排除 .venv/target/node_modules/.git)。
 - VM 执行 `docker compose build` + `docker compose up -d`;等待健康。
-- Windows 侧 `scripts/verify-m5.py` 从 `http://192.168.88.10:8000` 跑完整闭环(reset→注入→创建→调查→审批→执行→恢复→报告),与 verify-m3 同构但 base URL 可配。
+- Windows 侧 `scripts/verify-m5.py` 从 `http://<vm-host>:8000` 跑完整闭环(reset→注入→创建→调查→审批→执行→恢复→报告),与 verify-m3 同构但 base URL 可配。
 
 - [ ] **Step 1: 同步源码到 VM**
   - 用 vm_ssh.py 建目录 + sftp 批量上传(打包 tar 传一个文件更快:本地 `tar` 排除后上传,VM 解包)。
@@ -118,7 +118,7 @@ git commit -m "feat(docker): 四个组件的 Dockerfile 与 .dockerignore"
 ### Task 5.6: E2E 冒烟(Playwright,尽力而为)+ 最终验收
 
 **Files:**
-- Create: `web/e2e/smoke.spec.ts` + `web/playwright.config.ts`(baseURL 可配,指向 VM `http://192.168.88.10:8080`)
+- Create: `web/e2e/smoke.spec.ts` + `web/playwright.config.ts`(baseURL 可配,指向 VM `http://<vm-host>:8080`)
 - Modify: `web/package.json`(devDeps:@playwright/test)
 
 **Interfaces:**

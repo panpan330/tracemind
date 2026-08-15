@@ -75,8 +75,8 @@ def tier_vm_smoke() -> dict:
         summary["steps"][name] = {"exit": code, "out": out.strip()[:200]}
     # SCN-001/002 各一次闭环:本地 python 连 VM 服务(fake 或少量 real)
     code, out = run([sys.executable, str(REPO / "scripts/verify-m14.py"),
-                     "--base", "http://192.168.88.10:8000",
-                     "--order", "http://192.168.88.10:8081", "--rounds", "1"], REPO)
+                     "--base", "http://<vm-host>:8000",
+                     "--order", "http://<vm-host>:8081", "--rounds", "1"], REPO)
     summary["steps"]["scn_rounds"] = {"exit": code,
                                       "tail": (out.splitlines()[-5:] if out else [])}
     # 凭据隔离布尔(本地脚本 ssh VM 检查,只输出两布尔)
@@ -89,8 +89,8 @@ def tier_vm_smoke() -> dict:
 def tier_release() -> dict:
     summary = {"tier": "release", "steps": {}}
     # 真实模型验收:real_strict + Streamable HTTP(见计划 Task 21;耗时耗额度)
-    code, out = _vm("python scripts/verify-m14.py --base http://192.168.88.10:8000 "
-                    "--order http://192.168.88.10:8081 --rounds 1")
+    code, out = _vm("python scripts/verify-m14.py --base http://<vm-host>:8000 "
+                    "--order http://<vm-host>:8081 --rounds 1")
     summary["steps"]["release_rounds"] = {"exit": code,
                                           "tail": (out.splitlines()[-5:] if out else [])}
     code, out = _vm("python scripts/check_credential_isolation.py")

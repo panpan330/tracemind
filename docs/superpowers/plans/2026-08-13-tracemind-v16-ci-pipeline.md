@@ -2296,7 +2296,7 @@ git commit -m "feat(ci): redact_logs 脱敏(secret 模式 + 精确值)+ 失败�
 - [ ] **Step 1: 写 scan_secrets.py**
 
 ```python
-"""敏感信息扫描:工作区 + git 历史(首次推送前用)。模式:sk-/Bearer/panhangyu/192.168.88.10/demo-secret。"""
+"""敏感信息扫描:工作区 + git 历史(首次推送前用)。模式:sk-/Bearer/<user>/<vm-host>/demo-secret。"""
 import re
 import subprocess
 import sys
@@ -2304,8 +2304,8 @@ from pathlib import Path
 
 PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_\-]{8,}"),
-    re.compile(r"panhangyu\w*"),
-    re.compile(r"192\.168\.88\.\d+"),
+    re.compile(r"<user_password>"),
+    re.compile(r"192\.168\.\d+\.\d+"),
     re.compile(r"demo-secret-2026"),
     re.compile(r"IDENTIFIED BY ['\"][^'\"]+['\"]"),
 ]
@@ -2409,7 +2409,7 @@ Expected: 全绿。
 
 - `git remote add origin https://github.com/panpan330/tracemind.git`(若无)
 - `git push -u origin main`
-- 首次推送前:执行 `git log -p | grep -iE "sk-|panhangyu|192.168.88"` 全历史扫描;若命中真实凭据,用 filter-repo 清理或轮换 key。
+- 首次推送前:执行 `git log -p | grep -iE "sk-|<user_password>|192.168"` 全历史扫描;若命中真实凭据,用 filter-repo 清理或轮换 key。
 - GitHub 上:建 full-e2e Environment + Secrets;观察 Fast 首次运行。
 
 - [ ] **Step 5: 提交**

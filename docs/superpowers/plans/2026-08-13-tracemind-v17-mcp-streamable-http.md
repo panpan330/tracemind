@@ -2411,7 +2411,7 @@ def tier_vm_smoke() -> dict:
         code, out = _vm(cmd)
         summary["steps"][name] = {"exit": code, "out": out.strip()[:200]}
     # SCN-001/002 各一次闭环(复用 verify-m14 单轮)
-    code, out = _vm("python scripts/verify-m14.py --base http://192.168.88.10:8000 --order http://192.168.88.10:8081 --rounds 1")
+    code, out = _vm("python scripts/verify-m14.py --base http://<vm-host>:8000 --order http://<vm-host>:8081 --rounds 1")
     summary["steps"]["scn_rounds"] = {"exit": code, "tail": out.splitlines()[-5:] if out else []}
     # 凭据隔离布尔(只输出两布尔,不 dump 完整 env)
     code, out = _vm("python scripts/check_credential_isolation.py")
