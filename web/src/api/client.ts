@@ -81,3 +81,7 @@ export function listEvals(): Promise<EvalRunListItem[]> {
 export function getEval(id: number): Promise<EvalRunDetail> {
   return request(`/api/evals/${id}`)
 }
+
+export function runEval(input: { scenario: string; rounds: number }): Promise<{ status: string }> {
+  return request('/api/evals/run', { method: 'POST', body: JSON.stringify(input) })
+}

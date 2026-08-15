@@ -9,6 +9,7 @@ const { mockPush } = vi.hoisted(() => ({ mockPush: vi.fn() }))
 vi.mock('@/api/client', () => ({
   listEvals: vi.fn(),
   getEval: vi.fn(),
+  runEval: vi.fn(),
 }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: mockPush }) }))
 
@@ -48,5 +49,18 @@ describe('EvalDashboardView', () => {
     const btn = wrapper.find('[data-testid="eval-detail-btn"]')
     await btn.trigger('click')
     expect(mockPush).toHaveBeenCalledWith('/evals/7')
+  })
+})
+
+describe('运行评测', () => {
+  it('点击运行评测触发 POST 并刷新', async () => {
+    mocked.listEvals.mockResolvedValue([])
+    mocked.runEval.mockResolvedValue({ status: 'accepted' })
+    const wrapper = mount(EvalDashboardView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    await wrapper.find('[data-testid="run-eval-btn"]').trigger('click')
+    await flushPromises()
+    expect(mocked.runEval).toHaveBeenCalled()
+    expect(mocked.listEvals).toHaveBeenCalledTimes(2)   // 初始 + 刷新
   })
 })

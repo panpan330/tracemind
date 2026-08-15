@@ -18,6 +18,20 @@
       </el-col>
     </el-row>
 
+    <el-card shadow="never" class="run-card">
+      <template #header>运行评测(真实模型会耗额度)</template>
+      <div class="run-actions">
+        <el-select v-model="runScenario" data-testid="run-scenario" style="width: 140px">
+          <el-option label="SCN-001" value="SCN-001" />
+          <el-option label="SCN-002" value="SCN-002" />
+        </el-select>
+        <el-input-number v-model="runRounds" :min="1" :max="5" data-testid="run-rounds" />
+        <el-button type="primary" data-testid="run-eval-btn" :loading="running" @click="doRunEval">
+          运行评测
+        </el-button>
+      </div>
+    </el-card>
+
     <el-card shadow="never">
       <template #header>评测记录(按时间倒序,可看版本趋势)</template>
       <el-table :data="evals" data-testid="evals-table" v-loading="loading">
@@ -48,12 +62,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { listEvals } from '@/api/client'
+import { ElMessage } from 'element-plus'
+import { listEvals, runEval } from '@/api/client'
 import type { EvalRunListItem } from '@/api/types'
 
 const router = useRouter()
 const evals = ref<EvalRunListItem[]>([])
 const loading = ref(false)
+const runScenario = ref('SCN-001')
+const runRounds = ref(1)
+const running = ref(false)
 
 const avgSuccessRate = computed(() => {
   if (!evals.value.length) return 0
@@ -66,6 +84,19 @@ const avgCost = computed(() => {
 
 function goDetail(id: number) {
   router.push(`/evals/${id}`)
+}
+
+async function doRunEval() {
+  running.value = true
+  try {
+    await runEval({ scenario: runScenario.value, rounds: runRounds.value })
+    ElMessage.success('评测已提交,结果生成后自动刷新')
+    evals.value = await listEvals()
+  } catch (e) {
+    ElMessage.error(`评测提交失败: ${(e as Error).message}`)
+  } finally {
+    running.value = false
+  }
 }
 
 onMounted(async () => {
