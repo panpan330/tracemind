@@ -1,4 +1,5 @@
 """V1.12 动态路由:ModelScorer 按 (node, model) 滑动窗口维护加权评分。"""
+import random
 from collections import deque
 
 MIN_SAMPLES = 5  # 窗口数据少于该值视为冷启动,返回 None
@@ -18,8 +19,9 @@ class ModelScorer:
                   "latency_ms": outcome.get("latency_ms") or 0,
                   "cost": outcome.get("cost") or 0.0})
 
-    def best(self, node: str, candidates: list[str]) -> str | None:
-        """候选里选窗口评分最高者;数据不足(< MIN_SAMPLES)返回 None(调用方回落默认)。"""
+    def best(self, node: str, candidates: list[str], epsilon: float = 0.0,
+             rng: random.Random | None = None) -> str | None:
+        """候选里选评分最高者;ε 概率随机探索有数据的候选(ε-greedy,V1.16)。"""
         scored = []
         for m in candidates:
             q = self._windows.get((node, m))
@@ -29,6 +31,10 @@ class ModelScorer:
         if not scored:
             return None
         scored.sort(key=lambda x: x[0], reverse=True)
+        if epsilon > 0 and (rng or random).random() < epsilon:
+            # 探索:随机选一个有数据的候选
+            pick = (rng or random).choice(scored)
+            return pick[1]
         return scored[0][1]
 
     def _score(self, q: deque) -> float:

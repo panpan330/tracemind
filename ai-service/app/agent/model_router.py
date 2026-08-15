@@ -39,7 +39,7 @@ def route(node: str) -> str | None:
     if settings.dynamic_routing:
         candidates = _candidates(node)
         if candidates:
-            chosen = scorer.best(node, candidates)
+            chosen = scorer.best(node, candidates, epsilon=settings.routing_epsilon)
             if chosen:
                 return chosen
     return _static_route(node)

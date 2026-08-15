@@ -49,3 +49,35 @@ def test_settings_has_hardening_fields():
     assert settings.routing_epsilon == 0.1
     assert settings.cost_budget == 0.0
     assert settings.case_retention_days == 0
+
+
+def _feed(sc, node, model, success=True):
+    for _ in range(10):
+        sc.update(node, model, {"success": success, "latency_ms": 100, "cost": 0.001})
+
+
+def test_epsilon_zero_picks_best():
+    import random
+    sc = ModelScorer()
+    _feed(sc, "select_tool", "flash", True)
+    _feed(sc, "select_tool", "max", False)
+    assert sc.best("select_tool", ["flash", "max"], epsilon=0.0) == "flash"
+
+
+def test_epsilon_one_explores_with_seed():
+    import random
+    sc = ModelScorer()
+    _feed(sc, "select_tool", "flash", True)
+    _feed(sc, "select_tool", "max", False)
+    rng = random.Random(42)
+    chosen = {sc.best("select_tool", ["flash", "max"], epsilon=1.0, rng=rng)
+              for _ in range(50)}
+    assert chosen == {"flash", "max"}   # ε=1 全随机,两个候选都可能被选
+
+
+def test_epsilon_zero_matches_v112():
+    """ε=0 时与 V1.12 行为完全一致(选最优)。"""
+    sc = ModelScorer()
+    _feed(sc, "select_tool", "flash", True)
+    _feed(sc, "select_tool", "max", False)
+    assert sc.best("select_tool", ["flash", "max"], epsilon=0.0) == "flash"
