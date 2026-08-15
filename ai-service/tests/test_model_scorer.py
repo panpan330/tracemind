@@ -41,3 +41,11 @@ def test_cold_start_returns_none():
 def test_best_unknown_node_none():
     sc = ModelScorer()
     assert sc.best("unknown_node", ["a"]) is None
+
+
+def test_settings_has_hardening_fields():
+    from app.config import settings
+    assert hasattr(settings, "routing_epsilon")
+    assert settings.routing_epsilon == 0.1
+    assert settings.cost_budget == 0.0
+    assert settings.case_retention_days == 0

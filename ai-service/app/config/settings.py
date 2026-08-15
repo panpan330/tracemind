@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     reflect_candidates: str = ""
     report_candidates: str = ""
 
+    # ---- V1.16 工程补强(默认关,开启才生效)----
+    routing_epsilon: float = 0.1        # ε-greedy 探索概率;0=纯利用(V1.12 兼容)
+    cost_budget: float = 0.0            # 累计成本预算(元);0=不启用告警
+    case_retention_days: int = 0        # 失败案例保留天数;0=不清理
+
     # ---- Embedding Provider(与 Chat 独立,可不同 base_url/key)----
     embedding_provider: str = "bailian"
     embedding_base_url: str = ""
