@@ -1,5 +1,6 @@
 """真实模型量化评测:跑 SCN-001/002 各 N 轮(对齐 verify-m14 故障注入+负载时序),拉观测数据汇总报告。"""
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -144,6 +145,35 @@ def render_markdown(ts: str, rounds: list, stats: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_report(ts: str, rounds: list, stats: dict, out_dir: Path) -> Path:
+    """渲染 markdown + 写文件 + 写 eval_run 库(写库失败降级只出 md)。"""
+    md = render_markdown(ts, rounds, stats)
+    out = out_dir / f"agent-eval-{ts}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(md, encoding="utf-8")
+    try:
+        from app.repositories.eval_run_repo import insert_eval_run
+        scenario = rounds[0]["scenario"] if rounds else ""
+        n = len(rounds)
+        recovered = sum(1 for r in rounds if r["status"] == "recovered")
+        # 成本估算(展示用途):用默认模型单价 × 总 tokens
+        from app.agent.cost import MODEL_PRICE_PER_M
+        unit = MODEL_PRICE_PER_M.get("qwen3.8-max", 0.0)
+        total_tokens = ((stats.get("avg_input_tokens", 0) or 0)
+                        + (stats.get("avg_output_tokens", 0) or 0)) * n
+        cost = unit * total_tokens / 1_000_000 if unit else 0.0
+        insert_eval_run(
+            scenario=scenario, rounds=n,
+            success_rate=recovered / n if n else 0.0,
+            avg_duration_ms=int((stats.get("avg_elapsed", 0) or 0) * 1000),
+            total_cost=round(cost, 6),
+            model_snapshot="", summary=f"{recovered}/{n} recovered",
+            raw_json=json.dumps(rounds, ensure_ascii=False, default=str))
+    except Exception as exc:  # noqa: BLE001 写库失败不阻塞报告
+        print(f"[warn] eval_run 写库失败(仅输出 md): {exc}", file=sys.stderr)
+    return out
+
+
 def main() -> int:
     global _order_url, _order_host
     p = argparse.ArgumentParser()
@@ -167,9 +197,7 @@ def main() -> int:
                 raise
     stats = aggregate(rounds)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = Path(args.out_dir) / f"agent-eval-{ts}.md"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_markdown(ts, rounds, stats), encoding="utf-8")
+    out = write_report(ts, rounds, stats, Path(args.out_dir))
     print(f"\n报告已写入 {out}")
     print(f"成功率 {stats['success_rate']*100:.0f}% 平均耗时 {stats['avg_elapsed']}s")
     return 0
