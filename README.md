@@ -152,8 +152,8 @@ compose.yml           # 一键编排(基底,本地/VM 统一)
 ```bash
 cd java && mvn test               # JUnit5 + Mockito(单元)
 cd java && mvn verify             # 追加 Testcontainers MySQL 集成测试(需 Docker,EXPLAIN 断言走索引)
-cd ai-service && uv run pytest    # Agent 图/工具/MCP/API(179)
-cd web && npx vitest run          # Vue 组件/组合式函数(18)
+cd ai-service && uv run pytest    # Agent 图/工具/MCP/API(436)
+cd web && npx vitest run          # Vue 组件/组合式函数(46)
 npx playwright test               # 浏览器 E2E 冒烟(演示闭环,需全栈运行)
 python scripts/verify-m5.py --base http://localhost:8000           # SCN-001 全链路
 python scripts/verify-m13-scn002.py --base http://localhost:8000   # SCN-002 全链路
@@ -178,7 +178,7 @@ Java 21 / Spring Boot 3.3 / MyBatis-Plus · FastAPI / LangGraph / MCP(官方 Pyt
 - **多模型路由 + 动态路由学习**:强推理节点用大模型、高频工具节点用快模型;窗口滚动评分按成功率 / 时延 / 成本自动选优,数据驱动自适应。
 
 **数据验证层**
-- 后端 **422 个测试**、前端 **45 个测试**、**24+ 条离线评测**、SCN-001 / SCN-002 **真实模型验收**通过。
+- 后端 **436 个测试**、前端 **46 个测试**、**24+ 条离线评测**、SCN-001 / SCN-002 **真实模型验收**通过。
 - 成本量化:多模型路由后**单次诊断成本 ¥0.0153**(真实模型实测)。
 - **评测平台可视化**:成功率 / 耗时 / 成本趋势,量化验证每次改进有效(记忆 / 反思 / 路由的改进都有评测记录佐证)。
 
@@ -199,3 +199,11 @@ Java 21 / Spring Boot 3.3 / MyBatis-Plus · FastAPI / LangGraph / MCP(官方 Pyt
 - **V1.12**:动态路由学习(窗口滚动评分:成功率/时延/成本加权)
 - **V1.13**:评测平台可视化(eval_run 持久化 + 前端列表/详情/趋势)
 - **V1.14**:Agent 进度面板(SSE 事件前端实时展示,节点级渐进可视化)
+
+> 各版本详细技术说明见 [docs/changelog.md](docs/changelog.md)
+
+## 文档
+
+- [各版本设计文档](docs/superpowers/specs/)
+- [版本演进详细说明](docs/changelog.md)
+- [面试 Q&A](docs/interview-qa.md)
