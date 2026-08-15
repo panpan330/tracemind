@@ -84,3 +84,27 @@ def test_record_case_reflection_exhausted_sinks_failure():
     assert payload["recovered"] is False
     assert payload["doc_id"] == "case-10-fail"
     assert "reflection_exhausted" in payload["text"]
+
+
+def test_purge_expired_cases_deletes_old_fail(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app.config import settings
+    monkeypatch.setattr(settings, "case_retention_days", 7)
+    deleted = []
+    store = _FakeStore()
+    store.search_all = lambda: [
+        {"doc_id": "case-1-fail", "ts": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()},
+        {"doc_id": "case-2", "ts": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()},
+        {"doc_id": "case-3-fail", "ts": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
+    ]
+    store.delete_filter = lambda doc_id: deleted.append(doc_id)
+    mem.purge_expired_cases(store=store)
+    assert deleted == ["case-1-fail"]   # 只删超期失败案例,成功案例/未到期保留
+
+
+def test_purge_disabled_when_retention_zero(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "case_retention_days", 0)
+    store = _FakeStore()
+    store.search_all = lambda: []
+    mem.purge_expired_cases(store=store)   # 不报错即过

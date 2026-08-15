@@ -79,3 +79,27 @@ def record_case(state: dict, store=None) -> None:
             _upsert(state, vec, payload)
     except Exception as exc:  # noqa: BLE001
         logger.warning("案例沉淀失败(不阻塞): %s", exc)
+
+
+def purge_expired_cases(store=None) -> None:
+    """删除超过保留期的失败案例(case-*-fail);retention=0 不启用;异常降级。"""
+    days = settings.case_retention_days
+    if not days:
+        return
+    try:
+        if store is None:
+            store = _get_store()
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        for case in store.search_all():
+            doc_id = case.get("doc_id") or ""
+            if not doc_id.endswith("-fail"):
+                continue
+            try:
+                ts = datetime.fromisoformat(case.get("ts", ""))
+                if ts < cutoff:
+                    store.delete_filter(doc_id)
+            except (ValueError, TypeError):
+                continue
+    except Exception as exc:  # noqa: BLE001 淘汰失败不影响
+        logger.warning("失败案例淘汰异常: %s", exc)
