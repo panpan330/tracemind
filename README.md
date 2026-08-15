@@ -1,10 +1,31 @@
 # TraceMind
 
+![tests](https://img.shields.io/badge/tests-436%20passed-brightgreen)
+![version](https://img.shields.io/badge/version-v1.16-blue)
+![langgraph](https://img.shields.io/badge/LangGraph-Agent-blue)
+![mcp](https://img.shields.io/badge/MCP-Tools-green)
+![vue](https://img.shields.io/badge/Vue3-Frontend-4FC08D)
+
 面向微服务系统的 **AI 故障诊断与安全处置平台**:当微服务出现性能故障时,AI Agent 基于真实证据(MySQL 慢查询、执行计划、索引元数据、接口 P95、锁等待关系)自动完成 **根因定位 → 修复方案 → 人工审批 → 自动修复 → 恢复验证 → 复盘报告** 的完整闭环,全程可审计、可回放。支持**多故障场景**(SCN-001 缺索引 / SCN-002 锁等待)与**回归评测流水线**。
 
 > 简历作品集项目 · 证据驱动的根因判定 + 人机协同的安全闭环 + 全链路审计
 
 > **一句话**:基于 LangGraph 的 AI 故障诊断系统:证据驱动消除幻觉,多模型路由控成本,记忆+反思持续进化,评测平台量化验证改进。
+
+---
+
+## 核心功能一览
+
+| 能力 | 说明 |
+|---|---|
+| 证据驱动诊断闭环 | LangGraph 状态机:假设→取证→根因→修复→审批→验证→复盘 |
+| 双故障场景 | SCN-001 缺索引 / SCN-002 锁等待,真实 MySQL 证据 |
+| 证据闸门防幻觉 | E1~E5/L1~L6 事实检查,根因必须证据确认 |
+| 人工审批安全闭环 | 唯一写路径 + 过期拒绝 + KILL 执行前复核 |
+| MCP 工具安全 | stdio→Streamable HTTP,最小权限隔离,全量审计 |
+| 长期记忆 + 反思自改进 | qdrant 案例复用 + 失败负样本 + 3 轮重试 |
+| 多模型路由 + 动态学习 | 节点级选模型 + ε-greedy,成本 ¥0.0153/次 |
+| 量化评测平台 | 成功率/耗时/成本趋势,可视化验证改进 |
 
 ---
 
