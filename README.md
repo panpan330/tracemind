@@ -374,3 +374,11 @@ python scripts/verify-m17.py --tier release     # 真实模型发布验收(real_
 - **V1.4**:真实可观测性(OTel Agent + Prometheus + Jaeger + Grafana)+ 观测审计 + 回归强制真实后端
 - **V1.5**:证据与决策链回放(调查时不可变快照 + 只读 Replay API + 前端回放页)+ Run 级版本冻结与恢复前校验
 - **V1.6**:正式迁移器 + Run Profile fail-closed + 离线评测缺陷修复(fixture trace_id 契约)
+- **V1.7**:MCP Streamable HTTP 远程传输与服务化(独立容器、标准传输、token 认证、两段式审计)
+- **V1.8**:Agent 运行观测面板 + 量化评测报告(成功率/耗时/tokens)
+- **V1.9**:长期记忆(qdrant 案例沉淀 + 语义检索复用)+ 上下文压缩(EvidenceSummarizer)
+- **V1.10**:反思自改进(reflect 结构化复盘 + 3 轮重试)+ 失败案例负样本记忆(避坑检索)
+- **V1.11**:多模型路由(节点级选模型)+ 成本统计(单次诊断 ¥0.0153)+ 容灾 fallback
+- **V1.12**:动态路由学习(窗口滚动评分:成功率/时延/成本加权)
+- **V1.13**:评测平台可视化(eval_run 持久化 + 前端列表/详情/趋势)
+- **V1.14**:Agent 进度面板(SSE 事件前端实时展示,节点级渐进可视化)
