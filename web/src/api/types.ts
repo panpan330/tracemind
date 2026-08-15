@@ -152,3 +152,13 @@ export interface RunObservation {
   timeline: RunObservationTimelineItem[]
   diagnosis: { terminationReason?: string | null; bottleneckStep: string | null; anomalies: RunObservationAnomaly[] }
 }
+
+// ---- V1.13 评测平台 ----
+export interface EvalRunListItem {
+  id: number; created_at: string; scenario: string; rounds: number
+  success_rate: number; avg_duration_ms: number; total_cost: number
+  model_snapshot: string
+}
+export interface EvalRunDetail extends EvalRunListItem {
+  summary: string; raw_json: string
+}

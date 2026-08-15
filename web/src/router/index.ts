@@ -13,6 +13,8 @@ const router = createRouter({
         runId: route.query.runId ? Number(route.query.runId) : undefined,
         position: route.query.position ? Number(route.query.position) : 0,
       }) },
+    { path: '/evals', name: 'evals', component: () => import('@/views/EvalDashboardView.vue') },
+    { path: '/evals/:id', name: 'eval-detail', component: () => import('@/views/EvalDetailView.vue') },
   ],
 })
 

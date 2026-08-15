@@ -1,4 +1,4 @@
-import type { CreateIncidentInput, IncidentDetail, IncidentListItem, IncidentReplayManifest, ReplayRunManifest, ReplayStepsResponse, RunObservation, ScenarioStatus } from './types'
+import type { CreateIncidentInput, EvalRunDetail, EvalRunListItem, IncidentDetail, IncidentListItem, IncidentReplayManifest, ReplayRunManifest, ReplayStepsResponse, RunObservation, ScenarioStatus } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(url, {
@@ -53,8 +53,7 @@ export function getScenarioStatus(scenario = 'SCN-001'): Promise<ScenarioStatus>
 
 // ---- V1.5 回放(只读) ----
 export function fetchIncidentReplay(incidentId: number): Promise<IncidentReplayManifest> {
-  return request(`/api/incidents/${incidentId}/replay`)
-}
+  return request(`/api/incidents/${incidentId}/replay`)}
 
 export function fetchRunManifest(incidentId: number, runId: number): Promise<ReplayRunManifest> {
   return request(`/api/incidents/${incidentId}/replay/runs/${runId}`)
@@ -73,4 +72,12 @@ export function fetchReplayStepDetail(
 // ---- V1.8 运行观测 ----
 export function fetchRunObservation(incidentId: number, runId: number): Promise<RunObservation> {
   return request(`/api/incidents/${incidentId}/runs/${runId}/observation`)
+}
+
+// ---- V1.13 评测平台 ----
+export function listEvals(): Promise<EvalRunListItem[]> {
+  return request('/api/evals')
+}
+export function getEval(id: number): Promise<EvalRunDetail> {
+  return request(`/api/evals/${id}`)
 }
