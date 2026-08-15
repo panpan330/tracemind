@@ -55,3 +55,36 @@ describe('useIncidentStream', () => {
     stream.close()
   })
 })
+
+describe('useIncidentStream events', () => {
+  it('收集全部事件并按 sequence 排序', async () => {
+    const stream = useIncidentStream(3)
+    FakeEventSource.dispatch(2, 'FIX_PROPOSED', JSON.stringify({ run_id: 5 }))
+    FakeEventSource.dispatch(1, 'HYPOTHESES_GENERATED', JSON.stringify({ run_id: 5 }))
+    await nextTick()
+    expect(stream.events.value.length).toBe(2)
+    expect(stream.events.value[0].sequence).toBe(1)
+    expect(stream.events.value[1].sequence).toBe(2)
+    stream.close()
+  })
+
+  it('映射中文标签,未知类型显示原始名', async () => {
+    const stream = useIncidentStream(3)
+    FakeEventSource.dispatch(1, 'FIX_PROPOSED', JSON.stringify({ run_id: 5 }))
+    FakeEventSource.dispatch(2, 'UNKNOWN_NODE', JSON.stringify({}))
+    await nextTick()
+    expect(stream.events.value[0].label).toBe('提出修复')
+    expect(stream.events.value[1].label).toBe('UNKNOWN_NODE')
+    stream.close()
+  })
+
+  it('status_changed 记录 status', async () => {
+    const stream = useIncidentStream(3)
+    FakeEventSource.dispatch(1, 'HYPOTHESES_GENERATED', JSON.stringify({ run_id: 5 }))
+    FakeEventSource.dispatch(2, 'status_changed', JSON.stringify({ status: 'investigating' }))
+    await nextTick()
+    const sc = stream.events.value.find(e => e.type === 'status_changed')
+    expect(sc?.status).toBe('investigating')
+    stream.close()
+  })
+})

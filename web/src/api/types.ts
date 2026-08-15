@@ -162,3 +162,12 @@ export interface EvalRunListItem {
 export interface EvalRunDetail extends EvalRunListItem {
   summary: string; raw_json: string
 }
+
+// ---- V1.14 Agent 进度面板 ----
+export interface AgentEventItem {
+  sequence: number
+  type: string
+  label: string
+  status?: string
+  occurredAt: string
+}
