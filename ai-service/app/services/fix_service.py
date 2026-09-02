@@ -34,7 +34,8 @@ def execute_fix(incident_id: int, fix_proposal_id: int, approval_id: int) -> dic
         if approval.expires_at and approval.expires_at < utcnow():
             raise ValueError("APPROVAL_EXPIRED")
 
-        action = FIX_ACTIONS.get(proposal.action_type if hasattr(proposal, "action_type") else "CREATE_INVENTORY_INDEX")
+        # V2.0-A fail closed:未知/缺失 action 一律拒绝(不再默认 CREATE_INVENTORY_INDEX)
+        action = FIX_ACTIONS.get(proposal.action_type)
         if action is None:
             raise ValueError("UNKNOWN_FIX_ACTION")
 

@@ -129,21 +129,24 @@ def test_decision_approved_updates_approval_and_resumes(monkeypatch):
         return SimpleNamespace(
             id=approval_id, incident_id=1, status="pending",
             expires_at=datetime.utcnow() + timedelta(minutes=5),
+            agent_run_id=7,
         )
 
-    def fake_update_approval(approval_id, *, status, approver, comment, consumed_at=None):
-        calls["update"] = {"status": status, "approver": approver, "comment": comment}
-        return None
+    def fake_decide_cas(approval_id, *, decision, approver, comment, now_utc):
+        calls["cas"] = {"decision": decision, "approver": approver,
+                        "comment": comment, "now_utc": now_utc}
+        return SimpleNamespace(id=approval_id, incident_id=1, status=decision)
 
-    def fake_list_runs(incident_id):
-        return [SimpleNamespace(thread_id="run-1")]
+    def fake_get_run(run_id):
+        assert run_id == 7  # 恢复绑定审批所属 Run,而非 incident 最近 Run
+        return SimpleNamespace(id=7, thread_id="run-1")
 
     async def fake_resume(thread_id, resume_value):
         calls["resume"] = {"thread_id": thread_id, "value": resume_value}
 
     monkeypatch.setattr("app.api.approvals.approval_repo.get_approval", fake_get_approval)
-    monkeypatch.setattr("app.api.approvals.approval_repo.update_approval", fake_update_approval)
-    monkeypatch.setattr("app.api.approvals.run_repo.list_runs", fake_list_runs)
+    monkeypatch.setattr("app.api.approvals.approval_repo.decide_approval_cas", fake_decide_cas)
+    monkeypatch.setattr("app.api.approvals.run_repo.get_run", fake_get_run)
     monkeypatch.setattr("app.api.approvals.resume_investigation", fake_resume)
 
     resp = _api_client.post("/api/incidents/1/approvals/5/decision",
@@ -152,8 +155,9 @@ def test_decision_approved_updates_approval_and_resumes(monkeypatch):
     body = resp.json()
     assert body["status"] == "approved"
     assert body["approved_by"] == "demo-approver"
-    assert calls["update"]["status"] == "approved"
-    assert calls["update"]["approver"] == "demo-approver"
+    assert calls["cas"]["decision"] == "approved"
+    assert calls["cas"]["approver"] == "demo-approver"
+    assert calls["cas"]["now_utc"] is not None  # 应用生成 now_utc,不依赖 DB NOW()
     assert calls["resume"]["thread_id"] == "run-1"
     assert calls["resume"]["value"]["decision"] == "approved"
 
@@ -184,9 +188,12 @@ def test_decision_approval_expired(monkeypatch):
         return SimpleNamespace(
             id=approval_id, incident_id=1, status="pending",
             expires_at=datetime.utcnow() - timedelta(minutes=1),
+            agent_run_id=None,
         )
 
     monkeypatch.setattr("app.api.approvals.approval_repo.get_approval", fake_get_approval)
+    monkeypatch.setattr("app.api.approvals.approval_repo.decide_approval_cas",
+                        lambda *a, **kw: None)  # CAS 失败(过期)
     resp = _api_client.post("/api/incidents/1/approvals/5/decision",
                             json={"decision": "approved"})
     assert resp.status_code == 409
@@ -197,9 +204,12 @@ def test_decision_already_processed(monkeypatch):
         return SimpleNamespace(
             id=approval_id, incident_id=1, status="approved",
             expires_at=datetime.utcnow() + timedelta(minutes=5),
+            agent_run_id=None,
         )
 
     monkeypatch.setattr("app.api.approvals.approval_repo.get_approval", fake_get_approval)
+    monkeypatch.setattr("app.api.approvals.approval_repo.decide_approval_cas",
+                        lambda *a, **kw: None)  # CAS 失败(已决定)
     resp = _api_client.post("/api/incidents/1/approvals/5/decision",
                             json={"decision": "approved"})
     assert resp.status_code == 409

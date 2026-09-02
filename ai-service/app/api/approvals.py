@@ -40,37 +40,48 @@ class DecisionIn(BaseModel):
     comment: str | None = None
 
 
+def _run_for_approval(approval) -> object | None:
+    """V2.0-A:审批 → 准确 Run(按 agent_run_id 绑定,禁止按 incident 猜最近 Run)。
+    仅存量 NULL 绑定行(009 迁移前创建)回退 incident 最近一次 Run。"""
+    if approval.agent_run_id:
+        run = run_repo.get_run(approval.agent_run_id)
+        if run is not None:
+            return run
+    runs = run_repo.list_runs(approval.incident_id)
+    return runs[0] if runs else None
+
+
 @router.post("/{incident_id}/approvals/{approval_id}/decision")
 async def decide(incident_id: int, approval_id: int, body: DecisionIn) -> dict:
     approval = approval_repo.get_approval(approval_id)
     if approval is None or approval.incident_id != incident_id:
         raise HTTPException(404, "approval not found")
-    if approval.status != "pending":
-        raise HTTPException(409, f"approval already {approval.status}")
-    if approval.expires_at and approval.expires_at < utcnow():
-        raise HTTPException(409, "approval expired")
     if body.decision not in ("approved", "rejected"):
         raise HTTPException(422, "decision must be 'approved' or 'rejected'")
 
-    # 审批人身份由服务端确定,不信任请求体
-    approval_repo.update_approval(
+    # V2.0-A 审批 CAS:pending + 未过期原子裁决;now_utc 由应用生成(不依赖 DB NOW())
+    decided = approval_repo.decide_approval_cas(
         approval_id,
-        status=body.decision,
+        decision=body.decision,
         approver=settings.demo_approver_id,
         comment=body.comment,
+        now_utc=utcnow(),
     )
+    if decided is None:
+        fresh = approval_repo.get_approval(approval_id)
+        if fresh is None:
+            raise HTTPException(404, "approval not found")
+        if fresh.status == "pending":
+            raise HTTPException(409, "approval expired")
+        raise HTTPException(409, f"approval already {fresh.status}")
 
-    # V1.5 回放:审批决定步骤(幂等)
-    runs = run_repo.list_runs(incident_id)
-    run_id = getattr(runs[0], "id", None) if runs else None
-    if run_id:
-        _record_approval_decided(incident_id, run_id, approval_id,
+    run = _run_for_approval(approval)
+    if run is not None:
+        # V1.5 回放:审批决定步骤(幂等);绑定审批所属 Run
+        _record_approval_decided(incident_id, run.id, approval_id,
                                  body.decision, body.comment)
-
-    # 恢复 LangGraph(thread_id 取该 incident 最近一次 run)
-    runs = run_repo.list_runs(incident_id)
-    if runs:
-        await resume_investigation(runs[0].thread_id, {
+        # 恢复 LangGraph(该审批所属 Run 的 checkpoint thread)
+        await resume_investigation(run.thread_id, {
             "decision": body.decision,
             "comment": body.comment,
         })

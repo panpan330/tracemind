@@ -4,14 +4,46 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.engine import get_control_engine
-from app.db.models import AgentRun
+from app.db.models import AgentRun, Incident
 
 
-def create_run(incident_id: int, baseline: dict | None = None) -> AgentRun:
+def create_run(incident_id: int, baseline: dict | None = None,
+               *, incident: Incident | None = None) -> AgentRun:
+    """创建 Run 并在同一事务内冻结 RunContextSnapshot 与 bundle 版本(V2.0-A 第 6/8 条)。
+
+    - checkpoint_thread_id 与 thread_id 一一对应(唯一约束 009),namespace 空串 = 默认。
+    - 版本冻结前移至创建事务:开始执行后不得改变(_finalize_run 不再覆盖)。
+    - incident 行缺失或 service_ref 缺失 → ValueError(fail closed,禁止默认上下文)。
+    """
+    from app.mcp.contract import MCP_TOOL_CONTRACT_VERSION
+    from app.replay.versions import (CAPABILITY_BUNDLE_VERSION, POLICY_BUNDLE_VERSION,
+                                     PROMPT_BUNDLE_VERSION)
+    from app.services.run_context import build_snapshot
+
     with Session(get_control_engine()) as session:
-        run = AgentRun(incident_id=incident_id, thread_id=f"run-{uuid.uuid4()}",
-                       status="created", incident_digest_baseline=baseline)
+        inc = incident if incident is not None else session.get(Incident, incident_id)
+        if inc is None:
+            raise ValueError(f"incident {incident_id} not found(禁止无上下文创建 Run)")
+        thread_id = f"run-{uuid.uuid4()}"
+        run = AgentRun(
+            incident_id=incident_id, thread_id=thread_id, status="created",
+            incident_digest_baseline=baseline,
+            checkpoint_thread_id=thread_id, checkpoint_namespace="",
+            expected_policy_bundle_version=POLICY_BUNDLE_VERSION,
+            capability_bundle_version=CAPABILITY_BUNDLE_VERSION,
+            prompt_bundle_version=PROMPT_BUNDLE_VERSION,
+            tool_bundle_version=MCP_TOOL_CONTRACT_VERSION,
+        )
         session.add(run)
+        session.flush()  # 取 run.id,与快照写入同一事务
+        run.run_context_snapshot_json = build_snapshot(
+            inc, run.id, thread_id, baseline,
+            bundle_versions={
+                "capability": CAPABILITY_BUNDLE_VERSION,
+                "policy": POLICY_BUNDLE_VERSION,
+                "prompt": PROMPT_BUNDLE_VERSION,
+                "tool": MCP_TOOL_CONTRACT_VERSION,
+            })
         session.commit()
         session.refresh(run)
         return run
@@ -79,10 +111,12 @@ def allocate_replay_sequence(agent_run_id: int,
 
 
 def freeze_run_versions(agent_run_id: int, policy_bundle_version: str) -> None:
-    """Run 启动/收尾时冻结预期版本。"""
+    """V2.0-A:版本冻结已在 Run 创建事务完成。此处仅在字段为空时补写(旧数据防御),
+    绝不覆盖已冻结值——运行中部署升级不得篡改 Run 的版本证据。"""
     with Session(get_control_engine()) as session:
         run = session.get(AgentRun, agent_run_id)
         if run is None:
             return
-        run.expected_policy_bundle_version = policy_bundle_version
+        if run.expected_policy_bundle_version is None:
+            run.expected_policy_bundle_version = policy_bundle_version
         session.commit()

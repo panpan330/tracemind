@@ -20,7 +20,11 @@ async def start_investigation(incident_id: int):
         raise HTTPException(404, "incident not found")
     # 开始调查时采集新鲜 digest 基线,供 E3 计算 Incident 期间增量
     baseline = capture_digest_baseline(get_readonly_engine())
-    run = run_repo.create_run(incident_id, baseline=baseline)
+    # V2.0-A:创建事务内冻结 RunContextSnapshot;上下文不完整 → 422 fail closed
+    try:
+        run = run_repo.create_run(incident_id, baseline=baseline, incident=inc)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     from app.services import runner
     await runner.start_investigation(incident_id, run.id, run.thread_id)
     return {"run_id": run.id, "thread_id": run.thread_id, "status": "investigating"}

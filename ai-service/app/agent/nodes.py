@@ -604,7 +604,20 @@ def propose_fix(state: IncidentState) -> dict:
     """根因确认后生成修复提案并落库,同时创建待审批记录,状态进入 awaiting_approval。
     V1.1:提案完全确定性(fix_registry.build_proposal),零 LLM 调用。"""
     from app.agent.fix_registry import build_proposal
-    fix = build_proposal(state)
+    try:
+        fix = build_proposal(state)
+    except ValueError as exc:
+        # V2.0-A fail closed:未知/缺失根因不创建提案与审批,转人工(零写路径)
+        state["status"] = "needs_human"
+        state["termination_reason"] = "unknown_root_cause"
+        state["error"] = str(exc)
+        _emit_status(state)
+        _replay(state, "FIX_PROPOSED", "failed",
+                logical_step_id=f"ls-fixp-{state['incident_id']}",
+                state_after=_snap(state), outcome="failed",
+                decision={"rejectionRule": str(exc)},
+                source_refs={"businessKey": f"fix:{state['incident_id']}"})
+        return state
     proposal = proposal_repo.create_proposal(
         incident_id=state["incident_id"],
         action_type=fix["action_type"],
@@ -619,6 +632,7 @@ def propose_fix(state: IncidentState) -> dict:
         fix_proposal_id=proposal.id,
         action_type=fix["action_type"],
         parameters_hash=fix["parameters_hash"],
+        agent_run_id=state.get("run_id"),
     )
     state["fix_proposal"] = {
         "fix_proposal_id": proposal.id,
@@ -679,9 +693,12 @@ def report(state: IncidentState, llm=None) -> dict:
 
 
 def human_approval(state: IncidentState) -> dict:
-    """审批挂起:interrupt 等待决策;resume 后按决策分流(记录由 propose_fix 预创建)。"""
+    """审批挂起:interrupt 等待决策;resume 后按决策分流(记录由 propose_fix 预创建)。
+    V2.0-A:fail-closed 路径(无提案/未知根因)不经审批,直接交由路由进入 report。"""
     proposal = state.get("fix_proposal") or {}
-    approval = state["approval"]  # propose_fix 已创建
+    approval = state.get("approval")
+    if state.get("status") != "awaiting_approval" or not approval:
+        return state
 
     # V1.5 回放:APPROVAL_REQUESTED(进入审批挂起)
     run_id = state.get("run_id")
@@ -728,6 +745,17 @@ def execute_fix(state: IncidentState) -> dict:
             source_refs={"approval_id": approval.get("approval_id"),
                          "fix_proposal_id": proposal.get("fix_proposal_id"),
                          "businessKey": f"fix:{state['incident_id']}"})
+    if proposal.get("action_type") not in ("CREATE_INVENTORY_INDEX",
+                                           "TERMINATE_BLOCKING_SESSION"):
+        # V2.0-A fail closed:未知动作不得进入任何写执行器(原 else 分支默认走索引创建,已删除)
+        state["status"] = "failed"
+        state["error"] = f"unknown_action_type: {proposal.get('action_type')!r}"
+        _emit_status(state)
+        _replay(state, "FIX_EXECUTED", "failed", logical_step_id=replay_lid,
+                state_after=_snap(state), outcome="failed",
+                operation={"actionType": proposal.get("action_type"),
+                           "rejectionRule": state["error"]})
+        return state
     if proposal.get("action_type") == "TERMINATE_BLOCKING_SESSION":
         from app.services import session_terminator as st
         result = st.execute(proposal, approval)

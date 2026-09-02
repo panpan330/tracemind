@@ -35,6 +35,9 @@ web/*.tsbuildinfo
 # VM 部署密钥环境(不进 git)
 .env.vm
 
+# MCP 客户端令牌映射(bootstrap 生成,不进 git)
+secrets/mcp_clients.json
+
 # 评测临时目录/本地 checkpoint
 ai-service/.eval_fixtures/
 ai-service/data/checkpoints.sqlite

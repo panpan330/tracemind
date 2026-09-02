@@ -17,6 +17,12 @@ import pymysql
 
 DEFAULT_MIGRATIONS = Path(__file__).parent / "migrations"
 
+
+def _utcnow() -> str:
+    """V2.0-A:迁移审计时间用应用侧 naive UTC(不依赖 DB NOW() 时区)。"""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
+
 # 当前连接配置(供 _apply 的 CLI 分支复用)
 _conn_cfg: dict = {}
 
@@ -132,15 +138,16 @@ def run_migrations(conn, migrations_dir: Path, dry_run: bool = False) -> int:
                     continue
                 cur.execute(
                     "INSERT INTO schema_migrations (filename, checksum_sha256, status, started_at) "
-                    "VALUES (%s, %s, 'started', NOW())", (name, ck))
+                    "VALUES (%s, %s, 'started', %s)",
+                    (name, ck, _utcnow()))
                 conn.commit()
                 t0 = time.time()
                 try:
                     _apply(cur, conn, path)
                     cur.execute(
-                        "UPDATE schema_migrations SET status='applied', applied_at=NOW(), "
+                        "UPDATE schema_migrations SET status='applied', applied_at=%s, "
                         "execution_ms=%s WHERE filename=%s",
-                        (int((time.time() - t0) * 1000), name))
+                        (_utcnow(), int((time.time() - t0) * 1000), name))
                     conn.commit()
                     print(f"APPLY {name}")
                 except Exception as e:  # noqa: BLE001

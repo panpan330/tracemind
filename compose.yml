@@ -8,17 +8,18 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: root_pwd_2026
       MYSQL_DATABASE: tracemind_business
-      TZ: Asia/Shanghai
+      # V2.0-A:demo MySQL 时区与 CI/应用统一为 UTC(naive UTC 存储语义)
+      TZ: UTC
     command:
       - --innodb-buffer-pool-size=64M
       - --innodb-flush-log-at-trx-commit=2
       - --performance-schema=ON
+      - --default-time-zone=+00:00
     ports:
       - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       # 首次启动自动执行:建库/四账号/业务表/控制库 13 表(全部幂等)
-      - ./scripts/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot_pwd_2026 --silent"]
       interval: 5s
@@ -26,6 +27,32 @@ services:
       retries: 40
       start_period: 20s
     networks: [tracemind, control-data-network, tool-observation-network]
+
+  # V2.0-A:一次性数据库初始化(建库 + Schema 迁移 + 账号 Provisioning,官方迁移器)。
+  # 替代已废弃的 initdb 目录挂载;幂等,重复 up 安全。
+  db-init:
+    image: python:3.12-slim
+    container_name: tracemind-db-init
+    environment:
+      TRACEMIND_MIGRATE_DB_URL: "mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-root_pwd_2026}@mysql:3306/"
+      # 账号密码:本地 demo 默认值;CI 由 Job Env 注入覆盖(compose.ci.yml)
+      TRACEMIND_DB_CONTROL_APP_PASSWORD: ${TRACEMIND_DB_CONTROL_APP_PASSWORD:-control_app_pwd}
+      TRACEMIND_DB_APP_BUSINESS_PASSWORD: ${TRACEMIND_DB_APP_BUSINESS_PASSWORD:-app_business_pwd}
+      TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD: ${TRACEMIND_DB_AI_INVESTIGATOR_PASSWORD:-investigator_pwd}
+      TRACEMIND_DB_FIX_EXECUTOR_PASSWORD: ${TRACEMIND_DB_FIX_EXECUTOR_PASSWORD:-fix_executor_pwd}
+      TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD: ${TRACEMIND_DB_SESSION_TERMINATOR_PASSWORD:-terminator_pwd}
+      TRACEMIND_DB_MCP_AUDITOR_PASSWORD: ${TRACEMIND_DB_MCP_AUDITOR_PASSWORD:-mcp_auditor_pwd}
+    command:
+      - sh
+      - -c
+      - "sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && apt-get update -qq && apt-get install -y -qq default-mysql-client >/dev/null && pip install -q -i https://mirrors.aliyun.com/pypi/simple/ pymysql && python /work/scripts/db/migrate.py --init-db --migrations /work/scripts/db/migrations && python /work/scripts/db/migrate.py --migrations /work/scripts/db/migrations && python /work/scripts/db/migrate.py --provision --migrations /work/scripts/db/migrations"
+    volumes:
+      - ./scripts/db:/work/scripts/db:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    networks: [control-data-network]
 
   # 一次性灌压测数据(幂等:已有数据则跳过);容器正常退出
   seed:
@@ -42,6 +69,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     restart: "no"
     networks: [tracemind]
 
@@ -52,7 +81,7 @@ services:
     container_name: tracemind-order
     environment:
       ORDER_SERVICE_PORT: "8081"
-      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
       BUSINESS_DB_USER: app_business
       BUSINESS_DB_PASSWORD: app_business_pwd
       INVENTORY_SERVICE_URL: "http://inventory-service:8082"
@@ -77,7 +106,7 @@ services:
     container_name: tracemind-inventory
     environment:
       INVENTORY_SERVICE_PORT: "8082"
-      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true"
+      BUSINESS_DB_URL: "jdbc:mysql://mysql:3306/tracemind_business?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
       BUSINESS_DB_USER: app_business
       BUSINESS_DB_PASSWORD: app_business_pwd
       DEMO_MODE: "true"
@@ -135,6 +164,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       mcp-tools:
         condition: service_healthy
       order-service:
@@ -177,6 +208,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=5)"]
       interval: 10s

@@ -17,7 +17,9 @@ def test_fake_llm_hypothesize_returns_deterministic_hypotheses():
 
 def test_fake_llm_propose_fix_has_parameters_hash():
     llm = FakeLLM()
-    fix = llm.propose_fix({"confirmed_hypothesis_id": "h1"})
+    # V2.0-A:未知/缺失根因 fail closed(build_proposal 抛错);需提供已确认根因
+    fix = llm.propose_fix({"confirmed_hypothesis_id": "h1",
+                           "root_cause_code": "MISSING_INVENTORY_INDEX"})
     assert fix["action_type"] == "CREATE_INVENTORY_INDEX"
     assert fix["risk_level"] in ("low", "medium", "high")
     params = fix["parameters"]

@@ -2,6 +2,7 @@
 from sqlalchemy import text
 
 from app.db.engine import get_control_engine
+from app.db.models import utcnow
 
 _EVAL_RUN_DDL = """
 CREATE TABLE IF NOT EXISTS eval_run (
@@ -31,11 +32,12 @@ def insert_eval_run(*, scenario: str, rounds: int, success_rate: float,
     _ensure_table()
     with get_control_engine().connect() as conn:
         result = conn.execute(text(
-            "INSERT INTO eval_run (scenario, rounds, success_rate, avg_duration_ms, "
+            "INSERT INTO eval_run (created_at, scenario, rounds, success_rate, avg_duration_ms, "
             "total_cost, model_snapshot, summary, raw_json) "
-            "VALUES (:s, :r, :sr, :d, :c, :m, :sum, :raw)"),
-            {"s": scenario, "r": rounds, "sr": success_rate, "d": avg_duration_ms,
-             "c": total_cost, "m": model_snapshot, "sum": summary, "raw": raw_json})
+            "VALUES (:created_at, :s, :r, :sr, :d, :c, :m, :sum, :raw)"),
+            {"created_at": utcnow(), "s": scenario, "r": rounds, "sr": success_rate,
+             "d": avg_duration_ms, "c": total_cost, "m": model_snapshot,
+             "sum": summary, "raw": raw_json})
         conn.commit()
         return result.lastrowid
 

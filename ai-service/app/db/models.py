@@ -41,16 +41,24 @@ class AgentRun(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     thread_id: Mapped[str] = mapped_column(String(64), unique=True)
+    # V2.0-A:checkpoint 绑定(thread/namespace 与 agent_run 一一对应;唯一约束见 009)
+    checkpoint_thread_id: Mapped[Optional[str]] = mapped_column(String(128))
+    checkpoint_namespace: Mapped[Optional[str]] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), default="created")
     investigation_round: Mapped[int] = mapped_column(Integer, default=0)
     tool_call_count: Mapped[int] = mapped_column(Integer, default=0)
     incident_digest_baseline: Mapped[Optional[dict]] = mapped_column(JSON)
+    # V2.0-A:Run 创建事务内冻结的不可变上下文快照(恢复只读此快照)
+    run_context_snapshot_json: Mapped[Optional[dict]] = mapped_column(JSON)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    # V1.5 回放:序号分配与版本冻结
+    # V1.5 回放:序号分配与版本冻结;V2.0-A 版本冻结前移至 Run 创建事务
     next_replay_sequence: Mapped[int] = mapped_column(Integer, default=0)
     expected_policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
     policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
+    capability_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
+    prompt_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
+    tool_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
 
 
 class Hypothesis(Base):
@@ -139,6 +147,8 @@ class FixProposal(Base):
     __tablename__ = "fix_proposal"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # V2.0-A:动作类型显式落库(此前仅经 fix_definition 间接表达,代码层默认回退已删除)
+    action_type: Mapped[Optional[str]] = mapped_column(String(64))
     fix_definition_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     parameters_json: Mapped[Optional[dict]] = mapped_column(JSON)
     parameters_hash: Mapped[str] = mapped_column(String(64))
@@ -153,6 +163,8 @@ class Approval(Base):
     __tablename__ = "approval"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # V2.0-A:审批绑定创建它的 Run(恢复/过期只处理该 Run,禁止按 incident 猜最近 Run)
+    agent_run_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     fix_proposal_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     action_type: Mapped[str] = mapped_column(String(64))
     parameters_hash: Mapped[str] = mapped_column(String(64))

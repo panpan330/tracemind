@@ -10,8 +10,8 @@
 
 | 项 | 值 |
 |---|---|
-| 生成时间 | 2026-08-14(以实际提交时间为准) |
-| Git SHA | `92e2a5d3b9f95c515422724a390d3075f78cf54e` |
+| 生成时间 | 2026-08-14(以实际提交时间为准);**V2.0-A 更新:2026-09-02** |
+| Git SHA | `92e2a5d3b9f95c515422724a390d3075f78cf54e` → **V2.0-A 基线可信化后见 git log** |
 | 分支 | `main` |
 | git status | 干净(无未提交改动) |
 | 适用代码版本 | 上述 SHA;仓库若变化,新 Agent 必须重新核对本文档与代码差异 |
@@ -368,14 +368,35 @@ cd web && npm run dev
 
 ## 12. 当前已知问题(待核查清单)
 
+> V2.0-A(2026-09-02)处置结果随行标注。
+
 | 问题 | 代码证据 | 影响 | 测试覆盖 | 推荐处理 |
 |---|---|---|---|---|
-| 审批恢复用 `runs[0]` 绑定 | `api/approvals.py:71-73` | incident 多 run 时可能恢复错目标 | 未覆盖多 run | 改为显式 run_id 绑定 |
-| checkpoint 本地 sqlite 单实例 | `runner.get_saver()` | 多实例部署不支持 | 无 | 换共享存储或保持单实例声明 |
-| 时间字段 naive UTC | `db/models.py:utcnow` | 跨时区展示需注意 | 无专项 | 确认前端展示逻辑 |
-| 未知 root cause 回退默认 | `fix_registry.py:97` | 未知根因按 SCN-001 处理 | 有兼容测试 | 明确该行为是设计意图 |
-| 观测栈 profile 不默认启动 | `compose.yml` observability-ui | 全栈验收需手动拉起 | 无 | 文档已注明 |
+| ~~审批恢复用 `runs[0]` 绑定~~ | ~~`api/approvals.py:71-73`~~ | ~~多 run 恢复错目标~~ | **已修复(V2.0-A)**:`approval.agent_run_id` 绑定准确 Run(009 迁移 + `decide_approval_cas` + scanner 绑定;legacy NULL 行回退旧行为);`tests/test_approval_cas.py` | 关闭 |
+| checkpoint 本地 sqlite 单实例 | `runner.get_saver()` | 多实例部署不支持 | `tests/test_checkpoint_contract.py`(重启恢复语义已钉) | 保持单实例声明;多副本须先换共享 checkpointer |
+| ~~时间字段 naive UTC / 8 小时时差~~ | ~~compose TZ=Asia/Shanghai + DB NOW()~~ | ~~审批/审计时间漂移~~ | **已修复(V2.0-A)**:compose/JDBC 全 UTC,引擎会话 `SET time_zone='+00:00'`,审计/migrate/eval_run 应用侧 UTC,审批 CAS 用应用 `now_utc`;`tests/test_utc_semantics.py` + `scripts/audit_time_sources.py`(本机实测发现 28800s 偏差,现已消除来源) | 关闭 |
+| ~~未知 root cause 回退默认~~ | ~~`fix_registry.py:97`~~ | ~~未知根因按 SCN-001 处置~~ | **已修复(V2.0-A)**:未知/缺失根因与未知 action 全部 fail closed(还发现并修复 `FixProposal` 无 action_type 列导致 `fix_service` 恒默认建索引的缺陷);`tests/test_fail_closed_proposal.py` | 关闭 |
+| ~~观测栈 profile 不默认启动~~ | `compose.yml` observability-ui | 全栈验收需手动拉起 | 文档已注明 + `scripts/vm-infra-check.sh` | 关闭(设计意图) |
 | 成本/记忆/反思无 A/B 对照 | 无 | 简历中已降级表述 | 无 | 需要时补对照实验 |
+| trace 服务读 Incident 行取观测窗口 | `trace_service.py` | 运行中 Incident 更新影响 trace 查询窗口 | 未覆盖(V2.0-A 冻结的是 Agent 侧 Run 上下文) | V2.2 统一证据/窗口数据平面时收敛 |
+| Jaeger search_traces 忽略 operation_ref | `jaeger_client.py:34-52` | trace 搜索只按 service(真实验收下工作,但 operation 过滤是装饰) | 未覆盖 | V2.2 改造代表 trace 选择时一并处理(需真实后端确认 span operation 名) |
+| `OPERATION_TO_URI/ROUTE` 此前为死代码且 ORDER_CREATE 映射错误 | 真实端点 `/api/orders/{orderId}/check-stock` | 真实 Prometheus 查询会空结果(fixture 掩盖) | **已修复(V2.0-A)**:映射修正 + `uri=~".+"` 通配删除 + 契约测试(`test_observability_contract.py`,含可选 live 冒烟) | 关闭(live 后端契约仍需在拉起观测栈后跑一次冒烟确认) |
+
+## 12A. V2.0-A 基线可信化(2026-09-02)变更摘要
+
+**目标**:不改变 SCN-001/002 诊断/审批/执行/验证/Replay/SSE 行为,把基线做实。实施计划:`docs/superpowers/plans/2026-09-02-v2.0-a-baseline-trust.md`。
+
+- **migration 009**(`009_v20_run_baseline.sql`,追加式):`agent_run.run_context_snapshot_json / checkpoint_thread_id(唯一) / checkpoint_namespace / capability/prompt/tool_bundle_version`;`approval.agent_run_id`;`fix_proposal.action_type`(存量按 fix_definition 回填)。已在真实库增量升级验证(备份先行)+ VM scratch 空库从零初始化验证(官方迁移器)。
+- **Run 上下文冻结**:Run 创建事务内冻结不可变 `RunContextSnapshot`(`app/services/run_context.py`);`runner` 启动/恢复只读快照;快照缺失/损坏 → fail closed(`context_snapshot_invalid`);`incident.service_ref` 缺失 → 拒绝创建 Run(删除 "inventory-service"/"medium" 默认兜底)。
+- **版本冻结前移**:bundle 版本在 Run 创建事务写入;`resume_investigation` 的 `version_mismatch` 校验对未完成 Run 真正生效(原实现在收尾补写、校验是空操作);收尾 `freeze_run_versions` 不再覆盖已冻结值。
+- **审批安全**:`decide_approval_cas` 原子 CAS(pending + 未过期,应用生成 `now_utc`);审批决定/回放/过期扫描按 `approval.agent_run_id` 恢复准确 Run(仅 legacy NULL 回退旧行为);并发双批准只有一个成功。
+- **checkpoint 契约**:`runner` 改用 LangGraph 文档契约 `{"configurable": {"thread_id": ...}}`;真实 SqliteSaver 集成测试钉死 thread_id 层级、进程重启 resume、thread↔checkpoint 一致(探针证实:旧扁平写法靠 `ensure_config` 归一化才工作)。
+- **UTC 统一**:compose/CI/JDBC 全 UTC;全部引擎会话 `SET time_zone='+00:00'`;`audit_repository`/`migrate.py`/`eval_run` 改应用侧 naive UTC;新增 `scripts/audit_time_sources.py`(只读审计,本机曾实测 DB NOW() 与 UTC 差 28800s)。
+- **可观测性契约**:`OPERATION_TO_URI/ROUTE` 修正为真实模板(ORDER_CREATE → `/api/orders/{orderId}/check-stock`),新增 `SERVICE_TO_OPERATIONS`/`uri_regex_for_service`(未知 service fail closed);`PrometheusMetricsClient` 删除 `uri=~".+"` 通配;`search_traces` 仍按 service(V2.2 收敛,见 §12)。
+- **干净克隆门禁**:compose 删除废弃 `scripts/sql` 挂载,新增 `db-init` 一次性服务(官方迁移器,幂等);`.env.vm.example` / `secrets/mcp_clients.example.json` 入库,`.gitignore` 排除真实值;`scripts/bootstrap-dev.ps1` / `.sh` 生成忽略文件 + 迁移 + 依赖校验;`scripts/vm-infra-check.sh` 校验 VM 基础设施。VM 实测:干净目录 bootstrap 后 `docker compose config` 通过。
+- **杂项修复**:`write_observation_query` 引用不存在的 `created_at` 列(死代码路径,已对齐 004 schema);`update_run_status` 终态集合补 `cancelled`。
+
+**新增测试**:行为特征(10)、fail closed(6)、审批 CAS/绑定(5)、UTC 语义(4)、Run 快照/版本冻结(6)、checkpoint 契约(3)、可观测性契约(6,1 个 live 冒烟按需 skip)、compose 门禁(6)、009 内容(5)。基线 436 个既有测试全部保持通过。
 
 ---
 

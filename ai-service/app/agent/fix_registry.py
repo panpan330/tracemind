@@ -92,9 +92,10 @@ def _sha256(parameters: dict) -> str:
 
 
 def build_proposal(state: dict) -> dict:
-    root_cause = state.get("root_cause_code") or ROOT_CAUSE_INDEX
+    root_cause = state.get("root_cause_code")
     if root_cause not in _FIXES:
-        root_cause = ROOT_CAUSE_INDEX  # 未知/缺失根因回退默认场景(V1.0 兼容)
+        # V2.0-A fail closed:未知/缺失根因不得回退默认索引动作(V1.0 兼容已删除)
+        raise ValueError(f"unknown_root_cause: {root_cause!r} (无预定义处置映射, fail closed)")
     fix = FixRegistry.resolve(root_cause)
     if root_cause == ROOT_CAUSE_INDEX:
         parameters = {"index_name": fix.index_name, "table": fix.table_ref,

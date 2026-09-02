@@ -4,6 +4,16 @@ from sqlalchemy import Engine, create_engine
 
 from app.config import DATABASE_ACCESS_DISABLED, settings
 
+# V2.0-A:所有新连接会话统一 UTC(naive UTC 存储语义的会话侧保障)。
+# NOW()/CURRENT_TIMESTAMP 与 Python utcnow() 一致,不受服务器默认时区影响。
+UTC_SESSION_INIT_COMMAND = "SET time_zone = '+00:00'"
+
+
+def create_engine_utc(url: str, **kwargs) -> Engine:
+    kwargs.setdefault("connect_args", {})
+    kwargs["connect_args"].setdefault("init_command", UTC_SESSION_INIT_COMMAND)
+    return create_engine(url, **kwargs)
+
 
 def _deny_if_offline() -> None:
     """offline_eval 是评测环境:允许控制/只读查询(Agent 调查落库是核心),
@@ -23,14 +33,14 @@ def _deny_side_effect_if_offline() -> None:
 def get_control_engine() -> Engine:
     """tracemind_control_app:控制库 CRUD,普通 Incident/审计代码使用。"""
     _deny_if_offline()
-    return create_engine(settings.control_db_url, pool_pre_ping=True)
+    return create_engine_utc(settings.control_db_url, pool_pre_ping=True)
 
 
 @lru_cache
 def get_readonly_engine() -> Engine:
     """ai_investigator:只读业务表 + performance_schema + information_schema。"""
     _deny_if_offline()
-    return create_engine(settings.readonly_db_url, pool_pre_ping=True)
+    return create_engine_utc(settings.readonly_db_url, pool_pre_ping=True)
 
 
 @lru_cache
@@ -46,7 +56,7 @@ def get_executor_engine() -> Engine:
         url = settings.control_db_url.replace(
             "tracemind_control_app:control_app_pwd", "fix_executor:fix_executor_pwd"
         ).replace("tracemind_control", "tracemind_business")
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine_utc(url, pool_pre_ping=True)
 
 
 def get_terminator_engine() -> Engine:
@@ -58,10 +68,10 @@ def get_terminator_engine() -> Engine:
         if settings.run_profile != "local":
             raise ValueError("TRACEMIND_SESSION_TERMINATOR_DB_URL 缺失(禁止回退只读引擎)")
         url = settings.readonly_db_url  # local 向后兼容
-    return create_engine(url, pool_pre_ping=True, pool_recycle=1800)
+    return create_engine_utc(url, pool_pre_ping=True, pool_recycle=1800)
 
 
 def get_engine_from_url(url: str) -> Engine:
     """按 URL 创建独立连接(不缓存);供 session_terminator 等按需连接使用。"""
     _deny_side_effect_if_offline()
-    return create_engine(url, pool_pre_ping=True, pool_recycle=1800)
+    return create_engine_utc(url, pool_pre_ping=True, pool_recycle=1800)

@@ -51,7 +51,10 @@ class PrometheusMetricsClient:
         obs_id = uuid.uuid4().hex[:12]
         evaluated_at = int(time.time())
         window = f"{int(settings.metrics_max_age_seconds * 2)}s"
-        labels = {"service": service_ref, "uri": ".+",
+        # V2.0-A:uri 用 operation registry 的真实模板正则(原 uri=~".+" 通配已删除,
+        # 禁止通配掩盖映射错误;未注册 service 直接 fail closed)
+        from app.services.operation_registry import uri_regex_for_service
+        labels = {"service": service_ref, "uri": uri_regex_for_service(service_ref),
                   "extra": "", "window": window}
         p95_rows = self.query("HTTP_SERVER_P95_V1", labels, 300)
         qps_rows = self.query("HTTP_SERVER_QPS_V1", labels, 300)

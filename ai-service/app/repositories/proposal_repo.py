@@ -24,6 +24,7 @@ def create_proposal(incident_id: int, action_type: str, risk_level: str,
         fix_definition_id = get_fix_definition_id(action_type)
         proposal = FixProposal(
             incident_id=incident_id,
+            action_type=action_type,
             fix_definition_id=fix_definition_id,
             parameters_json=parameters,
             parameters_hash=parameters_hash,

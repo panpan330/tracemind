@@ -33,10 +33,17 @@ async def scan_expired_approvals_once() -> int:
         approval = approval_repo.get_approval(approval_id)
         if approval is None:
             continue
-        runs = run_repo.list_runs(approval.incident_id)
-        if runs:
+        # V2.0-A:按 approval.agent_run_id 恢复准确 Run(禁止按 incident 猜最近 Run);
+        # 仅存量 NULL 绑定行回退 list_runs[0](009 迁移前创建的旧数据)
+        run = None
+        if approval.agent_run_id:
+            run = run_repo.get_run(approval.agent_run_id)
+        if run is None:
+            runs = run_repo.list_runs(approval.incident_id)
+            run = runs[0] if runs else None
+        if run is not None:
             await resume_investigation(
-                runs[0].thread_id,
+                run.thread_id,
                 {"decision": "rejected", "comment": "expired"},
             )
     return len(expired_ids)
