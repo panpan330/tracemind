@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.engine import get_control_engine
 from app.db.models import Approval, utcnow
-from app.repositories import approval_repo, run_repo
+from app.repositories import approval_repo, incident_repo, run_repo
 from app.services.runner import resume_investigation
 
 logger = logging.getLogger(__name__)
@@ -33,19 +33,28 @@ async def scan_expired_approvals_once() -> int:
         approval = approval_repo.get_approval(approval_id)
         if approval is None:
             continue
-        # V2.0-A:按 approval.agent_run_id 恢复准确 Run(禁止按 incident 猜最近 Run);
-        # 仅存量 NULL 绑定行回退 list_runs[0](009 迁移前创建的旧数据)
+        # V2.0-A closure:仅恢复 approval.agent_run_id 绑定的 Run。
+        # NULL/无效/不匹配绑定 → fail closed:不恢复任何 Run(禁止猜最近 Run),
+        # Incident 转人工(termination_reason 列宽 64,详情进日志)。
         run = None
         if approval.agent_run_id:
-            run = run_repo.get_run(approval.agent_run_id)
+            candidate = run_repo.get_run(approval.agent_run_id)
+            if candidate is not None and candidate.incident_id == approval.incident_id:
+                run = candidate
         if run is None:
-            runs = run_repo.list_runs(approval.incident_id)
-            run = runs[0] if runs else None
-        if run is not None:
-            await resume_investigation(
-                run.thread_id,
-                {"decision": "rejected", "comment": "expired"},
-            )
+            reason = ("approval_run_binding_missing" if not approval.agent_run_id
+                      else "approval_run_binding_invalid")
+            logger.error("approval %s 无法恢复(绑定损坏): %s", approval_id, reason)
+            try:
+                incident_repo.update_status(approval.incident_id, "needs_human",
+                                            termination_reason=reason)
+            except Exception:  # noqa: BLE001 标记失败不阻塞扫描
+                logger.exception("scanner 标记 needs_human 失败 approval=%s", approval_id)
+            continue
+        await resume_investigation(
+            run.thread_id,
+            {"decision": "rejected", "comment": "expired"},
+        )
     return len(expired_ids)
 
 

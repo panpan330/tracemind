@@ -139,7 +139,7 @@ def test_decision_approved_updates_approval_and_resumes(monkeypatch):
 
     def fake_get_run(run_id):
         assert run_id == 7  # 恢复绑定审批所属 Run,而非 incident 最近 Run
-        return SimpleNamespace(id=7, thread_id="run-1")
+        return SimpleNamespace(id=7, incident_id=1, thread_id="run-1")
 
     async def fake_resume(thread_id, resume_value):
         calls["resume"] = {"thread_id": thread_id, "value": resume_value}

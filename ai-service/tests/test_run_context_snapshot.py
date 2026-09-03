@@ -93,7 +93,8 @@ def test_recover_missing_snapshot_fail_closed(monkeypatch, tmp_path):
         assert s.get(AgentRun, r.id).status == "failed"
         row = s.get(Inc, inc.id)
         assert row.status == "needs_human"
-        assert row.termination_reason == "context_snapshot_invalid"
+        # V2.0-A closure:缺失与损坏分别有精确原因码
+        assert row.termination_reason == "context_snapshot_missing"
     assert r.id not in runner._tasks
 
 

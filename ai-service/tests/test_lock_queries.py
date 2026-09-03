@@ -47,3 +47,36 @@ def test_no_fixture_returns_explicit_result():
         assert "observed_at" in r["data"] and "snapshot_expires_at" in r["data"]
     else:
         assert "error_message" in r
+
+
+def test_transaction_details_age_frame_consistent_live():
+    """V2.0-A closure 回归(live):开启 ≥5s 的真实事务后,age_ms 必须为正且量级正确。
+    UTC 会话统一曾使 NOW(3) 与 trx_started 错帧(age_ms ≈ -8h),SCN-002 据此预算耗尽。"""
+    import os
+    import time
+
+    import pymysql
+    import pytest
+
+    root_pwd = os.environ.get("MYSQL_ROOT_PASSWORD", "root")
+    try:
+        ctl = pymysql.connect(host="127.0.0.1", port=3306, user="root",
+                              password=root_pwd, database="tracemind_business",
+                              charset="utf8mb4", autocommit=False)
+    except Exception as e:  # 无 business 库环境跳过(结构性测试不依赖真库)
+        pytest.skip(f"tracemind_business 不可达,跳过 live 帧-一致性回归: {e}")
+    try:
+        with ctl.cursor() as cur:
+            cur.execute("SELECT CONNECTION_ID()")
+            pid = cur.fetchone()[0]
+            cur.execute("SELECT id FROM inventory ORDER BY id LIMIT 1 FOR UPDATE")
+            cur.fetchone()
+        time.sleep(5.2)  # 越过 L2 阈值(5s)
+        from app.tools import lock_queries
+        out = lock_queries.get_transaction_details(f"blk_{pid}")
+        assert out["ok"], out
+        age = out["data"]["age_ms"]
+        assert 4000 <= age < 120_000, f"age_ms 错帧: {age}(期望真实事务时长 5s 量级)"
+    finally:
+        ctl.rollback()
+        ctl.close()

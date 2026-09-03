@@ -15,6 +15,15 @@ class _Metrics(MetricsPort):
 
 class _Trace(TracePort):
     def get_trace(self, trace_ref, trace_id, incident, incident_id):
+        # V2.0-A closure:MCP 链路按受控 incident_id 解析 service/operation;
+        # 解析不到时保持空 dict → trace_service fail closed(不再默认 inventory-service)
+        if not incident and incident_id:
+            row = incident_repo.get_incident(incident_id)
+            if row is not None:
+                incident = {"id": row.id,
+                            "affected_service_ref": row.affected_service_ref,
+                            "affected_operation_ref": row.affected_operation_ref,
+                            "observed_at": str(row.observed_at or row.created_at)}
         return trace_service.get_trace(trace_ref, trace_id, incident, incident_id=incident_id)
 
 

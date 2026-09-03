@@ -13,6 +13,11 @@ V2.0-A:
 - 版本冻结前移至 Run 创建事务;resume 时校验生效(旧实现收尾补写导致校验空操作)。
 - checkpoint config 采用 LangGraph 文档契约 {"configurable": {"thread_id": ...}}
   (见 tests/test_checkpoint_contract.py 真实 SqliteSaver 集成测试)。
+
+V2.0-A closure:
+- 启动/恢复/重启恢复统一走 validate_run_for_resume:快照存在且合法、schema_version
+  受支持、incident/agent_run/thread/namespace 与 Run 一致、Capability/Policy/Prompt/
+  Tool 四类冻结版本与当前可执行版本一致;任一失败禁止恢复并转 needs_human。
 """
 import asyncio
 import logging
@@ -24,7 +29,9 @@ from langgraph.types import Command
 
 from app.config import settings
 from app.repositories import incident_repo, run_repo
-from app.services.run_context import RunContextInvalid, RunContextMissing, load_snapshot
+from app.services.run_context import (ResumeBlocked, RunContextInvalid,
+                                      RunContextMissing, load_snapshot,
+                                      validate_run_for_resume)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,18 @@ from app.replay.versions import POLICY_BUNDLE_VERSION
 from app.replay.writer import ReplayWriter
 
 
+def _current_bundle_versions() -> dict:
+    """当前可执行的四类 bundle 版本(运行时读模块属性,便于测试注入不匹配值)。"""
+    import app.replay.versions as _versions
+    from app.mcp.contract import MCP_TOOL_CONTRACT_VERSION
+    return {
+        "policy": _versions.POLICY_BUNDLE_VERSION,
+        "capability": _versions.CAPABILITY_BUNDLE_VERSION,
+        "prompt": _versions.PROMPT_BUNDLE_VERSION,
+        "tool": MCP_TOOL_CONTRACT_VERSION,
+    }
+
+
 def _initial_state_from_run(run) -> dict:
     """从冻结快照构建初始状态(恢复与启动共用;禁止从 Incident 行重推导)。"""
     snap = load_snapshot(run)
@@ -63,12 +82,12 @@ def _initial_state_from_run(run) -> dict:
     }
 
 
-def _fail_closed(run, detail: str) -> None:
+def _fail_closed(run, reason: str, detail: str) -> None:
     """fail closed:短码入库存 termination_reason(列宽 64),详情只进日志。"""
-    logger.error("run %s fail closed: %s", getattr(run, "id", "?"), detail)
+    logger.error("run %s fail closed: %s (%s)", getattr(run, "id", "?"), reason, detail)
     run_repo.update_run_status(run.id, "failed")
     incident_repo.update_status(run.incident_id, "needs_human",
-                                termination_reason="context_snapshot_invalid")
+                                termination_reason=reason[:64])
 
 
 def _finalize_run(incident_id: int, run_id: int, status: str,
@@ -121,10 +140,12 @@ async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> 
     incident_repo.update_status(incident_id, "investigating")
     run = run_repo.get_run(run_id)
     try:
+        validate_run_for_resume(run, current_bundle_versions=_current_bundle_versions())
         initial = _initial_state_from_run(run)
         initial["status"] = "created"
-    except (RunContextMissing, RunContextInvalid) as exc:
-        _fail_closed(run, str(exc))
+    except (ResumeBlocked, RunContextMissing, RunContextInvalid) as exc:
+        reason = getattr(exc, "reason", "context_snapshot_invalid")
+        _fail_closed(run, reason, str(exc))
         return
     task = asyncio.create_task(_run_graph(incident_id, run_id, thread_id, initial))
     _tasks[run_id] = task
@@ -133,19 +154,22 @@ async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> 
 
 async def resume_investigation(thread_id: str, resume_value: dict) -> None:
     """用同一 thread_id 恢复挂起的图(interrupt 处继续)。
-    V1.5:恢复前校验版本,不一致(部署新版本后恢复旧 Run)停止原 Run 进入 version_mismatch。
-    V2.0-A:expected_policy_bundle_version 在 Run 创建事务冻结,校验对未完成 Run 真正生效。"""
+    V2.0-A closure:恢复前统一校验(快照/绑定/四类冻结版本),任一失败禁止恢复、
+    标记明确原因并转 needs_human,不调用图。"""
     from app.agent.graph import build_graph
-    from app.replay.versions import POLICY_BUNDLE_VERSION
 
     run = run_repo.get_run_by_thread(thread_id)
-    if run is not None and run.expected_policy_bundle_version \
-            and run.expected_policy_bundle_version != POLICY_BUNDLE_VERSION:
+    if run is None:
+        logger.error("resume_investigation: thread=%s 无对应 Run(fail closed)", thread_id)
+        return
+    try:
+        validate_run_for_resume(run, current_bundle_versions=_current_bundle_versions())
+    except (ResumeBlocked, RunContextMissing, RunContextInvalid) as exc:
+        reason = getattr(exc, "reason", "context_snapshot_invalid")
         run_repo.update_run_status(run.id, "failed")
         incident_repo.update_status(run.incident_id, "needs_human",
-                                    termination_reason="version_mismatch")
-        logger.warning("run %s 版本不匹配(expected=%s, current=%s) → version_mismatch",
-                       run.id, run.expected_policy_bundle_version, POLICY_BUNDLE_VERSION)
+                                    termination_reason=reason[:64])
+        logger.warning("run %s 恢复被拒绝(%s): %s", run.id, reason, exc)
         return
     graph = build_graph(checkpointer=get_saver())
     result = await asyncio.to_thread(
@@ -164,14 +188,17 @@ async def resume_investigation(thread_id: str, resume_value: dict) -> None:
 
 async def recover_pending_runs() -> None:
     """启动时从 checkpoint 恢复未完成任务(interrupt 处重新挂起等待审批)。
-    V2.0-A:初始上下文只来自冻结快照;缺失/不完整 fail closed,不猜测、不补默认。"""
+    V2.0-A closure:初始上下文只来自冻结快照并统一校验;缺失/不完整/版本不匹配
+    fail closed,不猜测、不补默认。"""
     pending = run_repo.list_pending_runs()
     for run in pending:
         try:
+            validate_run_for_resume(run, current_bundle_versions=_current_bundle_versions())
             initial = _initial_state_from_run(run)
             initial["status"] = run.status
-        except (RunContextMissing, RunContextInvalid) as exc:
-            _fail_closed(run, str(exc))
+        except (ResumeBlocked, RunContextMissing, RunContextInvalid) as exc:
+            reason = getattr(exc, "reason", "context_snapshot_invalid")
+            _fail_closed(run, reason, str(exc))
             continue
         task = asyncio.create_task(
             _run_graph(run.incident_id, run.id, run.thread_id, initial))

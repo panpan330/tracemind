@@ -68,6 +68,9 @@ def main() -> None:
         "description": "Docker Compose 部署闭环",
         "severity": "high",
         "service_ref": "inventory-service",
+        # V2.0-A closure:调查上下文必须显式(MCP 链路缺失即 fail closed,不默认兜底)
+        "affected_service_ref": "inventory-service",
+        "affected_operation_ref": "INVENTORY_LOOKUP",
     }, timeout=15)
     if r.status_code != 201:
         fail(f"创建 incident 失败: {r.status_code} {r.text[:200]}")

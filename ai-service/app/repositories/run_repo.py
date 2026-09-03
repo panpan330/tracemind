@@ -7,12 +7,13 @@ from app.db.engine import get_control_engine
 from app.db.models import AgentRun, Incident
 
 
-def create_run(incident_id: int, baseline: dict | None = None,
-               *, incident: Incident | None = None) -> AgentRun:
+def create_run(incident_id: int, baseline: dict | None = None) -> AgentRun:
     """创建 Run 并在同一事务内冻结 RunContextSnapshot 与 bundle 版本(V2.0-A 第 6/8 条)。
 
     - checkpoint_thread_id 与 thread_id 一一对应(唯一约束 009),namespace 空串 = 默认。
     - 版本冻结前移至创建事务:开始执行后不得改变(_finalize_run 不再覆盖)。
+    - V2.0-A closure:始终在本事务内 SELECT ... FOR UPDATE 重读 Incident(调用方传入的
+      detached 对象不作为冻结来源),消除"读取 Incident → 创建 Run"窗口期内的行变化。
     - incident 行缺失或 service_ref 缺失 → ValueError(fail closed,禁止默认上下文)。
     """
     from app.mcp.contract import MCP_TOOL_CONTRACT_VERSION
@@ -21,7 +22,9 @@ def create_run(incident_id: int, baseline: dict | None = None,
     from app.services.run_context import build_snapshot
 
     with Session(get_control_engine()) as session:
-        inc = incident if incident is not None else session.get(Incident, incident_id)
+        # FOR UPDATE:冻结期间锁 Incident 行,并发更新在 Run 创建提交后才能进行
+        inc = session.scalars(
+            select(Incident).where(Incident.id == incident_id).with_for_update()).first()
         if inc is None:
             raise ValueError(f"incident {incident_id} not found(禁止无上下文创建 Run)")
         thread_id = f"run-{uuid.uuid4()}"

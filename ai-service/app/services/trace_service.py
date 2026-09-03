@@ -34,8 +34,18 @@ def _resolve_incident_window(incident: dict) -> tuple[str, str]:
 def get_trace(trace_ref: str | None, trace_id: str | None, incident: dict,
               incident_id: int = 0, agent_run_id: int = 0) -> dict:
     start = time.monotonic()
-    service_ref = incident.get("affected_service_ref") or "inventory-service"
-    operation_ref = incident.get("affected_operation_ref") or "INVENTORY_LOOKUP"
+    # V2.0-A closure:service/operation 属关键调查上下文,缺失即 fail closed,
+    # 不再回退 inventory-service / INVENTORY_LOOKUP 演示默认值(会静默查错目标)
+    service_ref = incident.get("affected_service_ref")
+    operation_ref = incident.get("affected_operation_ref")
+    if not service_ref or not operation_ref:
+        error_code = "INCIDENT_CONTEXT_MISSING"
+        _audit({}, incident_id, agent_run_id, service_ref or "", operation_ref or "",
+               trace_id, "error", error_code, start)
+        from app.tools_core.errors import ToolBusinessError
+        raise ToolBusinessError(
+            "INCIDENT_CONTEXT_MISSING",
+            "trace 调查缺少 service/operation 上下文(禁止演示默认值兜底)", retryable=False)
     error_code = None
     try:
         if settings.trace_backend == "jaeger":

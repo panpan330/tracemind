@@ -72,7 +72,10 @@ def main() -> int:
                        capture_output=True)
         r = requests.post(f"{AI}/api/incidents", json={
             "title": "SCN-002 E2E", "description": "库存预占接口超时,疑似锁等待",
-            "severity": "high", "service_ref": "inventory-service"}, timeout=10)
+            "severity": "high", "service_ref": "inventory-service",
+            # V2.0-A closure:调查上下文必须显式(MCP 链路缺失即 fail closed,不默认兜底)
+            "affected_service_ref": "inventory-service",
+            "affected_operation_ref": "INVENTORY_RESERVATION"}, timeout=10)
         inc = r.json()["id"]
         p(f"incident {inc}(健康基线已采集)")
         p("注入锁故障(SCN-002)")

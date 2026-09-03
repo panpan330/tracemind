@@ -398,6 +398,24 @@ cd web && npm run dev
 
 **新增测试**:行为特征(10)、fail closed(6)、审批 CAS/绑定(5)、UTC 语义(4)、Run 快照/版本冻结(6)、checkpoint 契约(3)、可观测性契约(6,1 个 live 冒烟按需 skip)、compose 门禁(6)、009 内容(5)。基线 436 个既有测试全部保持通过。
 
+## 12B. V2.0-A 封口(closure,2026-09-03)— 独立复核修复
+
+基于复核意见的最小范围封口(基线提交 55038f4;实施计划见 docs/superpowers/plans/2026-09-02-v2.0-a-baseline-trust.md):
+
+1. **审批绑定 fail closed**:`approvals.py`/`approval_scanner.py` 删除全部 runs[0] 回退。NULL/无效/不匹配(agent_run_id 指向其他 Incident)的审批 → 永久失效(expired)+ Incident `needs_human`(reason=approval_run_binding_missing/invalid),绝不恢复任何 Run。API 决定路径同样 fail closed(409 + 转人工)。
+2. **恢复前统一校验** `validate_run_for_resume`(run_context.py):快照存在且合法 → schema_version 受支持 → incident/agent_run/thread/namespace 与 Run 一致 → Capability/Policy/Prompt/Tool 四类冻结版本与当前可执行版本一致。任一失败 → ResumeBlocked(细粒度原因码:context_snapshot_missing/invalid、snapshot_schema_unsupported、snapshot_incident/run/checkpoint_mismatch、version_mismatch、capability/prompt/tool_version_mismatch)→ Run failed + needs_human,图不被调用。start/recover/resume 三条路径统一接入;`_current_bundle_versions` 运行时读模块属性(可测试注入)。
+3. **真实 Runner/Graph 重启恢复集成测试**(test_runner_restart_recovery.py):真实图跑至审批 interrupt → 释放重建 Checkpointer(模拟进程重启)→ 生产 CAS 路径批准 → 同一 agent_run_id+thread_id 恢复 → 验证未创建新 Run、冻结上下文(service/operation/baseline/窗口/四类版本/冻结时间)逐项不变 → 从原审批节点继续至 recovered。附"Incident 行被更新仍用冻结快照"变体。
+4. **链路默认值消除**:trace_service 删除 inventory-service/INVENTORY_LOOKUP 默认兜底 → 关键上下文缺失抛 `INCIDENT_CONTEXT_MISSING`(ToolBusinessError,审计留痕);MCP handler(trace/service_metrics)接受 incident_id 注入,端口适配器按受控 incident_id 解析上下文;以 6 个链路证明测试钉死(真实 Graph 的 trace/metrics 走 MCP 注入路径,legacy 直调仅服务演示 API 且失败不伪造数据)。
+5. **Run 创建事务收紧**:`create_run` 在自身事务内 `SELECT ... FOR UPDATE` 重读 Incident(调用方 detached 对象不再作为冻结来源),消除"读取 Incident → 创建 Run"窗口期的行变化。
+6. **live 暴露的真实回归修复**:统一会话 UTC 后 `get_transaction_details` 的 `TIMESTAMPDIFF(trx_started, NOW(3))` 错帧(trx_started 按 InnoDB 系统时区写入、NOW 跟随会话时区)→ age_ms ≈ -8h → SCN-002 L2 永远暂态重试至预算耗尽。修复:该查询前 `SET SESSION time_zone = @@GLOBAL.time_zone` 对齐帧;新增 live 帧一致性回归测试(真实长事务,age 必须为正且量级正确)。
+7. **verify 脚本补受控上下文**:verify-m5/m13 创建 Incident 显式携带 affected_service_ref/affected_operation_ref(MCP 链路缺失即 fail closed,不再默认兜底)。
+
+**live 验收记录(混合栈:宿主机 Java/ai-service/MySQL + VM Docker 观测栈)**:
+- Prometheus 真实标签契约:service 标签 ✓,uri 模板 `/api/orders/{orderId}/check-stock`(POST)与 `/api/inventory`(GET)与修正后注册表逐项吻合(`/**` 为管理端口自身流量)。
+- SCN-001 全链(verify-m5,真实 prometheus/jaeger):**PASS,28.1s**(reset→注入→调查→E1~E5→审批→执行→恢复→报告)。
+- SCN-002 全链(verify-m13,真实锁等待/KILL):**PASS,28.3s**(诊断→审批→KILL→恢复→报告)。
+- 全量测试:500+ passed(live 契约冒烟改为实际运行);Java mvn test EXIT:0;Vue vitest 46 passed + vue-tsc + vite build 全过。
+
 ---
 
 ## 13. 历史设计取舍(设计意图,非当前实现事实)

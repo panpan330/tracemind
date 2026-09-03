@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from app.config import settings
 from app.db.models import utcnow
 from app.replay.writer import ReplayWriter
-from app.repositories import approval_repo, run_repo
+from app.repositories import approval_repo, incident_repo, run_repo
 from app.services.runner import resume_investigation
 
 router = APIRouter(prefix="/api/incidents")
@@ -41,14 +41,29 @@ class DecisionIn(BaseModel):
 
 
 def _run_for_approval(approval) -> object | None:
-    """V2.0-A:审批 → 准确 Run(按 agent_run_id 绑定,禁止按 incident 猜最近 Run)。
-    仅存量 NULL 绑定行(009 迁移前创建)回退 incident 最近一次 Run。"""
-    if approval.agent_run_id:
-        run = run_repo.get_run(approval.agent_run_id)
-        if run is not None:
-            return run
-    runs = run_repo.list_runs(approval.incident_id)
-    return runs[0] if runs else None
+    """V2.0-A closure:审批 → 准确 Run(按 agent_run_id 绑定)。
+    NULL/无效/不匹配绑定一律 fail closed(返回 None 并标记原因),绝不回退 runs[0]
+    猜测最近 Run——绑定损坏的审批不可恢复,由调用方转人工处理。"""
+    run_id = getattr(approval, "agent_run_id", None)
+    if not run_id:
+        return None  # binding_missing
+    run = run_repo.get_run(run_id)
+    if run is None or run.incident_id != approval.incident_id:
+        return None  # binding_invalid
+    return run
+
+
+def _invalidate_unresumable(approval, reason: str) -> None:
+    """绑定损坏的审批永久失效,Incident 转人工;不恢复任何 Run。"""
+    try:
+        approval_repo.update_approval(approval.id, status="expired",
+                                      comment=f"unresumable:{reason}")
+        incident_repo.update_status(approval.incident_id, "needs_human",
+                                    termination_reason=reason)
+    except Exception:  # noqa: BLE001 标记失败不阻塞 409 响应
+        import logging
+        logging.getLogger(__name__).exception(
+            "invalidate_unresumable failed approval=%s", approval.id)
 
 
 @router.post("/{incident_id}/approvals/{approval_id}/decision")
@@ -76,15 +91,22 @@ async def decide(incident_id: int, approval_id: int, body: DecisionIn) -> dict:
         raise HTTPException(409, f"approval already {fresh.status}")
 
     run = _run_for_approval(approval)
-    if run is not None:
-        # V1.5 回放:审批决定步骤(幂等);绑定审批所属 Run
-        _record_approval_decided(incident_id, run.id, approval_id,
-                                 body.decision, body.comment)
-        # 恢复 LangGraph(该审批所属 Run 的 checkpoint thread)
-        await resume_investigation(run.thread_id, {
-            "decision": body.decision,
-            "comment": body.comment,
-        })
+    if run is None:
+        # V2.0-A closure:绑定缺失/无效 fail closed——审批永久失效、Incident 转人工,
+        # 绝不恢复其他 Run(不能猜最近 Run)
+        run_id = getattr(approval, "agent_run_id", None)
+        reason = "approval_run_binding_missing" if not run_id \
+            else "approval_run_binding_invalid"
+        _invalidate_unresumable(approval, reason)
+        raise HTTPException(409, f"{reason}(fail closed,已转人工)")
+    # V1.5 回放:审批决定步骤(幂等);绑定审批所属 Run
+    _record_approval_decided(incident_id, run.id, approval_id,
+                             body.decision, body.comment)
+    # 恢复 LangGraph(该审批所属 Run 的 checkpoint thread)
+    await resume_investigation(run.thread_id, {
+        "decision": body.decision,
+        "comment": body.comment,
+    })
     return {
         "incident_id": incident_id,
         "approval_id": approval_id,

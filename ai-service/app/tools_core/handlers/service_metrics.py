@@ -9,7 +9,8 @@ def build(ports: dict) -> dict:
 
     def get_service_metrics(service_ref: str, window_seconds: int | None = None,
                             window_start: str | None = None,
-                            window_end: str | None = None) -> dict:
+                            window_end: str | None = None,
+                            incident_id: int = 0) -> dict:
         if m is None:
             raise ToolBusinessError("PORT_UNAVAILABLE", "metrics 端口未配置", retryable=False)
         import datetime
@@ -17,7 +18,7 @@ def build(ports: dict) -> dict:
         start = window_start or (datetime.datetime.now(datetime.timezone.utc)
                                  - datetime.timedelta(seconds=window_seconds or 300)).isoformat()
         try:
-            return m.get_metrics(service_ref, start, end, incident_id=0)
+            return m.get_metrics(service_ref, start, end, incident_id=incident_id)
         except ToolBusinessError:
             raise
         except Exception as e:  # noqa: BLE001

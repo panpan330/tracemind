@@ -98,6 +98,11 @@ def get_transaction_details(transaction_ref: str) -> dict:
         engine = get_readonly_engine()
         from sqlalchemy import text as _sql_text
         with engine.connect() as conn:
+            # V2.0-A closure:trx_started 由 InnoDB 按服务器系统时区写入(不做会话转换),
+            # NOW(3) 跟随会话时区;统一会话 UTC 后若服务器系统时区非 UTC,age_ms 会出现
+            # ±8h 偏差(混合栈 live SCN-002 暴露)。本查询把会话时区对齐服务器全局帧,
+            # 使 NOW(3) 与 trx_started 同帧,age_ms 恒为真实事务时长。
+            conn.execute(_sql_text("SET SESSION time_zone = @@GLOBAL.time_zone"))
             rows = conn.execute(_sql_text(
                 "SELECT trx_id, trx_mysql_thread_id, trx_started, trx_state, "
                 "TIMESTAMPDIFF(MICROSECOND, trx_started, NOW(3)) / 1000 AS age_ms "
