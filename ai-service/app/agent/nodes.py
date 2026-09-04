@@ -9,7 +9,7 @@ _time = time  # 混合循环内部使用,避免与函数参数名冲突
 from langgraph.types import interrupt
 
 from app.agent.llm import get_llm
-from app.agent.rules import EVIDENCE_TOOL_MAP, evaluate_evidence_gate
+from app.capabilities import registry as capability_registry
 from app.agent.state import IncidentState
 from app.repositories import approval_repo, evidence_repo, hypothesis_repo
 from app.repositories import event_repo, incident_repo, postmortem_repo, proposal_repo
@@ -111,16 +111,11 @@ def _node_outcome(step_type: str, merged: dict) -> str:
     return "succeeded"
 
 
-# 固定探测参数(INVENTORY_LOOKUP 白名单模板)
-PROBE_PARAMS = {"skuId": 42, "warehouseId": 7}
 DEFAULT_MAX_ROUNDS = 5
 DEFAULT_MAX_TOOL_CALLS = 25
 
 # 证据未齐且预算未耗尽时,每轮等待时间(让故障负载在观测窗口产生数据)
 EVIDENCE_RETRY_SLEEP_SECONDS = 2
-
-# 基线缺失时的宽松判定阈值(ms):仅当健康基线采集失败时使用
-FALLBACK_E1_P95_MS = 100
 
 
 def _call_tool(state: IncidentState, tool: str, **kwargs) -> dict:
@@ -184,11 +179,10 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
     gate = state.get("evidence_gate") or {}
     # V1.3:双 policy 终止条件(设计 §4.4)——已可判定根因或需转人工时停止收集;
     # 仅 E1~E5 齐不代表收集完成(锁证据可能仍未知)
-    from app.agent import policies as policies_mod
     pol = state.get("policy") or {}
     facts_dict = state.get("facts") or {}
-    _root_cause, _reason = policies_mod.decide_root_cause(
-        pol, policies_mod.evaluate_exclusions(facts_dict))
+    _root_cause, _reason = capability_registry.decide_root_cause(
+        pol, capability_registry.evaluate_exclusions(facts_dict))
     if _root_cause or _reason:
         return {}
 
@@ -303,13 +297,12 @@ def collect_evidence(state: IncidentState, llm=None, tools=None) -> dict:
                                           bool(ev.get("passed")))
         # V1.3:每次工具返回后重算共享 Fact 与双 Policy(设计 §4.1/4.2)
         # 注意:必须基于全部已收集证据(含历史轮次),否则 policy 永远 unknown
-        from app.agent import facts as facts_mod, policies as policies_mod
         all_evidence = list(state.get("evidence") or []) + list(new_evidence)
         ev_map = {str(e.get("key") or e.get("id")).lower():
                   {"content": e.get("content"), "passed": e.get("passed")}
                   for e in all_evidence}
-        new_facts = facts_mod.evaluate_facts(ev_map)
-        new_policy = policies_mod.evaluate_policies(new_facts)
+        new_facts = capability_registry.extract_facts(ev_map)
+        new_policy = capability_registry.evaluate_policies(new_facts)
         out["facts"] = new_facts
         out["policy"] = new_policy
         transport, tool_call_id = _tool_call_info_from(state, name)
@@ -378,139 +371,10 @@ def _build_collect_prompt(state: dict, eligible: set[str]) -> str:
     )
 
 
-def _evaluate_metrics(result: dict, state: dict) -> list[dict]:
-    data = result.get("data") or {}
-    p95 = data.get("p95Ms")
-    if p95 is None:
-        # 窗口内无观测样本(如注入清空观测后负载尚未进入窗口):
-        # 不产出证据,视为"尚未采集",允许 planner 后续轮次重采
-        return []
-    inc = incident_repo.get_incident(state["incident_id"])
-    health = (inc.healthy_metrics_baseline or {}) if inc else {}
-    base_p95 = (health or {}).get("p95_ms")
-    if p95 is not None and base_p95 is not None:
-        e1 = p95 > int(base_p95) * 1.2
-    else:
-        e1 = p95 is not None and p95 > FALLBACK_E1_P95_MS
-    content: dict = {"p95Ms": p95,
-                     "sourceBackend": data.get("sourceBackend"),
-                     "observationQueryId": data.get("observationQueryId"),
-                     "windowStart": data.get("windowStart"),
-                     "windowEnd": data.get("windowEnd"),
-                     "latestSampleAt": data.get("latestSampleAt")}
-    if data.get("representativeSlowTraceId"):
-        content["representativeSlowTraceId"] = data["representativeSlowTraceId"]
-    return [{"id": "E1", "key": "e1", "source": "get_service_metrics",
-             "content": content, "passed": e1}]
-
-
-def _evaluate_trace(result: dict, state: dict) -> list[dict]:
-    """V1.4:TraceNormalizer 输出结构(dbDominanceRatio);无法归一化不产 E2。"""
-    data = result.get("data") or {}
-    backend = data.get("sourceBackend")
-    if backend not in ("jaeger", "fixture"):
-        return []
-    passed = bool(data.get("dbDominanceRatio") is not None
-                  and (data.get("dbDominanceRatio") or 0) >= 0.5
-                  and data.get("inventoryServerDurationMs"))
-    return [{"id": "E2", "key": "e2", "source": "get_trace",
-             "content": data, "passed": passed}]
-
-
-def _evaluate_digests(result: dict, state: dict) -> list[dict]:
-    digests = (result.get("data") or []) if result.get("success") else []
-    top = digests[0] if digests else {}
-    op = state.get("affected_operation_ref") or ""
-    if not result.get("success") or top.get("rows_examined_delta", 0) <= 0:
-        # 锁场景(INVENTORY_RESERVATION):无慢查询增量是确定性否定(锁阻塞不产生慢查询),
-        # 产 E3=False 证据,继续采集 L1/L2
-        if op == "INVENTORY_RESERVATION":
-            return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
-                     "content": {"top": top, "query_ref": "INVENTORY_LOOKUP"}, "passed": False}]
-        # 慢查询场景:增量 0 是暂态(故障负载尚未进入 performance_schema),触发重采
-        # (真实后端验收暴露:digest 采集早于负载 → 增量 0 被误判为确定性否定)
-        return []
-    e3 = top.get("rows_examined_delta", 0) > 1000
-    # 单场景:高扫描行数的 digest 即目标查询(系统内只有 INVENTORY_LOOKUP 一个慢查询场景)
-    return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
-             "content": {"top": top, "query_ref": "INVENTORY_LOOKUP"}, "passed": e3}]
-
-
-def _evaluate_plan(result: dict, state: dict) -> list[dict]:
-    plan = (result.get("data") or {}).get("explain") if result.get("success") else None
-    access_type = None
-    try:
-        access_type = plan["query_block"]["table"].get("access_type") if plan else None
-    except (KeyError, TypeError, AttributeError):
-        access_type = None
-    e4 = result.get("success") and access_type == "ALL"
-    return [{"id": "E4", "key": "e4", "source": "get_query_plan",
-             "content": {"access_type": access_type}, "passed": e4}]
-
-
-def _evaluate_index(result: dict, state: dict) -> list[dict]:
-    names = [i["index_name"] for i in ((result.get("data") or {}).get("indexes") or [])]
-    e5 = result.get("success") and "idx_sku_warehouse" not in names
-    return [{"id": "E5", "key": "e5", "source": "get_index_info",
-             "content": {"indexes": names}, "passed": e5}]
-
-
-def _evaluate_lock_waiters(result: dict, state: dict) -> list[dict]:
-    """L1:目标 inventory 记录上的锁等待(等待语句匹配库存预占,wait_duration ≥ 3s)。
-    锁场景(INVENTORY_RESERVATION):锁等待未达阈值是暂态(等待累积中),触发重采。"""
-    data = result.get("data") or {}
-    waits = data.get("waits") or []
-    target = [w for w in waits
-              if w.get("object_schema") == "tracemind_business"
-              and w.get("object_table") == "inventory"
-              and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
-    op = state.get("affected_operation_ref") or ""
-    reached = any((w.get("wait_duration_ms") or 0) >= 3000 for w in target)
-    if reached:
-        passed = True
-    elif op == "INVENTORY_RESERVATION":
-        # 锁场景:锁等待未达阈值(尚未产生或等待累积中)是暂态,触发重采
-        return []
-    else:
-        # 慢查询场景:无目标锁等待是确定性否定
-        passed = False
-    return [{"id": "L1", "key": "l1", "source": "get_lock_waiters",
-             "content": data, "passed": passed}]
-
-
-def _evaluate_transaction_details(result: dict, state: dict) -> list[dict]:
-    """L2:阻塞事务详情(复合匹配见 facts/policies;此处只判定存在长事务)。
-    锁场景(INVENTORY_RESERVATION):事务年龄未达阈值是暂态(累积中),触发重采。"""
-    data = result.get("data") or {}
-    op = state.get("affected_operation_ref") or ""
-    has_trx = bool(data.get("transaction_id"))
-    age_ok = (data.get("age_ms") or 0) >= 5000
-    if has_trx and age_ok:
-        passed = True
-    elif op == "INVENTORY_RESERVATION" and not age_ok:
-        # 锁场景:阻塞事务年龄未达阈值(累积中)是暂态,触发重采
-        return []
-    else:
-        passed = False
-    return [{"id": "L2", "key": "l2", "source": "get_transaction_details",
-             "content": data, "passed": passed}]
-
-
-_EVALUATORS = {
-    "get_service_metrics": _evaluate_metrics,
-    "get_trace": _evaluate_trace,
-    "list_expensive_query_digests": _evaluate_digests,
-    "get_query_plan": _evaluate_plan,
-    "get_index_info": _evaluate_index,
-    "get_lock_waiters": _evaluate_lock_waiters,
-    "get_transaction_details": _evaluate_transaction_details,
-}
-
-
 def _execute_with_evidence(state: dict, name: str, args: dict) -> dict:
     """执行工具 + 单工具证据判定;返回 {"ok": bool, "evidence": [..]}。"""
     result = _call_tool(state, name, **args)
-    evaluator = _EVALUATORS.get(name)
+    evaluator = capability_registry.evaluator_for(name)
     if evaluator is None:
         return {"ok": False, "evidence": [], "error": f"无评估器 {name}"}
     evidence = evaluator(result, state)
@@ -528,11 +392,10 @@ def diagnose(state: IncidentState) -> dict:
         incident_repo.update_state(state["incident_id"], status="needs_human",
                                    termination_reason=state.get("termination_reason"))
         return state
-    from app.agent import policies as policies_mod
     facts_dict = state.get("facts") or {}
-    pol = state.get("policy") or policies_mod.evaluate_policies(facts_dict)
-    exclusions = policies_mod.evaluate_exclusions(facts_dict)
-    root_cause, reason = policies_mod.decide_root_cause(pol, exclusions)
+    pol = state.get("policy") or capability_registry.evaluate_policies(facts_dict)
+    exclusions = capability_registry.evaluate_exclusions(facts_dict)
+    root_cause, reason = capability_registry.decide_root_cause(pol, exclusions)
     if root_cause:
         state["confirmed_hypothesis_id"] = "h1"
         state["root_cause_code"] = root_cause
@@ -862,10 +725,11 @@ def reflect(state: IncidentState) -> dict:
 
 @_replay_node("RECOVERY_VERIFIED")
 def verify_recovery_node(state: IncidentState) -> dict:
-    """恢复验证。按根因分发:锁根因 → 目标范围六项验证(设计 V1.3 §6);
-    其他 → 原有 verify_recovery 工具路径。"""
-    if state.get("root_cause_code") == "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION":
-        return _verify_lock_recovery(state)
+    """恢复验证。按根因分发:恢复策略由 Capability Registry 提供
+    (锁根因 → 目标范围六项验证;其他 → verify_recovery 工具路径)。"""
+    verifier = capability_registry.recovery_verifier_for(state.get("root_cause_code") or "")
+    if verifier is not None:
+        return verifier(state)
     fix_execution_id = (state.get("fix_execution") or {}).get("fix_execution_id")
     if not fix_execution_id:
         state["status"] = "failed"
@@ -883,59 +747,3 @@ def verify_recovery_node(state: IncidentState) -> dict:
         state["termination_reason"] = "recovery_failed"
     _emit_status(state)
     return state
-
-
-def _verify_lock_recovery(state: IncidentState) -> dict:
-    """锁根因恢复验证(六项目标范围,设计 §6):
-    轮询目标锁等待关系消失(≤60s)→ 连续三批库存预占探测 → recovered / needs_human(recovery_timeout)。"""
-    import time
-    from app.tools import lock_queries
-    deadline = _time.time() + 60  # 轮询截止 N=60s
-    target_gone = False
-    while _time.time() < deadline:
-        r = lock_queries.get_lock_waiters("tracemind_business", "inventory", 3000)
-        waits = (r.get("data") or {}).get("waits") or []
-        target = [w for w in waits
-                  if w.get("object_schema") == "tracemind_business"
-                  and w.get("object_table") == "inventory"
-                  and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
-        if not target:
-            target_gone = True
-            break
-        time.sleep(5)
-    if not target_gone:
-        state["recovery"] = {"status": "needs_human",
-                             "termination_reason": "recovery_timeout"}
-        state["status"] = "needs_human"
-        _emit_status(state)
-        return state
-    # 目标关系已消失:连续三批库存预占探测(复用 order check-stock 探测逻辑)
-    probes = _run_probe_batches(state, batches=3)
-    ok = all(p.get("success") for p in probes)
-    state["recovery"] = {"status": "recovered" if ok else "needs_human",
-                         "probes": probes,
-                         "termination_reason": None if ok else "recovery_probe_failed"}
-    state["status"] = state["recovery"]["status"]
-    _emit_status(state)
-    return state
-
-
-def _run_probe_batches(state: IncidentState, batches: int = 3) -> list[dict]:
-    """三批固定探测请求(与健康基线采集相同参数),每批记录 success。"""
-    import httpx
-    probes = []
-    order_url = _order_service_base()
-    for _ in range(batches):
-        try:
-            resp = httpx.post(
-                f"{order_url}/api/orders/1/check-stock",
-                json={"skuId": 42, "warehouseId": 7, "quantity": 1}, timeout=10)
-            probes.append({"success": resp.status_code < 500})
-        except Exception:  # noqa: BLE001
-            probes.append({"success": False})
-    return probes
-
-
-def _order_service_base() -> str:
-    from app.config import settings
-    return settings.order_service_url

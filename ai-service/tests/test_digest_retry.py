@@ -1,5 +1,6 @@
 """E3 digest 评估:增量全 0 = 暂态(重采);增量>阈值 = 正向;否则确定性否定。"""
-from app.agent.nodes import _evaluate_digests
+from app.capabilities.mysql_missing_index.capability import (
+    evaluate_digests as _evaluate_digests)
 
 
 def test_digest_delta_zero_is_transient():

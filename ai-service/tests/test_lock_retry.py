@@ -1,5 +1,6 @@
 """L1 锁等待评估:锁场景未达阈值=暂态重采;慢查询场景无锁=确定性否定。"""
-from app.agent.nodes import _evaluate_lock_waiters
+from app.capabilities.mysql_blocking_transaction.capability import (
+    evaluate_lock_waiters as _evaluate_lock_waiters)
 
 
 def _wait(duration_ms):
@@ -32,7 +33,8 @@ def test_lock_absent_is_negative_for_slow_scenario():
 
 
 def test_trx_age_reached_is_positive():
-    from app.agent.nodes import _evaluate_transaction_details
+    from app.capabilities.mysql_blocking_transaction.capability import (
+        evaluate_transaction_details as _evaluate_transaction_details)
     ev = _evaluate_transaction_details(
         {"success": True, "data": {"transaction_id": "t1", "age_ms": 8000}},
         {"affected_operation_ref": "INVENTORY_RESERVATION"})
@@ -40,7 +42,8 @@ def test_trx_age_reached_is_positive():
 
 
 def test_trx_age_below_threshold_is_transient():
-    from app.agent.nodes import _evaluate_transaction_details
+    from app.capabilities.mysql_blocking_transaction.capability import (
+        evaluate_transaction_details as _evaluate_transaction_details)
     ev = _evaluate_transaction_details(
         {"success": True, "data": {"transaction_id": "t1", "age_ms": 4000}},
         {"affected_operation_ref": "INVENTORY_RESERVATION"})
@@ -48,7 +51,8 @@ def test_trx_age_below_threshold_is_transient():
 
 
 def test_trx_absent_is_negative_for_slow_scenario():
-    from app.agent.nodes import _evaluate_transaction_details
+    from app.capabilities.mysql_blocking_transaction.capability import (
+        evaluate_transaction_details as _evaluate_transaction_details)
     ev = _evaluate_transaction_details(
         {"success": True, "data": {}},
         {"affected_operation_ref": "INVENTORY_LOOKUP"})

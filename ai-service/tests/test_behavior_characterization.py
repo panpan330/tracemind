@@ -153,7 +153,7 @@ def test_scn002_root_cause_and_action_stable(monkeypatch):
     # verify 阶段:目标锁等待已消失 + 三批探测成功
     monkeypatch.setattr("app.tools.lock_queries.get_lock_waiters",
                         lambda *a, **kw: {"data": {"waits": []}})
-    monkeypatch.setattr("app.agent.nodes._run_probe_batches",
+    monkeypatch.setattr("app.capabilities.mysql_blocking_transaction.capability.run_probe_batches",
                         lambda state, batches=3: [{"success": True}] * batches)
 
     graph = build_graph(checkpointer=InMemorySaver())

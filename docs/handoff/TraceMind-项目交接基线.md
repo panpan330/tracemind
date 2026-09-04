@@ -429,6 +429,20 @@ cd web && npm run dev
 
 **live 重跑(Trace 上下文来源变更后)**:SCN-001 verify-m5 **PASS 39.4s**;SCN-002 verify-m13 **PASS 27.2s**;Python 全量 **513 passed / 1 skipped**。
 
+## 12D. V2.0-B Capability 抽离(2026-09-04)
+
+实施计划:docs/superpowers/plans/2026-09-03-v2.0-b-capability-extraction.md(TDD:registry 特征测试 54 项先写并确认红灯)。
+
+1. **新增 app/capabilities/**:`base.py`(DiagnosticCapability ABC:code/policy_key/必需 Fact/排他键/恢复策略/评估器;状态词表冻结 confirmed/refuted/unknown)+ `registry.py`(注册查重/聚合抽取/Policy 评估/排他/四分支裁决通用化/评估器归属/恢复路由)+ 两个能力包:
+   - `mysql_missing_index`:E1~E5 评估器、F_* Fact 抽取、SCN-001 Policy、x_index_normal 排他、缺索引初始假设;
+   - `mysql_blocking_transaction`:L1~L2 评估器、锁 Fact(含 F_BLOCKER_CONFIRMED 复合)、SCN-002 Policy、x_no_target_lock_wait 排他、目标范围锁恢复验证(自 nodes 原文迁入)。
+2. **nodes.py 去 Scenario 化**:collect_evidence/diagnose 全部经 Registry(extract_facts/evaluate_policies/evaluate_exclusions/decide_root_cause);verify_recovery_node 经 `registry.recovery_verifier_for(root_cause_code)` 路由;场景字面量与死导入清零(grep==0);`graph.py` 零改动(完成标准:新增 Capability 不需改 graph)。
+3. **兼容层**:facts.py/policies.py 评估函数委托 Registry 并标记 deprecated(V2.0-B 起由 capabilities 提供;待参数化 Playbook 版本完成后删除);ROOT_CAUSE_*/POLICY_* 常量保留为兼容标识;`state["policy"]` 键冻结 scn001/scn002(快照/状态契约不变)。
+4. **测试**:test_capability_registry.py(54 项:等价性全组合冻结期望 + 注册表行为);test_lock_retry/test_digest_retry/test_agent_graph/test_behavior_characterization 的导入与 patch 目标随实现迁移(断言全部不变)。
+5. **范围外(按方案归属后续版本)**:假设生成经 Registry 聚合(V2.3);compute_eligible_tools 的工具资格门控(tool_calling 层,保持现状);Playbook/fix_registry(V2.5)。
+
+全量:**567 passed / 1 skipped**(501 基线零回归 + 54 registry + 新增快照不一致用例)。
+
 ---
 
 ## 13. 历史设计取舍(设计意图,非当前实现事实)

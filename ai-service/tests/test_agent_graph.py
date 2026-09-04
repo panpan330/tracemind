@@ -193,7 +193,8 @@ def test_lock_recovery_checks_target_scope(monkeypatch):
 
     monkeypatch.setattr("app.tools.lock_queries.get_lock_waiters",
                         FakeLockQueries().get_lock_waiters)
-    monkeypatch.setattr(nodes, "_run_probe_batches",
+    monkeypatch.setattr(
+        "app.capabilities.mysql_blocking_transaction.capability.run_probe_batches",
                         lambda state, batches=3: [{"success": True}] * batches)
 
     state = {"incident_id": 9, "run_id": 9, "status": "executing",
@@ -218,7 +219,8 @@ def test_lock_recovery_timeout_when_lock_persists(monkeypatch):
                         FakeLockQueries().get_lock_waiters)
 
     class FakeClock:
-        """第一次调用算 deadline,第二次调用已过截止(60s),避免真实轮询。"""
+        """第一次调用算 deadline,第二次调用已过截止(60s),避免真实轮询。
+        V2.0-B:锁恢复实现迁入 mysql_blocking_transaction capability,时钟随迁。"""
         def __init__(self):
             self.calls = 0
 
@@ -227,10 +229,14 @@ def test_lock_recovery_timeout_when_lock_persists(monkeypatch):
             base = __import__("time").time()
             return base if self.calls == 1 else base + 120
 
-    monkeypatch.setattr(nodes, "_time", FakeClock())
+        def sleep(self, seconds):
+            pass
+
+    from app.capabilities.mysql_blocking_transaction import capability as lock_cap
+    monkeypatch.setattr(lock_cap, "time", FakeClock())
     state = {"incident_id": 9, "run_id": 9, "status": "executing",
              "root_cause_code": "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION",
              "fix_execution": {"status": "succeeded"}}
-    out = nodes._verify_lock_recovery(state)
+    out = lock_cap.verify_lock_recovery(state)
     assert out.get("recovery", {}).get("termination_reason") == "recovery_timeout"
     assert out.get("recovery", {}).get("status") == "needs_human"
