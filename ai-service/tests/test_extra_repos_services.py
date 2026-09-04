@@ -99,14 +99,27 @@ def test_lock_observation_get_missing(monkeypatch):
 # ---------- slow_query_service ----------
 
 def test_slow_query_delta_calculation(monkeypatch):
-    control = FakeEngine(connect_conn=FakeConn(fetchone_result=(
-        '{"SELECT 1": {"count": 2, "total_latency_us": 100, "rows_examined": 10}}',)))
-    current_row = FakeRow(DIGEST_TEXT="SELECT 1", COUNT_STAR=5,
-                          SUM_TIMER_WAIT=300000, SUM_ROWS_EXAMINED=25)
-    readonly = FakeEngine(connect_conn=FakeConn(rows=[current_row]))
-    monkeypatch.setattr(sqs, "get_control_engine", lambda: control)
-    monkeypatch.setattr(sqs, "get_readonly_engine", lambda: readonly)
-    out = sqs.list_expensive_digests(incident_id=1)
+    """V2.0-B closure:基线 = agent_run_id 对应 Run 的冻结值(精确绑定)。"""
+    import uuid
+
+    from sqlalchemy.orm import Session
+
+    from app.db.engine import get_control_engine
+    from app.db.models import Incident
+    from app.repositories import run_repo
+
+    with Session(get_control_engine()) as s:
+        inc = Incident(title="d", severity="high", service_ref="inventory-service")
+        s.add(inc)
+        s.commit()
+        s.refresh(inc)
+        inc_id = inc.id
+    baseline = {"SELECT 1": {"count": 2, "total_latency_us": 100, "rows_examined": 10}}
+    run = run_repo.create_run(inc_id, baseline=baseline)
+    current_row = {"SELECT 1": {"count": 5, "total_latency_us": 300,
+                                "rows_examined": 25}}
+    monkeypatch.setattr(sqs, "_fetch_current_digests", lambda: current_row)
+    out = sqs.list_expensive_digests(incident_id=inc_id, agent_run_id=run.id)
     assert out[0]["digest"] == "SELECT 1"
     assert out[0]["count_delta"] == 3          # 5 - 2
     assert out[0]["total_latency_us_delta"] == 200  # 300000//1000 - 100
@@ -114,11 +127,24 @@ def test_slow_query_delta_calculation(monkeypatch):
 
 
 def test_slow_query_no_baseline_no_current(monkeypatch):
-    control = FakeEngine(connect_conn=FakeConn(fetchone_result=None))
-    readonly = FakeEngine(connect_conn=FakeConn(rows=[]))
-    monkeypatch.setattr(sqs, "get_control_engine", lambda: control)
-    monkeypatch.setattr(sqs, "get_readonly_engine", lambda: readonly)
-    assert sqs.list_expensive_digests(incident_id=1) == []
+    """Run 无 digest 基线 + 无当前样本 → 空增量(fail closed 语义不变:不伪造)。"""
+    import uuid
+
+    from sqlalchemy.orm import Session
+
+    from app.db.engine import get_control_engine
+    from app.db.models import Incident
+    from app.repositories import run_repo
+
+    with Session(get_control_engine()) as s:
+        inc = Incident(title="d2", severity="high", service_ref="inventory-service")
+        s.add(inc)
+        s.commit()
+        s.refresh(inc)
+        inc_id = inc.id
+    run = run_repo.create_run(inc_id)   # 无基线
+    monkeypatch.setattr(sqs, "_fetch_current_digests", lambda: {})
+    assert sqs.list_expensive_digests(incident_id=inc_id, agent_run_id=run.id) == []
 
 
 # ---------- metrics_service ----------

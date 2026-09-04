@@ -79,6 +79,9 @@ def _initial_state_from_run(run) -> dict:
         "severity": snap.severity,
         "service_ref": snap.service_ref,
         "affected_operation_ref": snap.affected_operation_ref,
+        # V2.0-B closure:基线引用随 RunContext 冻结(评估/恢复不回读可变 Incident)
+        "healthy_baseline_ref": snap.healthy_baseline_ref,
+        "baseline_ref": snap.baseline_ref,
     }
 
 

@@ -443,6 +443,21 @@ cd web && npm run dev
 
 全量:**567 passed / 1 skipped**(501 基线零回归 + 54 registry + 新增快照不一致用例)。
 
+## 12E. V2.0-B closure(2026-09-04)— 复核剩余三缺口
+
+基于 V2.0-B 主体提交的最小封口:
+
+1. **依赖方向修正**:根因代码权威定义迁入 `app/capabilities/codes.py`;两个 Capability 改从 codes 导入;`app.agent.policies` 仅重导出同一对象。架构约束测试(AST 扫描)钉死:**capabilities 包禁止导入 app.agent.policies / app.agent.facts**,兼容层未来可直接删除。
+2. **Registry 注册约束收紧**:`register` 校验 code/policy_key/root_cause_code/exclusion_key 全局唯一;`tool_names` 每个工具必须有**可调用**评估器(否则 `InvalidCapabilityError`);同一工具评估器被后注册 Capability 静默覆盖 → `DuplicateCapabilityError`(多消费者模型留待 V2.3 统一设计)。参数化负例覆盖每类冲突 + 非法评估器。
+3. **冻结基线绑定**(消除"最近 Run"猜测与可变 Incident 回读):
+   - Runner 初始状态注入 `healthy_baseline_ref` + `baseline_ref`(均来自 RunContextSnapshot);
+   - `evaluate_metrics`(E1)健康基线改读冻结状态,不回读 Incident;
+   - digest 链路注入可信 agent_run_id(`_Digest` 端口/`query_digest` handler/legacy 注入),`slow_query_service` 按 agent_run_id 读精确 Run 的 digest 基线并校验归属;agent_run_id 缺失/无效/跨 Incident → `RUN_CONTEXT_UNRESOLVED` fail closed,不查询、不猜测;
+   - 恢复验证健康基线(recovery_service)同样来自 agent_run_id 冻结快照(fail closed);
+   - 回归:冻结后改 Incident 健康基线,E1 判定仍用冻结值;同 Incident 双 Run 不同 digest 基线,旧 Run 用自己的基线;MCP handler 双注入断言。
+
+**测试**:全量 **581 passed / 1 skipped**(567 基线零回归 + registry 约束 + 基线绑定回归);live 重跑:SCN-001 **PASS 31.6s**、SCN-002 **PASS 26.9s**(冻结基线链路生效)。
+
 ---
 
 ## 13. 历史设计取舍(设计意图,非当前实现事实)

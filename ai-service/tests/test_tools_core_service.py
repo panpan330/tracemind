@@ -60,8 +60,10 @@ def test_digest_handler_receives_incident_id():
     received = {}
 
     class MemDigest:
-        def list_expensive_digests(self, incident_id, window_seconds=None):
+        def list_expensive_digests(self, incident_id, window_seconds=None,
+                                   agent_run_id=0):
             received["incident_id"] = incident_id
+            received["agent_run_id"] = agent_run_id
             return {"digests": [], "has_more": False}
 
     import app.tools  # noqa: F401  确保 TOOL_REGISTRY 已注册
@@ -72,6 +74,8 @@ def test_digest_handler_receives_incident_id():
                                   purpose="investigation")
     svc.execute("list_expensive_query_digests", {"window_seconds": 300}, ctx)
     assert received.get("incident_id") == 1, f"digest 端口收到 incident_id={received}"
+    # V2.0-B closure:agent_run_id 同为可信注入上下文(digest 基线按精确 Run 绑定)
+    assert received.get("agent_run_id") == 1, f"digest 端口收到 agent_run_id={received}"
 
 
 def test_legacy_fn_receives_incident_id_from_ctx(monkeypatch):

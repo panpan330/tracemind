@@ -6,8 +6,8 @@
    新代码请使用 app.capabilities.registry。
 """
 
-ROOT_CAUSE_INDEX = "MISSING_INVENTORY_INDEX"
-ROOT_CAUSE_LOCK = "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION"
+# V2.0-B closure:根因代码权威定义在 app.capabilities.codes,此处仅重导出(兼容)
+from app.capabilities.codes import ROOT_CAUSE_INDEX, ROOT_CAUSE_LOCK  # noqa: F401
 
 POLICY_SCN001 = ("F_ENDPOINT_DEGRADED", "F_DB_STAGE_DOMINANT",
                  "F_TARGET_QUERY_EXPENSIVE", "F_PLAN_FULL_SCAN", "F_INDEX_MISSING")

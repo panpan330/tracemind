@@ -14,14 +14,43 @@ class UnknownCapabilityError(RuntimeError):
     """查询了未注册的 capability code。"""
 
 
+class InvalidCapabilityError(RuntimeError):
+    """Capability 注册约束不满足(如声明工具缺少可调用评估器)。"""
+
+
 class CapabilityRegistry:
     def __init__(self) -> None:
         self._capabilities: dict[str, "DiagnosticCapability"] = {}
         self._evaluators: dict[str, tuple[str, object]] = {}  # tool → (code, fn)
 
     def register(self, capability):
+        """注册约束(V2.0-B closure):code/policy_key/root_cause_code/exclusion_key
+        全局唯一;tool_names 中每个工具必须有可调用评估器,且同一工具评估器不得被
+        后注册 Capability 静默覆盖(多消费者模型留待 V2.3 统一设计)。"""
         if capability.code in self._capabilities:
             raise DuplicateCapabilityError(f"capability code 重复: {capability.code}")
+        for existing in self._capabilities.values():
+            if capability.policy_key == existing.policy_key:
+                raise DuplicateCapabilityError(
+                    f"policy_key 重复: {capability.policy_key} "
+                    f"({existing.code} 已占用)")
+            if capability.root_cause_code == existing.root_cause_code:
+                raise DuplicateCapabilityError(
+                    f"root_cause_code 重复: {capability.root_cause_code} "
+                    f"({existing.code} 已占用)")
+            if capability.exclusion_key == existing.exclusion_key:
+                raise DuplicateCapabilityError(
+                    f"exclusion_key 重复: {capability.exclusion_key} "
+                    f"({existing.code} 已占用)")
+        for tool in capability.tool_names:
+            evaluator = capability.evaluator_for_tool(tool)
+            if not callable(evaluator):
+                raise InvalidCapabilityError(
+                    f"capability {capability.code}: 工具 {tool} 缺少可调用评估器")
+            if tool in self._evaluators:
+                raise DuplicateCapabilityError(
+                    f"工具评估器重复注册: {tool}(已属于 {self._evaluators[tool][0]};"
+                    f"多消费者模型留待 V2.3)")
         self._capabilities[capability.code] = capability
         for tool in capability.tool_names:
             self._evaluators[tool] = (capability.code, capability.evaluator_for_tool(tool))

@@ -8,11 +8,15 @@ def build(ports: dict) -> dict:
     d = ports.get("digest")
 
     def list_expensive_query_digests(incident_id: int | None = None,
-                                     window_seconds: int | None = None) -> dict:
+                                     window_seconds: int | None = None,
+                                     agent_run_id: int = 0) -> dict:
+        # V2.0-B closure:agent_run_id 属可信上下文,经 ToolExecutionService 注入;
+        # digest 基线按精确 Run 解析(禁止按 incident 猜最近 Run)
         if d is None:
             raise ToolBusinessError("PORT_UNAVAILABLE", "digest 端口未配置", retryable=False)
         try:
-            return d.list_expensive_digests(incident_id, window_seconds)
+            return d.list_expensive_digests(incident_id, window_seconds,
+                                            agent_run_id=agent_run_id)
         except ToolBusinessError:
             raise
         except Exception as e:  # noqa: BLE001

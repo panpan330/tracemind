@@ -37,7 +37,30 @@ def _probe_p95_ms() -> int | None:
     return int((time.monotonic() - start) * 1000)
 
 
-def verify_recovery(incident_id: int, fix_execution_id: int) -> dict:
+def _healthy_baseline_for(incident_id: int, agent_run_id: int):
+    """V2.0-B closure:恢复验证的健康基线来自 agent_run_id 的冻结快照(fail closed),
+    不回读可变 Incident 行。"""
+    from app.repositories import run_repo
+    from app.services.run_context import RunContextInvalid, RunContextMissing
+    from app.services.run_context import load_snapshot
+    from app.tools_core.errors import ToolBusinessError
+
+    if not agent_run_id:
+        raise ToolBusinessError(
+            "RUN_CONTEXT_UNRESOLVED",
+            "恢复验证需要 agent_run_id(禁止回读可变 Incident 行)", retryable=False)
+    run = run_repo.get_run(agent_run_id)
+    if run is None or run.incident_id != incident_id:
+        raise ToolBusinessError(
+            "RUN_CONTEXT_UNRESOLVED",
+            f"agent_run {agent_run_id} 缺失或不属于 incident {incident_id}", retryable=False)
+    try:
+        return load_snapshot(run).healthy_baseline_ref
+    except (RunContextMissing, RunContextInvalid) as exc:
+        raise ToolBusinessError("RUN_CONTEXT_UNRESOLVED", str(exc), retryable=False)
+
+
+def verify_recovery(incident_id: int, fix_execution_id: int, agent_run_id: int = 0) -> dict:
     """恢复验证(确定性规则,不让 LLM 决定)。
 
     M2 骨架:索引存在 + EXPLAIN 使用目标索引。
@@ -67,12 +90,11 @@ def verify_recovery(incident_id: int, fix_execution_id: int) -> dict:
             except (KeyError, TypeError):
                 uses_index = False
 
-        # 相对健康基线 P95 判定(基线缺失/采集失败时视为通过)
-        baseline = None
-        inc = incident_repo.get_incident(incident_id)
-        if inc is not None:
-            raw = inc.healthy_metrics_baseline
-            baseline = raw if isinstance(raw, dict) else None
+        # 相对健康基线 P95 判定(基线缺失/采集失败时视为通过);
+        # 基线来自 agent_run_id 冻结快照(V2.0-B closure)
+        baseline = _healthy_baseline_for(incident_id, agent_run_id)
+        if not isinstance(baseline, dict):
+            baseline = None
         p95_after = max((_probe_p95_ms() or 0) for _ in range(PROBE_BATCHES))
         p95_ok = _p95_recovered(p95_after, baseline)
 

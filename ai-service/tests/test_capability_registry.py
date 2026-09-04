@@ -12,6 +12,7 @@ from app.agent import facts as facts_compat
 from app.agent import policies as policies_compat
 from app.capabilities.registry import (CapabilityRegistry,
                                        DuplicateCapabilityError,
+                                       InvalidCapabilityError,
                                        UnknownCapabilityError, registry)
 
 
@@ -148,3 +149,96 @@ def test_dual_conflict_via_registry_from_facts():
     pol = registry.evaluate_policies(facts)
     root, reason = registry.decide_root_cause(pol, registry.evaluate_exclusions(facts))
     assert root is None and reason == "multiple_confirmed_causes"
+
+
+# ---------- V2.0-B closure:架构约束(capabilities 禁止依赖 deprecated 兼容层) ----------
+
+def test_capabilities_do_not_import_deprecated_agent_modules():
+    """capabilities 包不得导入 app.agent.policies / app.agent.facts,
+    确保兼容层未来可直接删除(依赖方向:agent → capabilities)。"""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "app" / "capabilities"
+    banned = {"app.agent.policies", "app.agent.facts"}
+    bad = []
+    for py in root.rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                bad += [a.name for a in node.names if a.name in banned]
+            elif isinstance(node, ast.ImportFrom) and node.module in banned:
+                bad.append(node.module)
+    assert not bad, f"capabilities 反向导入 deprecated 模块: {bad}"
+
+
+def test_root_cause_codes_single_source():
+    """根因代码权威定义在 capabilities.codes;agent.policies 仅重导出同一对象。"""
+    from app.capabilities import codes
+    from app.agent import policies
+    assert policies.ROOT_CAUSE_INDEX is codes.ROOT_CAUSE_INDEX
+    assert policies.ROOT_CAUSE_LOCK is codes.ROOT_CAUSE_LOCK
+    assert registry.get("mysql_missing_index").root_cause_code is codes.ROOT_CAUSE_INDEX
+
+
+def _stub_capability(code, *, policy_key=None, root_cause=None, exclusion_key=None,
+                     tools=(), evaluators=None):
+    """最小注册约束测试替身(不触碰真实诊断知识)。"""
+    from app.capabilities.base import DiagnosticCapability
+
+    class _Stub(DiagnosticCapability):
+        def extract_facts(self, evidence_map):
+            return {}
+
+        def exclusion(self, facts):
+            return False
+
+    cap = _Stub()
+    cap.code = code
+    # 默认值按 code 派生,避免无关字段在重复性测试中先行碰撞
+    cap.policy_key = policy_key or f"pk_{code}"
+    cap.root_cause_code = root_cause or f"rc_{code}"
+    cap.exclusion_key = exclusion_key or f"xk_{code}"
+    cap.tool_names = tuple(tools)
+    cap._evaluators = evaluators or {}
+    return cap
+
+
+def test_register_rejects_duplicate_policy_key():
+    fresh = CapabilityRegistry()
+    fresh.register(_stub_capability("a", policy_key="scn001"))
+    with pytest.raises(DuplicateCapabilityError, match="policy_key 重复"):
+        fresh.register(_stub_capability("b", policy_key="scn001"))
+
+
+def test_register_rejects_duplicate_root_cause_code():
+    fresh = CapabilityRegistry()
+    fresh.register(_stub_capability("a", root_cause="R1"))
+    with pytest.raises(DuplicateCapabilityError, match="root_cause_code 重复"):
+        fresh.register(_stub_capability("b", root_cause="R1"))
+
+
+def test_register_rejects_duplicate_exclusion_key():
+    fresh = CapabilityRegistry()
+    fresh.register(_stub_capability("a", exclusion_key="x_dup"))
+    with pytest.raises(DuplicateCapabilityError, match="exclusion_key 重复"):
+        fresh.register(_stub_capability("b", exclusion_key="x_dup"))
+
+
+def test_register_rejects_duplicate_tool_evaluator():
+    """同一工具评估器不得被后注册 Capability 静默覆盖(V2.0-B 最小方案)。"""
+    fresh = CapabilityRegistry()
+    fresh.register(_stub_capability("a", tools=("get_trace",),
+                                    evaluators={"get_trace": lambda r, s: []}))
+    with pytest.raises(DuplicateCapabilityError, match="工具评估器重复注册"):
+        fresh.register(_stub_capability("b", tools=("get_trace",),
+                                        evaluators={"get_trace": lambda r, s: []}))
+
+
+def test_register_rejects_tool_without_callable_evaluator():
+    fresh = CapabilityRegistry()
+    with pytest.raises(InvalidCapabilityError, match="缺少可调用评估器"):
+        fresh.register(_stub_capability("a", tools=("get_trace",), evaluators={}))
+    with pytest.raises(InvalidCapabilityError, match="缺少可调用评估器"):
+        fresh.register(_stub_capability("a", tools=("get_trace",),
+                                        evaluators={"get_trace": "not-callable"}))

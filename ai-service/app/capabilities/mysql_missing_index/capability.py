@@ -5,7 +5,7 @@
 """
 import logging
 
-from app.agent.policies import ROOT_CAUSE_INDEX
+from app.capabilities.codes import ROOT_CAUSE_INDEX
 from app.capabilities.base import (DiagnosticCapability, RECOVERY_VERIFY_TOOL)
 from app.repositories import incident_repo
 
@@ -31,8 +31,9 @@ def evaluate_metrics(result: dict, state: dict) -> list[dict]:
         # 窗口内无观测样本(如注入清空观测后负载尚未进入窗口):
         # 不产出证据,视为"尚未采集",允许 planner 后续轮次重采
         return []
-    inc = incident_repo.get_incident(state["incident_id"])
-    health = (inc.healthy_metrics_baseline or {}) if inc else {}
+    # V2.0-B closure:健康基线来自冻结 RunContext(runner 注入 healthy_baseline_ref),
+    # 不回读可变 Incident 行(恢复窗口期内基线可能被修改)
+    health = state.get("healthy_baseline_ref") or {}
     base_p95 = (health or {}).get("p95_ms")
     if p95 is not None and base_p95 is not None:
         e1 = p95 > int(base_p95) * 1.2

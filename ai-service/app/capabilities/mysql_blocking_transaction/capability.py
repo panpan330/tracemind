@@ -10,7 +10,7 @@ import time
 from app.config import settings
 from app.repositories import event_repo
 
-from app.agent.policies import ROOT_CAUSE_LOCK
+from app.capabilities.codes import ROOT_CAUSE_LOCK
 from app.capabilities.base import DiagnosticCapability, RECOVERY_TARGET_SCOPE_LOCK
 
 logger = logging.getLogger(__name__)
