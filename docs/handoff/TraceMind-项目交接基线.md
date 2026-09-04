@@ -416,6 +416,19 @@ cd web && npm run dev
 - SCN-002 全链(verify-m13,真实锁等待/KILL):**PASS,28.3s**(诊断→审批→KILL→恢复→报告)。
 - 全量测试:500+ passed(live 契约冒烟改为实际运行);Java mvn test EXIT:0;Vue vitest 46 passed + vue-tsc + vite build 全过。
 
+## 12C. V2.0-A final closure(2026-09-03)— 复核剩余两缺口
+
+基于 f3143ab 的最后一个最小修复提交:
+
+1. **Trace 调查上下文改由冻结 RunContext 提供**(新增 `tools_infrastructure/trace_context.py`):
+   - MCP 链路把可信 `agent_run_id` 一并注入 Trace handler/port(`ToolExecutionService` 双注入 incident_id+agent_run_id;`TracePort` 签名扩展);
+   - `_Trace` 端口按 agent_run_id 读取 Run 的 RunContextSnapshot 构建调查上下文,并校验 Run 归属传入 incident_id;Run 缺失/绑定不一致/快照非法 → `RUN_CONTEXT_UNRESOLVED` fail closed,**禁止回读当前 Incident 行**(Incident 行可变,不再作为上下文来源);
+   - legacy 直调路径(tools/__init__._get_trace,演示 API)携带 agent_run_id 时同样走冻结快照,仅无 Run 的手工调试回退 Incident 行;
+   - 核心回归测试:冻结后修改 Incident 行(service/operation/observed_at)→ 经真实 ToolExecutionService/MCP handler 调 get_trace → trace_service 收到的仍是快照原始上下文;附 Run 缺失/跨 Incident 绑定两个 fail-closed 变体。
+2. **Policy 冻结列校验映射修正**(validate_run_for_resume):显式映射 policy→expected_policy_bundle_version、capability/prompt/tool→同名列(此前误读 policy_bundle_version 审计列,篡改 expected_policy_bundle_version 可绕过——独立探针证实)。当前可执行版本、Run 冻结列、Snapshot.bundle_versions 三者严格一致(含 NULL 即 fail closed);`policy_bundle_version` 保留其审计语义但不参与本校验。参数化负例:分别篡改四类冻结列(快照不动)全部禁止恢复且原因码正确;另有 schema/incident_id/agent_run_id/checkpoint thread/namespace 五类不一致的显式回归。
+
+**live 重跑(Trace 上下文来源变更后)**:SCN-001 verify-m5 **PASS 39.4s**;SCN-002 verify-m13 **PASS 27.2s**;Python 全量 **513 passed / 1 skipped**。
+
 ---
 
 ## 13. 历史设计取舍(设计意图,非当前实现事实)

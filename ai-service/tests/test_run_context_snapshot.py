@@ -139,3 +139,111 @@ def test_version_freeze_effective_at_resume(monkeypatch):
         row = s.get(Incident, inc.id)
         assert row.status == "needs_human"
         assert row.termination_reason == "version_mismatch"
+
+
+# ---------- V2.0-A final closure:冻结列映射与五类不一致回归 ----------
+
+import pytest as _pytest
+
+from app.services.run_context import ResumeBlocked as _ResumeBlocked
+from app.services.run_context import validate_run_for_resume as _validate
+
+
+def _tamper_snapshot_json(run_id: int, patch: dict) -> None:
+    """改写 Run 的快照 JSON(顶层键或 checkpoint.xxx 形式)。"""
+    with Session(get_control_engine()) as s:
+        r = s.get(AgentRun, run_id)
+        snap = dict(r.run_context_snapshot_json)
+        for k, v in patch.items():
+            if "." in k:
+                a, b = k.split(".", 1)
+                snap[a] = {**snap[a], b: v}
+            else:
+                snap[k] = v
+        r.run_context_snapshot_json = snap
+        s.commit()
+
+
+@_pytest.mark.parametrize("column,reason", [
+    ("expected_policy_bundle_version", "version_mismatch"),
+    ("capability_bundle_version", "capability_version_mismatch"),
+    ("prompt_bundle_version", "prompt_version_mismatch"),
+    ("tool_bundle_version", "tool_version_mismatch"),
+])
+def test_tampered_frozen_version_column_blocks_resume(column, reason):
+    """篡改 Run 冻结列(快照保持不变)→ 禁止恢复,原因码正确。
+    回归:policy 列曾错误映射 policy_bundle_version,篡改 expected_policy_bundle_version 可绕过。"""
+    inc = _make_incident()
+    run = run_repo.create_run(inc.id)
+    with Session(get_control_engine()) as s:
+        s.execute(text(f"UPDATE agent_run SET {column}='0.0.0-tampered' WHERE id=:i"),
+                  {"i": run.id})
+        s.commit()
+    fresh = run_repo.get_run(run.id)
+    with _pytest.raises(_ResumeBlocked) as ei:
+        _validate(fresh, current_bundle_versions=runner._current_bundle_versions())
+    assert ei.value.reason == reason
+
+
+def test_tampered_snapshot_schema_version_blocks_resume():
+    inc = _make_incident()
+    run = run_repo.create_run(inc.id)
+    _tamper_snapshot_json(run.id, {"schema_version": "9.9"})
+    with _pytest.raises(_ResumeBlocked) as ei:
+        _validate(run_repo.get_run(run.id), current_bundle_versions=runner._current_bundle_versions())
+    assert ei.value.reason == "snapshot_schema_unsupported"
+
+
+def test_tampered_snapshot_incident_id_blocks_resume():
+    inc = _make_incident()
+    run = run_repo.create_run(inc.id)
+    _tamper_snapshot_json(run.id, {"incident_id": inc.id + 1})
+    with _pytest.raises(_ResumeBlocked) as ei:
+        _validate(run_repo.get_run(run.id), current_bundle_versions=runner._current_bundle_versions())
+    assert ei.value.reason == "snapshot_incident_mismatch"
+
+
+def test_tampered_snapshot_agent_run_id_blocks_resume():
+    inc = _make_incident()
+    run = run_repo.create_run(inc.id)
+    _tamper_snapshot_json(run.id, {"agent_run_id": run.id + 1})
+    with _pytest.raises(_ResumeBlocked) as ei:
+        _validate(run_repo.get_run(run.id), current_bundle_versions=runner._current_bundle_versions())
+    assert ei.value.reason == "snapshot_run_mismatch"
+
+
+@_pytest.mark.parametrize("patch", [
+    {"checkpoint.thread_id": "t-hijacked"},
+    {"checkpoint.namespace": "hijacked-ns"},
+])
+def test_tampered_checkpoint_binding_blocks_resume(patch):
+    """thread/namespace 任一与 Run 不一致 → fail closed。"""
+    inc = _make_incident()
+    run = run_repo.create_run(inc.id)
+    _tamper_snapshot_json(run.id, patch)
+    with _pytest.raises(_ResumeBlocked) as ei:
+        _validate(run_repo.get_run(run.id), current_bundle_versions=runner._current_bundle_versions())
+    assert ei.value.reason == "snapshot_checkpoint_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_resume_reason_code_lands_in_incident(monkeypatch):
+    """端到端:篡改 capability 冻结列 → resume 拒绝,reason 入 incident.termination_reason。"""
+    inc = _make_incident()
+    run = run_repo.create_run(inc.id)
+    with Session(get_control_engine()) as s:
+        s.execute(text("UPDATE agent_run SET capability_bundle_version='0.0.0-x' WHERE id=:i"),
+                  {"i": run.id})
+        s.commit()
+
+    async def _no_invoke(*a, **kw):
+        raise AssertionError("版本校验失败不得恢复图")
+
+    monkeypatch.setattr("app.agent.graph.build_graph", lambda **kw: type(
+        "G", (), {"invoke": _no_invoke})())
+    await runner.resume_investigation(run.thread_id, {"decision": "approved"})
+    with Session(get_control_engine()) as s:
+        assert s.get(AgentRun, run.id).status == "failed"
+        row = s.get(Incident, inc.id)
+        assert row.status == "needs_human"
+        assert row.termination_reason == "capability_version_mismatch"

@@ -53,8 +53,13 @@ class ToolExecutionService:
                 args = {k: v for k, v in parsed.model_dump().items()
                         if k not in _RESERVED_CONTEXT_FIELDS}
                 import inspect
-                if "incident_id" in inspect.signature(fn).parameters:
+                sig = inspect.signature(fn).parameters
+                # V2.0-A final:可信上下文注入(incident_id/agent_run_id 均来自受控 Header,
+                # 模型侧 schema 隐藏且 reserved 字段拒绝伪造)
+                if "incident_id" in sig:
                     args["incident_id"] = ctx.incident_id
+                if "agent_run_id" in sig:
+                    args["agent_run_id"] = ctx.agent_run_id
                 return fn(**args)
         spec = TOOL_REGISTRY.get(name)
         if spec is None:
@@ -63,8 +68,11 @@ class ToolExecutionService:
         import inspect
         # legacy fn(确定性节点 verify_recovery/execute_fix)的 incident_id 从可信 ctx 注入
         # (V1.6 签名含 incident_id;execute_tool 薄封装把 incident_id 消耗成 ctx)
-        if "incident_id" in inspect.signature(spec.fn).parameters and args.get("incident_id") is None:
+        sig = inspect.signature(spec.fn).parameters
+        if "incident_id" in sig and args.get("incident_id") is None:
             args["incident_id"] = ctx.incident_id
+        if "agent_run_id" in sig and args.get("agent_run_id") is None:
+            args["agent_run_id"] = ctx.agent_run_id
         return spec.fn(**args)
 
     def execute(self, name: str, params: dict,

@@ -14,17 +14,14 @@ class _Metrics(MetricsPort):
 
 
 class _Trace(TracePort):
-    def get_trace(self, trace_ref, trace_id, incident, incident_id):
-        # V2.0-A closure:MCP 链路按受控 incident_id 解析 service/operation;
-        # 解析不到时保持空 dict → trace_service fail closed(不再默认 inventory-service)
-        if not incident and incident_id:
-            row = incident_repo.get_incident(incident_id)
-            if row is not None:
-                incident = {"id": row.id,
-                            "affected_service_ref": row.affected_service_ref,
-                            "affected_operation_ref": row.affected_operation_ref,
-                            "observed_at": str(row.observed_at or row.created_at)}
-        return trace_service.get_trace(trace_ref, trace_id, incident, incident_id=incident_id)
+    def get_trace(self, trace_ref, trace_id, incident, incident_id, agent_run_id=0):
+        # V2.0-A final:调查上下文只来自 agent_run_id 的冻结 RunContextSnapshot
+        # (Incident 行可变,不作为上下文来源);解析失败 fail closed
+        from app.tools_infrastructure.trace_context import resolve_frozen_trace_context
+        frozen = resolve_frozen_trace_context(incident_id, agent_run_id)
+        return trace_service.get_trace(trace_ref, trace_id, frozen,
+                                       incident_id=incident_id,
+                                       agent_run_id=agent_run_id)
 
 
 class _Digest(DigestPort):

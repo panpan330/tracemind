@@ -50,52 +50,119 @@ def test_trace_service_empty_incident_object_fails_closed():
                                  "affected_operation_ref": None})
 
 
-def test_mcp_chain_injects_incident_context(monkeypatch):
-    """注:execute 层失败会包装为 ToolResult(success=False, error_code)而非抛出。"""
-    """MCP 真实模式全链路:ctx.incident_id 注入 handler → 端口解析受控上下文
-    → trace_service 收到 Incident 的 service/operation(非默认值)。"""
+def _make_incident_with_run(observed_at=None):
+    """建 Incident + 冻结 RunContextSnapshot 的 Run(返回两者 id)。"""
+    from app.repositories import run_repo
     inc = incident_repo.create_incident(
         "mcp 上下文注入", None, "high", "inventory-service",
         affected_service_ref="inventory-service",
-        affected_operation_ref="INVENTORY_RESERVATION")
+        affected_operation_ref="INVENTORY_RESERVATION",
+        observed_at=observed_at)
+    run = run_repo.create_run(inc.id)
+    return inc.id, run.id
 
+
+def test_mcp_chain_injects_frozen_context_from_run_snapshot(monkeypatch):
+    """注:execute 层失败会包装为 ToolResult(success=False, error_code)而非抛出。"""
+    """MCP 真实模式全链路:agent_run_id 注入 handler → 端口按冻结 RunContextSnapshot
+    解析上下文 → trace_service 收到快照原始值(非 Incident 行/默认值)。"""
     captured = {}
 
     def fake_trace_service(trace_ref, trace_id, incident, incident_id=0, agent_run_id=0):
         captured["incident"] = incident
         captured["incident_id"] = incident_id
+        captured["agent_run_id"] = agent_run_id
         return {"sourceBackend": "fixture", "traceId": "t-1",
                 "dbDominanceRatio": 0.9, "inventoryServerDurationMs": 900}
 
     monkeypatch.setattr("app.tools_infrastructure.investigation.trace_service.get_trace",
                         fake_trace_service)
 
+    inc_id, run_id = _make_incident_with_run()
     ports = build_investigation_ports()
     from app.tools_core.service import ToolExecutionService
 
     svc = ToolExecutionService(ports=ports)
     ctx = ClientInvocationContext(
-        incident_id=inc.id, agent_run_id=int(uuid.uuid4().hex[:8], 16) % 10**8,
+        incident_id=inc_id, agent_run_id=run_id,
         tool_call_id=f"tc-{uuid.uuid4().hex[:10]}", purpose="investigation")
     out = svc.execute("get_trace", {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}, ctx)
     assert out["data"]["traceId"] == "t-1"
-    assert captured["incident_id"] == inc.id
+    assert captured["incident_id"] == inc_id
     # 关键:到达 trace_service 的是受控上下文,不是空 dict/默认值
     assert captured["incident"]["affected_service_ref"] == "inventory-service"
     assert captured["incident"]["affected_operation_ref"] == "INVENTORY_RESERVATION"
+    assert captured["agent_run_id"] == run_id
 
 
-def test_mcp_chain_without_incident_row_fails_closed(monkeypatch):
-    """incident_id 指向不存在的行:空上下文 → trace_service fail closed(不默认兜底)。"""
+def test_mcp_chain_with_bogus_run_fails_closed(monkeypatch):
+    """agent_run_id 指向不存在的 Run:RUN_CONTEXT_UNRESOLVED fail closed。"""
     from app.tools_core.service import ToolExecutionService
 
     svc = ToolExecutionService(ports=build_investigation_ports())
     ctx = ClientInvocationContext(
-        incident_id=987654321, agent_run_id=int(uuid.uuid4().hex[:8], 16) % 10**8,
+        incident_id=987654321, agent_run_id=999_999_999,
         tool_call_id=f"tc-{uuid.uuid4().hex[:10]}", purpose="investigation")
     out = svc.execute("get_trace", {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}, ctx)
     assert out["success"] is False
-    assert out["error_code"] == "INCIDENT_CONTEXT_MISSING"
+    assert out["error_code"] == "RUN_CONTEXT_UNRESOLVED"
+
+
+def test_trace_context_from_frozen_snapshot_survives_incident_update(monkeypatch):
+    """核心回归(复核缺口 1):冻结后修改 Incident 行的 service/operation/observed_at,
+    经真实 ToolExecutionService/MCP handler 调 get_trace,trace_service 收到的
+    仍是 Run 快照中的原始上下文 —— Incident 行不是上下文来源。"""
+    from sqlalchemy import text
+
+    from app.db.engine import get_control_engine
+
+    inc_id, run_id = _make_incident_with_run(
+        observed_at="2026-09-03 08:00:00")
+
+    def fake_trace_service(trace_ref, trace_id, incident, incident_id=0, agent_run_id=0):
+        return {"sourceBackend": "fixture", "traceId": "frozen",
+                "captured": incident}
+
+    monkeypatch.setattr("app.tools_infrastructure.investigation.trace_service.get_trace",
+                        fake_trace_service)
+
+    # 冻结后修改 Incident 行(模拟恢复窗口期内上下文被人工/外部更新)
+    with Session(get_control_engine()) as s:
+        s.execute(text(
+            "UPDATE incident SET service_ref='order-service', "
+            "affected_service_ref='order-service', "
+            "affected_operation_ref='ORDER_CREATE', "
+            "observed_at='2030-01-01 00:00:00' WHERE id=:i"), {"i": inc_id})
+        s.commit()
+
+    ports = build_investigation_ports()
+    from app.tools_core.service import ToolExecutionService
+
+    svc = ToolExecutionService(ports=ports)
+    ctx = ClientInvocationContext(
+        incident_id=inc_id, agent_run_id=run_id,
+        tool_call_id=f"tc-{uuid.uuid4().hex[:10]}", purpose="investigation")
+    out = svc.execute("get_trace", {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}, ctx)
+    got = out["data"]["captured"]
+    assert got["affected_service_ref"] == "inventory-service"      # 冻结值,非更新值
+    assert got["affected_operation_ref"] == "INVENTORY_RESERVATION"  # 冻结值
+    assert got["observed_at"] == "2026-09-03 08:00:00"             # 冻结窗口起点
+
+
+def test_trace_context_run_bound_to_other_incident_fails_closed(monkeypatch):
+    """Run 属于其他 Incident(绑定不一致)→ fail closed,不返回上下文。"""
+    inc_a, run_of_a = _make_incident_with_run()
+    inc_b = incident_repo.create_incident(
+        "另一 incident", None, "high", "inventory-service")
+    from app.tools_core.service import ToolExecutionService
+
+    svc = ToolExecutionService(ports=build_investigation_ports())
+    ctx = ClientInvocationContext(
+        incident_id=inc_b.id, agent_run_id=run_of_a,
+        tool_call_id=f"tc-{uuid.uuid4().hex[:10]}", purpose="investigation")
+    out = svc.execute("get_trace", {"trace_ref": "REPRESENTATIVE_SLOW_TRACE"}, ctx)
+    assert out["success"] is False
+    assert out["error_code"] == "RUN_CONTEXT_UNRESOLVED"
 
 
 def test_legacy_get_trace_direct_call_with_unknown_incident_fails_closed():

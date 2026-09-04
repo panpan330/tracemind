@@ -63,7 +63,8 @@ class MetricsPort(ABC):
 class TracePort(ABC):
     @abstractmethod
     def get_trace(self, trace_ref: Optional[str], trace_id: Optional[str],
-                  incident: dict, incident_id: int) -> dict: ...
+                  incident: dict, incident_id: int,
+                  agent_run_id: int = 0) -> dict: ...
 
 
 class DigestPort(ABC):

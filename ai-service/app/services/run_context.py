@@ -133,6 +133,15 @@ def validate_run_for_resume(run, *, current_bundle_versions: dict) -> RunContext
             "snapshot_checkpoint_mismatch",
             f"agent_run {run_id} 快照 checkpoint={ck} 与 Run thread/namespace 绑定不一致")
     frozen = snap.bundle_versions or {}
+    # V2.0-A final closure:Run 冻结列与 bundle kind 的显式映射。
+    # policy 的冻结列为 expected_policy_bundle_version(create_run 冻结、resume 校验的权威);
+    # policy_bundle_version 是另一审计字段,不参与本校验、也不得代替前者。
+    version_columns = {
+        "policy": "expected_policy_bundle_version",
+        "capability": "capability_bundle_version",
+        "prompt": "prompt_bundle_version",
+        "tool": "tool_bundle_version",
+    }
     for kind, code in (("policy", "version_mismatch"),
                        ("capability", "capability_version_mismatch"),
                        ("prompt", "prompt_version_mismatch"),
@@ -140,12 +149,13 @@ def validate_run_for_resume(run, *, current_bundle_versions: dict) -> RunContext
         want = current_bundle_versions.get(kind)
         if frozen.get(kind) != want:
             raise ResumeBlocked(
-                code, f"agent_run {run_id} 冻结 {kind} 版本 {frozen.get(kind)!r} "
+                code, f"agent_run {run_id} 快照冻结 {kind} 版本 {frozen.get(kind)!r} "
                       f"≠ 当前可执行 {want!r}")
-        col = getattr(run, f"{kind}_bundle_version", None)
-        if col is not None and col != want:
+        col_value = getattr(run, version_columns[kind], None)
+        if col_value != want:
+            # 快照与列应同事务写入;不一致(含 NULL)即 Run 状态被篡改/损坏 → fail closed
             raise ResumeBlocked(
-                code, f"agent_run {run_id} 列 {kind}_bundle_version={col!r} "
+                code, f"agent_run {run_id} 冻结列 {version_columns[kind]}={col_value!r} "
                       f"≠ 当前可执行 {want!r}")
     if not snap.service_ref:
         raise ResumeBlocked("context_snapshot_invalid",

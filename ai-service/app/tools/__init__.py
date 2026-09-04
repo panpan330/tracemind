@@ -26,15 +26,21 @@ def _get_metrics(service_ref: str, window_start: str | None = None,
 
 
 def _get_trace(trace_ref: str | None = None, trace_id: str | None = None,
-               incident_id: int | None = None, **kw) -> dict:
-    """V1.4 trace 门面:从 Incident 解析 service/operation 上下文。"""
-    incident = incident_repo.get_incident(incident_id) if incident_id else None
-    inc_dict = {}
-    if incident is not None:
-        inc_dict = {"id": incident.id,
-                    "affected_service_ref": incident.affected_service_ref,
-                    "affected_operation_ref": incident.affected_operation_ref,
-                    "observed_at": str(incident.created_at)}
+               incident_id: int | None = None, agent_run_id: int = 0) -> dict:
+    """V1.4 trace 门面(演示 API 直调路径;真实 Graph 走 MCP)。
+    V2.0-A final:调用方携带 agent_run_id 时,上下文一律来自冻结 RunContextSnapshot
+    (fail closed);仅无 agent_run_id 的手工调试调用回退 Incident 行。"""
+    from app.tools_infrastructure.trace_context import resolve_frozen_trace_context
+    if incident_id and agent_run_id:
+        inc_dict = resolve_frozen_trace_context(incident_id, agent_run_id)
+    else:
+        incident = incident_repo.get_incident(incident_id) if incident_id else None
+        inc_dict = {}
+        if incident is not None:
+            inc_dict = {"id": incident.id,
+                        "affected_service_ref": incident.affected_service_ref,
+                        "affected_operation_ref": incident.affected_operation_ref,
+                        "observed_at": str(incident.created_at)}
     return trace_service.get_trace(trace_ref, trace_id, inc_dict,
                                    incident_id=incident_id or 0)
 
