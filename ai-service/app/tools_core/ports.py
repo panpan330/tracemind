@@ -70,7 +70,8 @@ class TracePort(ABC):
 class DigestPort(ABC):
     @abstractmethod
     def list_expensive_digests(self, incident_id: Optional[int],
-                               window_seconds: Optional[int] = None) -> dict: ...
+                               window_seconds: Optional[int] = None,
+                               agent_run_id: int = 0) -> dict: ...
 
 
 class PlanPort(ABC):

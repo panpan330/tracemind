@@ -1,5 +1,4 @@
 """调查数据端口实现:直通现有 services(过渡期;handler 只依赖 ports 接口)。"""
-from app.repositories import incident_repo
 from app.services import (index_info_service, metrics_service, query_plan_service,
                           slow_query_service, trace_service)
 from app.tools import lock_queries

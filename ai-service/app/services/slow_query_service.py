@@ -1,6 +1,6 @@
 from sqlalchemy import text
 
-from app.db.engine import get_control_engine, get_readonly_engine
+from app.db.engine import get_readonly_engine
 from app.services.baseline_service import TARGET_DIGEST_LIKE
 
 
