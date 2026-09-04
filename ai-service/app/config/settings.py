@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     rag_final_top_k: int = 3
     rag_score_threshold: float = 0.0           # 校准集确定后冻结进 evaluation_policy.yaml
 
+    # ---- V2.1-A Alertmanager 接入 ----
+    alertmanager_webhook_token: str = ""      # 空 = webhook 禁用(403);Bearer 校验
+    alertmanager_alertname_allowlist: str = "OrderOperationP95High"
+    alertmanager_max_body_bytes: int = 65536
+    alertmanager_max_alerts: int = 20
+
     # ---- 评测 ----
     eval_fixture_dir: str = ""
     eval_report_dir: str = "./reports/evals"

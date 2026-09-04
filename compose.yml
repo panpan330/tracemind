@@ -142,6 +142,8 @@ services:
       TRACEMIND_INVENTORY_SERVICE_URL: "http://inventory-service:8082"
       TRACEMIND_DEMO_MODE: "true"
       TRACEMIND_DEMO_KEY: demo-secret-2026
+      # V2.1-A:Alertmanager webhook Bearer token(demo 占位;CI/真实部署注入)
+      TRACEMIND_ALERTMANAGER_WEBHOOK_TOKEN: ${TRACEMIND_ALERTMANAGER_WEBHOOK_TOKEN:-demo-am-token-2026}
       TRACEMIND_LLM_MODE: fake
       TRACEMIND_EVAL_CHAT_MODEL: qwen3.7-max
       # V1.7:MCP 经独立 mcp-tools 服务(Streamable HTTP 标准部署)
@@ -250,7 +252,8 @@ services:
       MEMORY_MAX_TRACES: "10000"
       COLLECTOR_OTLP_ENABLED: "true"
     mem_limit: 512m
-    profiles: [observability-ui]
+    # V2.1:核心 Jaeger 随完整 demo 启动(不再依赖 observability-ui profile,
+    # 避免 UI profile 未开时真实 Trace 工具不可用);Grafana UI 仍保持可选
     ports:
       - "127.0.0.1:16686:16686"   # UI 仅宿主机回环;gRPC QueryService 16685 只入 observability-query-net
     networks: [trace-ingest-net, observability-query-net, tool-observation-network]
@@ -264,9 +267,19 @@ services:
       - --storage.tsdb.path=/prometheus
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus-rules.yml:/etc/prometheus/prometheus-rules.yml:ro
       - prometheus-data:/prometheus
     mem_limit: 384m
     networks: [metrics-scrape-net, observability-query-net, tool-observation-network]
+
+  # V2.1-A:Alertmanager(告警 → Incident Gateway webhook)
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: tracemind-alertmanager
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks: [metrics-scrape-net, tracemind]
+    mem_limit: 128m
 
   grafana:
     image: grafana/grafana:11.5.0
