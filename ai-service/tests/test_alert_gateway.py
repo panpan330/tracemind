@@ -386,7 +386,9 @@ def test_concurrent_firing_resolved_final_resolved():
                             "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
         ver = s.execute(text("SELECT version FROM alert_instance "
                              "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
-    assert st == "RESOLVED" and ver == 2
+    assert st == "RESOLVED"          # 任何交错下终态只能为 RESOLVED(单向)
+    # version ∈ {1,2}:若 RESOLVED 先被处理,FIRING 全部被最晚-startsAt 规则归档(无推进)
+    assert ver in (1, 2)
     _cleanup(fingerprints=[fp])
 
 
@@ -451,4 +453,48 @@ def test_webhook_normal_payload_still_accepted_after_hardening(api):
                  json=_firing_payload(fingerprint=fp),
                  headers={"Authorization": "Bearer test-token-123"})
     assert r.status_code == 200
+    _cleanup(fingerprints=[fp])
+
+
+# ---------- V2.1-A micro-closure:锁名哈希化 + 64 字符 fingerprint 契约 ----------
+
+def test_gateway_lock_name_contract():
+    """锁名:确定性、source 隔离、恒为 64 十六进制(MySQL GET_LOCK 上限)。"""
+    from app.incident_gateway.fingerprint import gateway_lock_name
+
+    n1 = gateway_lock_name("alertmanager", "f" * 64)
+    assert n1 == gateway_lock_name("alertmanager", "f" * 64)      # 确定性
+    assert len(n1) == 64 and all(ch in "0123456789abcdef" for ch in n1)
+    assert n1 != gateway_lock_name("othersource", "f" * 64)       # source 隔离
+    assert n1 != gateway_lock_name("alertmanager", "f" * 63 + "g")  # 指纹隔离
+    assert gateway_lock_name("s", "x") == gateway_lock_name("s", "x")
+
+
+def test_webhook_64char_fingerprint_full_flow(api):
+    """Schema 允许的 64 字符 fingerprint:200 + AlertEvent + AlertInstance 完整生成
+    (回归:哈希锁名前,85 字符拼接锁名使 GET_LOCK 报 4163 → 500)。"""
+    fp = "f" * 56 + uuid.uuid4().hex[:8]   # 64 字符且每次唯一(不与 live 冒烟撞键)
+    payload = _firing_payload(fingerprint=fp,
+                              starts_at="2026-09-05T02:00:00.000Z")
+    r = api.post("/api/integrations/alertmanager/webhook", json=payload,
+                 headers={"Authorization": "Bearer test-token-123"})
+    assert r.status_code == 200
+    with Session(get_control_engine()) as s:
+        ev = s.execute(text("SELECT COUNT(*) FROM alert_event "
+                            "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+        inst = s.execute(text("SELECT current_status FROM alert_instance "
+                              "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+    assert ev == 1 and inst == "FIRING"
+    # RESOLVED 推进同指纹(锁名相同路径)仍正常
+    r2 = api.post("/api/integrations/alertmanager/webhook",
+                  json=_firing_payload(fingerprint=fp,
+                                       starts_at="2026-09-05T02:00:00.000Z",
+                                       status="resolved",
+                                       ends_at="2026-09-05T02:01:00.000Z"),
+                  headers={"Authorization": "Bearer test-token-123"})
+    assert r2.status_code == 200
+    with Session(get_control_engine()) as s:
+        st, ver = s.execute(text("SELECT current_status, version FROM alert_instance "
+                                 "WHERE external_fingerprint=:f"), {"f": fp}).fetchone()
+    assert st == "RESOLVED" and ver == 2
     _cleanup(fingerprints=[fp])

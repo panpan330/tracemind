@@ -44,3 +44,12 @@ def normalize_labels(labels: dict[str, str], *,
             continue
         kept[key] = value
     return kept, violations
+
+
+def gateway_lock_name(source: str, fingerprint: str) -> str:
+    """MySQL 命名锁名(GET_LOCK 上限 64 字符,V2.1-A micro-closure)。
+
+    对带命名空间的 `alertgw + NUL + source + NUL + fingerprint` 取 SHA-256,
+    返回定长 64 十六进制:确定性、不同 source/fingerprint 隔离、恒 ≤64。"""
+    payload = "alertgw" + chr(0) + source + chr(0) + fingerprint
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

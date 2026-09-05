@@ -19,7 +19,8 @@ from sqlalchemy import text
 
 from app.db.engine import get_control_engine
 from app.incident_gateway.fingerprint import (alert_instance_key, canonical_json,
-                                              delivery_hash, normalize_labels)
+                                              delivery_hash, gateway_lock_name,
+                                              normalize_labels)
 from app.tools_core.errors import ToolBusinessError
 from app.incident_gateway.schemas import AlertmanagerWebhookIn
 
@@ -182,7 +183,7 @@ def process_alert_batch(source: str, payload: AlertmanagerWebhookIn) -> dict:
         # V2.1-A closure:advisory lock 用独立连接持有,跨越整个事务直到提交之后
         # (同连接持锁会在 finally 先于 commit 释放,导致并发事务看不到最新实例)
         lock_conn = get_control_engine().connect()
-        lock_name = f"alertgw:{source}:{alert.fingerprint}"
+        lock_name = gateway_lock_name(source, alert.fingerprint)
         got = lock_conn.execute(text("SELECT GET_LOCK(:l, 5)"), {"l": lock_name}).scalar()
         if got != 1:
             lock_conn.close()
@@ -211,8 +212,12 @@ def process_alert_batch(source: str, payload: AlertmanagerWebhookIn) -> dict:
             logger.exception("alert %s 处理失败", alert.fingerprint)
             raise
         finally:
-            lock_conn.execute(text("SELECT RELEASE_LOCK(:l)"), {"l": lock_name})
-            lock_conn.close()
+            try:
+                lock_conn.execute(text("SELECT RELEASE_LOCK(:l)"), {"l": lock_name})
+            except Exception:  # noqa: BLE001 释放失败不覆盖业务异常、不阻止关连接
+                logger.warning("RELEASE_LOCK 失败(连接将关闭): %s", lock_name)
+            finally:
+                lock_conn.close()
         if action.startswith("created") or action == "advanced_resolved":
             counters["events"]["projected"] += 1
         elif action == "archived_late_firing":
