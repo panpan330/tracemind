@@ -18,8 +18,9 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from app.db.engine import get_control_engine
-from app.incident_gateway.fingerprint import (alert_instance_key, delivery_hash,
-                                              normalize_labels)
+from app.incident_gateway.fingerprint import (alert_instance_key, canonical_json,
+                                              delivery_hash, normalize_labels)
+from app.tools_core.errors import ToolBusinessError
 from app.incident_gateway.schemas import AlertmanagerWebhookIn
 
 logger = logging.getLogger(__name__)
@@ -65,14 +66,30 @@ def _insert_event_once(conn, *, source: str, fingerprint: str, instance_key: str
 def _upsert_instance(conn, *, instance_key: str, source: str, fingerprint: str,
                      starts_at, received_at, event_id: int, status: str,
                      ends_at) -> str:
-    """AlertInstance 单向投影(事务内 FOR UPDATE 串行化同实例并发投递)。
+    """AlertInstance 单向投影。
+
+    V2.1-A closure:
+    - 由调用方持有的 source+fingerprint advisory lock 串行化(跨事务直到提交后释放);
+    - 仅当 startsAt 晚于该 fingerprint 已有实例的最新 starts_at 时才创建新 FIRING
+      实例;未见过但更早的 FIRING 只归档事件(archived_late_firing),不建实例;
+    - resolved-only 建实例、FIRING→RESOLVED 单向 CAS 语义不变;
+    - RESOLVED 实例之后更晚 startsAt 的 FIRING 视为新 episode,可创建新实例。
     返回动作:created_firing/created_resolved/advanced_resolved/
-    touched_firing/touched_resolved/archived_late_firing。"""
+    touched_firing/touched_resolved/archived_late_firing。
+    """
     from sqlalchemy.exc import IntegrityError
 
     current = conn.execute(text(
         "SELECT current_status FROM alert_instance WHERE alert_instance_key=:ik "
         "FOR UPDATE"), {"ik": instance_key}).scalar()
+    if current is None and status == "firing":
+        # 同 fingerprint 的最新 starts_at 约束:不晚于已有实例 → 只归档
+        latest = conn.execute(text(
+            "SELECT MAX(starts_at) FROM alert_instance "
+            "WHERE source=:s AND external_fingerprint=:fp"),
+            {"s": source, "fp": fingerprint}).scalar()
+        if latest is not None and starts_at <= latest:
+            return "archived_late_firing"
     if current is None:
         try:
             conn.execute(text(
@@ -112,7 +129,21 @@ def _upsert_instance(conn, *, instance_key: str, source: str, fingerprint: str,
             "WHERE alert_instance_key=:ik"),
             {"ra": received_at, "eid": event_id, "ik": instance_key})
         return "touched_resolved"
-    return "archived_late_firing"      # 迟到旧 FIRING:只归档,不重新打开
+    # 迟到 FIRING:更晚 startsAt → 新 episode;否则只归档
+    latest = conn.execute(text(
+        "SELECT MAX(starts_at) FROM alert_instance "
+        "WHERE source=:s AND external_fingerprint=:fp"),
+        {"s": source, "fp": fingerprint}).scalar()
+    if starts_at <= latest:
+        return "archived_late_firing"
+    conn.execute(text(
+        "INSERT INTO alert_instance (alert_instance_key, source, "
+        "external_fingerprint, starts_at, current_status, resolved_at, "
+        "last_received_at, last_event_id, version) "
+        "VALUES (:ik, :source, :fp, :sa, 'FIRING', NULL, :ra, :eid, 1)"),
+        {"ik": instance_key, "source": source, "fp": fingerprint,
+         "sa": starts_at, "ra": received_at, "eid": event_id})
+    return "created_firing"
 
 
 def process_alert_batch(source: str, payload: AlertmanagerWebhookIn) -> dict:
@@ -137,16 +168,26 @@ def process_alert_batch(source: str, payload: AlertmanagerWebhookIn) -> dict:
 
         starts_at = _to_naive_utc(alert.startsAt)
         ends_at = _to_naive_utc(alert.endsAt)
-        starts_iso = alert.startsAt.isoformat()
+        # V2.1-A closure:先统一规范化为 naive UTC,再生成 instance_key 与 delivery_hash
+        # —— 同一时刻的 Z / +00:00 / 其他时区表达产生同一实例
+        starts_iso = starts_at.isoformat()
         instance_key = alert_instance_key(source, alert.fingerprint, starts_iso)
         normalized = {"status": alert.status, "labels": kept_labels,
                       "annotations": dict(alert.annotations),
                       "startsAt": starts_iso,
-                      "endsAt": alert.endsAt.isoformat() if alert.endsAt else None,
+                      "endsAt": ends_at.isoformat() if ends_at else None,
                       "fingerprint": alert.fingerprint}
         delivery = delivery_hash(normalized)
 
-        from app.incident_gateway.fingerprint import canonical_json
+        # V2.1-A closure:advisory lock 用独立连接持有,跨越整个事务直到提交之后
+        # (同连接持锁会在 finally 先于 commit 释放,导致并发事务看不到最新实例)
+        lock_conn = get_control_engine().connect()
+        lock_name = f"alertgw:{source}:{alert.fingerprint}"
+        got = lock_conn.execute(text("SELECT GET_LOCK(:l, 5)"), {"l": lock_name}).scalar()
+        if got != 1:
+            lock_conn.close()
+            raise ToolBusinessError("GATEWAY_LOCK_TIMEOUT",
+                                    f"获取告警实例锁超时: {lock_name}", retryable=True)
         try:
             with get_control_engine().begin() as conn:
                 event_id = _insert_event(
@@ -169,6 +210,9 @@ def process_alert_batch(source: str, payload: AlertmanagerWebhookIn) -> dict:
         except Exception:
             logger.exception("alert %s 处理失败", alert.fingerprint)
             raise
+        finally:
+            lock_conn.execute(text("SELECT RELEASE_LOCK(:l)"), {"l": lock_name})
+            lock_conn.close()
         if action.startswith("created") or action == "advanced_resolved":
             counters["events"]["projected"] += 1
         elif action == "archived_late_firing":

@@ -20,9 +20,18 @@ async def alertmanager_webhook(request: Request) -> dict:
     if not auth.startswith("Bearer ") or not _consteq(auth[len("Bearer "):].strip(), token):
         raise HTTPException(401, "unauthorized")
 
-    body = await request.body()
-    if len(body) > settings.alertmanager_max_body_bytes:
-        raise HTTPException(413, f"payload too large: {len(body)} bytes")
+    limit = settings.alertmanager_max_body_bytes
+    # V2.1-A closure:先查 Content-Length(存在且超限立即 413);
+    # 缺失/伪造时经 stream() 累计读取,超限立即中断 —— 超限请求不进入解析/服务/数据库
+    content_length = request.headers.get("content-length")
+    if content_length is not None and content_length.isdigit()             and int(content_length) > limit:
+        raise HTTPException(413, f"payload too large: content-length={content_length}")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf += chunk
+        if len(buf) > limit:
+            raise HTTPException(413, f"payload too large: >{limit} bytes")
+    body = bytes(buf)
     try:
         payload = AlertmanagerWebhookIn.model_validate_json(body)
     except ValueError as exc:

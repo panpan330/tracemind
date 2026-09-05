@@ -281,3 +281,174 @@ def test_webhook_accepts_valid_batch(api):
     assert body["received"] == 1
     assert body["created_incidents"] == [] and body["updated_incidents"] == []
     _cleanup(fingerprints=[fp])
+
+
+# ---------- V2.1-A closure:乱序 FIRING / 时区归一 / 并发一致性 ----------
+
+def _fp_payload(fp, starts_at, status="firing", **extra):
+    p = _firing_payload(fingerprint=fp, starts_at=starts_at, status=status, **extra)
+    return p
+
+
+def test_late_unseen_earlier_firing_archived_no_instance():
+    """10:00 FIRING 在先;未见过且更早的 09:00 FIRING → 只归档事件,不建实例。"""
+    fp = uuid.uuid4().hex[:12]
+    _process(_fp_payload(fp, "2026-09-04T10:00:00.000Z"))
+    out = _process(_fp_payload(fp, "2026-09-04T09:00:00.000Z"))
+    with Session(get_control_engine()) as s:
+        n_inst = s.execute(text("SELECT COUNT(*) FROM alert_instance "
+                                "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+        statuses = [r[0] for r in s.execute(text(
+            "SELECT current_status FROM alert_instance WHERE external_fingerprint=:f"),
+            {"f": fp}).fetchall()]
+        ev = s.execute(text("SELECT COUNT(*) FROM alert_event "
+                            "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+    assert n_inst == 1 and statuses == ["FIRING"]   # 只保留一个 FIRING 实例
+    assert ev == 2                                   # 09:00 事件已归档
+    assert out["events"]["archived_late_firing"] == 1
+    _cleanup(fingerprints=[fp])
+
+
+def test_later_starts_at_creates_new_instance():
+    """10:00 FIRING 后到达 11:00 FIRING(更晚)→ 可创建新实例。"""
+    fp = uuid.uuid4().hex[:12]
+    _process(_fp_payload(fp, "2026-09-04T10:00:00.000Z"))
+    _process(_fp_payload(fp, "2026-09-04T11:00:00.000Z"))
+    with Session(get_control_engine()) as s:
+        rows = s.execute(text("SELECT starts_at, current_status FROM alert_instance "
+                              "WHERE external_fingerprint=:f ORDER BY starts_at"),
+                         {"f": fp}).fetchall()
+    assert len(rows) == 2
+    assert rows[0].current_status == "FIRING" and rows[1].current_status == "FIRING"
+    _cleanup(fingerprints=[fp])
+
+
+def test_same_moment_different_timezone_single_instance():
+    """同一时刻的 Z 与 +02:00 表达 → 归一化后同一实例(第二个为精确重放)。"""
+    fp = uuid.uuid4().hex[:12]
+    _process(_fp_payload(fp, "2026-09-04T05:00:00.000Z"))
+    out = _process(_fp_payload(fp, "2026-09-04T07:00:00.000+02:00"))
+    with Session(get_control_engine()) as s:
+        n_inst = s.execute(text("SELECT COUNT(*) FROM alert_instance "
+                                "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+        n_ev = s.execute(text("SELECT COUNT(*) FROM alert_event "
+                              "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+    assert n_inst == 1 and n_ev == 1               # 同一时刻不产生第二个实例
+    assert out["events"]["duplicates"] == 1         # 规范化后 delivery_hash 相同
+    _cleanup(fingerprints=[fp])
+
+
+def test_concurrent_identical_deliveries_single_event_and_instance():
+    """10 个并发相同告警:最终只有 1 个 AlertEvent、1 个 AlertInstance。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    fp = uuid.uuid4().hex[:12]
+    payload = _firing_payload(fingerprint=fp)
+    model = AlertmanagerWebhookIn.model_validate(payload)
+
+    def _deliver(_):
+        return gateway_service.process_alert_batch("alertmanager", model)
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        outs = list(pool.map(_deliver, range(10)))
+    with Session(get_control_engine()) as s:
+        n_ev = s.execute(text("SELECT COUNT(*) FROM alert_event "
+                              "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+        n_inst = s.execute(text("SELECT COUNT(*) FROM alert_instance "
+                                "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+        ver = s.execute(text("SELECT version FROM alert_instance "
+                             "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+    assert n_ev == 1 and n_inst == 1 and ver == 1
+    assert sum(o["events"]["appended"] for o in outs) == 1
+    assert sum(o["events"]["duplicates"] for o in outs) == 9
+    _cleanup(fingerprints=[fp])
+
+
+def test_concurrent_firing_resolved_final_resolved():
+    """并发 FIRING/RESOLVED 混投:最终状态只能为 RESOLVED。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    fp = uuid.uuid4().hex[:12]
+    model_f = AlertmanagerWebhookIn.model_validate(
+        _fp_payload(fp, "2026-09-04T05:00:00.000Z"))
+    model_r = AlertmanagerWebhookIn.model_validate(
+        _fp_payload(fp, "2026-09-04T05:00:00.000Z", status="resolved",
+                    ends_at="2026-09-04T05:01:00.000Z"))
+
+    def _deliver(m):
+        return gateway_service.process_alert_batch("alertmanager", m)
+
+    jobs = [model_f, model_r] * 5
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        list(pool.map(_deliver, jobs))
+    with Session(get_control_engine()) as s:
+        st = s.execute(text("SELECT current_status FROM alert_instance "
+                            "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+        ver = s.execute(text("SELECT version FROM alert_instance "
+                             "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+    assert st == "RESOLVED" and ver == 2
+    _cleanup(fingerprints=[fp])
+
+
+def test_concurrent_various_starts_at_latest_wins():
+    """并发不同 startsAt:任何到达顺序下,实例创建序列的 starts_at 严格递增
+    (last_event_id 即创建顺序);最大 startsAt 的实例必为 FIRING。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    fp = uuid.uuid4().hex[:12]
+    starts = ["2026-09-04T09:00:00.000Z", "2026-09-04T11:00:00.000Z",
+              "2026-09-04T10:00:00.000Z", "2026-09-04T11:30:00.000Z"]
+    models = [AlertmanagerWebhookIn.model_validate(_fp_payload(fp, st)) for st in starts]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda m: gateway_service.process_alert_batch("alertmanager", m),
+                      models))
+    with Session(get_control_engine()) as s:
+        rows = s.execute(text(
+            "SELECT starts_at, current_status, last_event_id FROM alert_instance "
+            "WHERE external_fingerprint=:f ORDER BY last_event_id"), {"f": fp}).fetchall()
+        evs = s.execute(text("SELECT COUNT(*) FROM alert_event "
+                             "WHERE external_fingerprint=:f"), {"f": fp}).scalar()
+    assert evs == 4                                  # 每个到达都归档事件
+    assert rows[-1].current_status == "FIRING"       # 最后创建的 = 最晚 startsAt
+    assert rows[-1].starts_at == datetime(2026, 9, 4, 11, 30)
+    created = [r.starts_at for r in rows]
+    assert all(a < b for a, b in zip(created, created[1:]))  # 创建序列严格递增
+    _cleanup(fingerprints=[fp])
+
+
+# ---------- V2.1-A closure:请求体大小限制(真实字节数,不信任 Content-Length) ----------
+
+def test_webhook_forged_content_length_still_enforced(api):
+    """伪造较小的 Content-Length:实际字节超限仍 413,且不进入解析。"""
+    big = json.dumps(_firing_payload(fingerprint=uuid.uuid4().hex[:12])).encode()
+    big = big + b'{"pad":"' + b"x" * (settings.alertmanager_max_body_bytes + 4096) + b'"}'
+    r = api.post("/api/integrations/alertmanager/webhook", content=big,
+                 headers={"Authorization": "Bearer test-token-123",
+                          "Content-Type": "application/json",
+                          "Content-Length": "10"})   # 伪造
+    assert r.status_code == 413
+
+
+def test_webhook_chunked_oversize_without_content_length(api):
+    """无 Content-Length(分块传输):流式累计超限 → 413。"""
+    pad = b"x" * 4096
+    chunks = [b'{"junk":"' , pad, pad, pad, pad, pad, pad, pad, pad, pad, pad,
+              pad, pad, pad, pad, pad, pad, b'"}']
+
+    def stream():
+        yield from chunks
+
+    r = api.post("/api/integrations/alertmanager/webhook", content=stream(),
+                 headers={"Authorization": "Bearer test-token-123",
+                          "Content-Type": "application/json"})
+    assert r.status_code == 413
+
+
+def test_webhook_normal_payload_still_accepted_after_hardening(api):
+    fp = uuid.uuid4().hex[:12]
+    r = api.post("/api/integrations/alertmanager/webhook",
+                 json=_firing_payload(fingerprint=fp),
+                 headers={"Authorization": "Bearer test-token-123"})
+    assert r.status_code == 200
+    _cleanup(fingerprints=[fp])

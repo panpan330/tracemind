@@ -67,6 +67,24 @@ curl -s -X POST http://localhost:8000/api/integrations/alertmanager/webhook \
   -d '{"version":"4","status":"firing","receiver":"tracemind","alerts":[{"status":"firing","labels":{"alertname":"OrderOperationP95High","service":"order-service","operation":"ORDER_CREATE","environment":"demo"},"annotations":{"summary":"smoke"},"startsAt":"2026-09-04T05:00:00.000Z","fingerprint":"smoke001"}]}'
 ```
 
+## 混合拓扑安全启动(宿主机 ai-service + VM 网关/观测)
+
+混合部署下 ai-service 监听 `0.0.0.0:8000`(供 VM 侧 Alertmanager/Prometheus 访问),
+必须用 Windows 防火墙把 8000 的入站来源限制到 VM 网段,避免向局域网/公网暴露:
+
+```powershell
+# 管理员 PowerShell:只允许 VM 地址访问(本环境 VM=192.168.88.10,网段=192.168.88.0/24)
+netsh advfirewall firewall delete rule name="TraceMind ai-service 8000"
+netsh advfirewall firewall add rule name="TraceMind ai-service 8000" dir=in action=allow   protocol=TCP localport=8000 remoteip=192.168.88.10/32 profile=any
+```
+
+- 实测说明:VMware VMnet8 适配器没有 NLA 网络类别(Get-NetConnectionProfile 不列出),
+  `profile=private` 的规则**不会匹配**该适配器流量,因此 Profile 保持 any、
+  用 RemoteIP 收紧来源(如需更宽,可放宽到 192.168.88.0/24)。
+- 若 VM 地址变化(DHCP),同步更新防火墙规则的 remoteip。
+- 鉴权不因此放松:webhook 仍强制 Bearer Token;三个条件(0.0.0.0 绑定 + 防火墙
+  来源收紧 + token)必须同时满足,缺一不可。
+
 ## V2.1-B 待办(未实现)
 
 Incident 聚合事务、`queued` Run 与 Dispatcher、`incident_alert` 关联、
