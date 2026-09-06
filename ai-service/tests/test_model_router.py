@@ -36,6 +36,9 @@ def test_route_dynamic_picks_best_candidate(monkeypatch):
     from app.agent import model_scorer
     monkeypatch.setattr(settings, "dynamic_routing", True)
     monkeypatch.setattr(settings, "select_tool_candidates", "qwen3.7-flash,qwen3.8-max")
+    # V2.1-A micro:禁用 ε-greedy 探索(默认 0.1 会以 ε 概率合法选择低分候选,
+    # 使本测试非确定性地失败);探索行为由 test_epsilon_one_explores_with_seed 覆盖
+    monkeypatch.setattr(settings, "routing_epsilon", 0.0)
     sc = model_scorer.ModelScorer()
     for _ in range(10):
         sc.update("select_tool", "qwen3.7-flash", {"success": True, "latency_ms": 50, "cost": 0.001})
