@@ -1,6 +1,8 @@
 """仓储/服务层补覆盖单测:lock_observation_repo / slow_query_service / metrics_service(全部 mock,不触 DB)。"""
 import pytest
 
+from app.tools_core.errors import ToolBusinessError
+
 import app.repositories.lock_observation_repo as lor
 import app.services.slow_query_service as sqs
 from app.repositories import observation_repo
@@ -144,7 +146,9 @@ def test_slow_query_no_baseline_no_current(monkeypatch):
         inc_id = inc.id
     run = run_repo.create_run(inc_id)   # 无基线
     monkeypatch.setattr(sqs, "_fetch_current_digests", lambda: {})
-    assert sqs.list_expensive_digests(incident_id=inc_id, agent_run_id=run.id) == []
+    # V2.1-B closure:无基线 → BASELINE_INSUFFICIENT(禁止累计冒充增量)
+    with pytest.raises(ToolBusinessError, match="BASELINE_INSUFFICIENT"):
+        sqs.list_expensive_digests(incident_id=inc_id, agent_run_id=run.id)
 
 
 # ---------- metrics_service ----------

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 
 from app.db.engine import get_readonly_engine
@@ -22,10 +23,15 @@ async def start_investigation(incident_id: int):
     baseline = capture_digest_baseline(get_readonly_engine())
     # V2.0-A closure:create_run 在自身事务内 FOR UPDATE 重读 Incident 并冻结,
     # 避免"读取 Incident → 创建 Run"窗口期上下文变化;不完整 → 422 fail closed
+    # V2.1-B:手动 Run 记 trigger_source='manual' 并占 active_run_key(与自动 Run 互斥)
     try:
-        run = run_repo.create_run(incident_id, baseline=baseline)
+        run = run_repo.create_run(incident_id, baseline=baseline,
+                                  trigger_source="manual",
+                                  active_run_key=f"incident:{incident_id}")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    except IntegrityError as exc:
+        raise HTTPException(409, "incident already has an active run") from exc
     from app.services import runner
     await runner.start_investigation(incident_id, run.id, run.thread_id)
     return {"run_id": run.id, "thread_id": run.thread_id, "status": "investigating"}

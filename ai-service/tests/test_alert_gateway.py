@@ -25,6 +25,16 @@ from app.incident_gateway.schemas import AlertmanagerWebhookIn
 
 # ---------- fixtures / helpers ----------
 
+
+@pytest.fixture(autouse=True)
+def _clean_demo_group():
+    """共享 demo group 从零开始(共享测试库;否则前一测试的 OPEN Incident 被并入,
+    created_incidents 断言不确定)。"""
+    from tests.test_alert_aggregation import _purge_demo_group
+    _purge_demo_group()
+    yield
+    _purge_demo_group()
+
 def _firing_payload(*, fingerprint=None, starts_at="2026-09-04T05:00:00.000Z",
                     status="firing", labels=None, ends_at=None) -> dict:
     return {
@@ -42,12 +52,29 @@ def _firing_payload(*, fingerprint=None, starts_at="2026-09-04T05:00:00.000Z",
 
 
 def _cleanup(keys=None, fingerprints=None):
+    """清理告警与 B 阶段聚合产物(Run/关联/Incident;顺序:子→父)。"""
     with Session(get_control_engine()) as s:
         if fingerprints:
+            fps = tuple(fingerprints)
+            s.execute(text(
+                "DELETE agent_run FROM agent_run JOIN incident ON "
+                "agent_run.incident_id = incident.id WHERE incident.id IN "
+                "(SELECT incident_id FROM incident_alert ia JOIN alert_instance ai ON "
+                "ai.alert_instance_key = ia.alert_instance_key "
+                "WHERE ai.external_fingerprint IN :f)"), {"f": fps})
+            s.execute(text(
+                "DELETE incident FROM incident WHERE incident.id IN "
+                "(SELECT incident_id FROM incident_alert ia JOIN alert_instance ai ON "
+                "ai.alert_instance_key = ia.alert_instance_key "
+                "WHERE ai.external_fingerprint IN :f)"), {"f": fps})
+            s.execute(text(
+                "DELETE FROM incident_alert WHERE alert_instance_key IN "
+                "(SELECT alert_instance_key FROM alert_instance "
+                "WHERE external_fingerprint IN :f)"), {"f": fps})
             s.execute(text("DELETE FROM alert_instance WHERE external_fingerprint IN :f"),
-                      {"f": tuple(fingerprints)})
+                      {"f": fps})
             s.execute(text("DELETE FROM alert_event WHERE external_fingerprint IN :f"),
-                      {"f": tuple(fingerprints)})
+                      {"f": fps})
         s.commit()
 
 
@@ -120,7 +147,8 @@ def _process(payload):
 def test_firing_creates_event_and_firing_instance():
     fp = uuid.uuid4().hex[:12]
     out = _process(_firing_payload(fingerprint=fp))
-    assert out["received"] == 1 and out["created_incidents"] == []
+    # V2.1-B:FIRING 聚合创建 Incident(created_incidents 恒空是 V2.1-A 语义)
+    assert out["received"] == 1 and len(out["created_incidents"]) == 1
     assert out["events"]["appended"] == 1 and out["events"]["duplicates"] == 0
     with Session(get_control_engine()) as s:
         inst = s.execute(text(
@@ -279,7 +307,8 @@ def test_webhook_accepts_valid_batch(api):
     assert r.status_code == 200
     body = r.json()
     assert body["received"] == 1
-    assert body["created_incidents"] == [] and body["updated_incidents"] == []
+    # V2.1-B:FIRING 聚合创建 Incident(不再恒空;Agent 由 Dispatcher 启动,不在此处)
+    assert len(body["created_incidents"]) == 1
     _cleanup(fingerprints=[fp])
 
 

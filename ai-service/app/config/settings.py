@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     rag_final_top_k: int = 3
     rag_score_threshold: float = 0.0           # 校准集确定后冻结进 evaluation_policy.yaml
 
+    # ---- V2.1-B 聚合与调度 ----
+    dispatch_enabled: bool = True            # 测试环境按需关闭
+    dispatch_interval_seconds: float = 2.0
+    dispatch_lease_seconds: int = 30
+    max_concurrent_runs: int = 1             # SQLite checkpointer 下代码强制为 1
+
     # ---- V2.1-A Alertmanager 接入 ----
     alertmanager_webhook_token: str = ""      # 空 = webhook 禁用(403);Bearer 校验
     alertmanager_alertname_allowlist: str = "OrderOperationP95High"

@@ -15,13 +15,18 @@ V2.1-A 不创建 Incident、不启动 Run(响应 created/updated 恒为空;聚�
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.engine import get_control_engine
+from app.db.models import AgentRun, Incident, IncidentAlert
+from sqlalchemy.orm import Session
 from app.incident_gateway.fingerprint import (alert_instance_key, canonical_json,
                                               delivery_hash, gateway_lock_name,
                                               normalize_labels)
 from app.tools_core.errors import ToolBusinessError
+from app.tools_core.errors import ToolBusinessError as _TBE
+from app.incident_gateway.registry import group_key_hash, resolve_alert
 from app.incident_gateway.schemas import AlertmanagerWebhookIn
 
 logger = logging.getLogger(__name__)
@@ -64,7 +69,7 @@ def _insert_event_once(conn, *, source: str, fingerprint: str, instance_key: str
     return int(res.lastrowid)
 
 
-def _upsert_instance(conn, *, instance_key: str, source: str, fingerprint: str,
+def upsert_instance(conn, *, instance_key: str, source: str, fingerprint: str,
                      starts_at, received_at, event_id: int, status: str,
                      ends_at) -> str:
     """AlertInstance 单向投影。
@@ -147,84 +152,213 @@ def _upsert_instance(conn, *, instance_key: str, source: str, fingerprint: str,
     return "created_firing"
 
 
-def process_alert_batch(source: str, payload: AlertmanagerWebhookIn) -> dict:
-    """处理一批 Alertmanager 告警;返回方案约定的响应结构 + 事件明细计数。"""
-    allowlist = {a.strip() for a in settings_allowlist().split(",") if a.strip()}
-    received_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    counters = {"received": len(payload.alerts), "ignored": 0, "created_incidents": [],
-                "updated_incidents": [], "events": {"appended": 0, "duplicates": 0,
-                                                     "archived_late_firing": 0,
-                                                     "projected": 0}}
-    for alert in payload.alerts:
-        labels = dict(alert.labels)
-        alertname = labels.get("alertname")
-        if alertname not in allowlist:
-            counters["ignored"] += 1
-            continue
-        kept_labels, violations = normalize_labels(labels)
-        if violations or "alertname" not in kept_labels:
-            logger.warning("alert %s 边界违规被忽略: %s", alert.fingerprint, violations)
-            counters["ignored"] += 1
-            continue
-
-        starts_at = _to_naive_utc(alert.startsAt)
-        ends_at = _to_naive_utc(alert.endsAt)
-        # V2.1-A closure:先统一规范化为 naive UTC,再生成 instance_key 与 delivery_hash
-        # —— 同一时刻的 Z / +00:00 / 其他时区表达产生同一实例
-        starts_iso = starts_at.isoformat()
-        instance_key = alert_instance_key(source, alert.fingerprint, starts_iso)
-        normalized = {"status": alert.status, "labels": kept_labels,
-                      "annotations": dict(alert.annotations),
-                      "startsAt": starts_iso,
-                      "endsAt": ends_at.isoformat() if ends_at else None,
-                      "fingerprint": alert.fingerprint}
-        delivery = delivery_hash(normalized)
-
-        # V2.1-A closure:advisory lock 用独立连接持有,跨越整个事务直到提交之后
-        # (同连接持锁会在 finally 先于 commit 释放,导致并发事务看不到最新实例)
-        lock_conn = get_control_engine().connect()
-        lock_name = gateway_lock_name(source, alert.fingerprint)
-        got = lock_conn.execute(text("SELECT GET_LOCK(:l, 5)"), {"l": lock_name}).scalar()
-        if got != 1:
-            lock_conn.close()
-            raise ToolBusinessError("GATEWAY_LOCK_TIMEOUT",
-                                    f"获取告警实例锁超时: {lock_name}", retryable=True)
-        try:
-            with get_control_engine().begin() as conn:
-                event_id = _insert_event(
-                    conn, source=source, fingerprint=alert.fingerprint,
-                    instance_key=instance_key, delivery=delivery,
-                    status=alert.status, starts_at=starts_at, ends_at=ends_at,
-                    received_at=received_at,
-                    labels_json=canonical_json(kept_labels),
-                    annotations_json=canonical_json(dict(alert.annotations)),
-                    payload_json=canonical_json(normalized))
-                if event_id is None:
-                    counters["events"]["duplicates"] += 1
-                    continue          # 精确重放:事件与投影均不再推进
-                counters["events"]["appended"] += 1
-                action = _upsert_instance(
-                    conn, instance_key=instance_key, source=source,
-                    fingerprint=alert.fingerprint, starts_at=starts_at,
-                    received_at=received_at, event_id=event_id,
-                    status=alert.status, ends_at=ends_at)
-        except Exception:
-            logger.exception("alert %s 处理失败", alert.fingerprint)
-            raise
-        finally:
-            try:
-                lock_conn.execute(text("SELECT RELEASE_LOCK(:l)"), {"l": lock_name})
-            except Exception:  # noqa: BLE001 释放失败不覆盖业务异常、不阻止关连接
-                logger.warning("RELEASE_LOCK 失败(连接将关闭): %s", lock_name)
-            finally:
-                lock_conn.close()
-        if action.startswith("created") or action == "advanced_resolved":
-            counters["events"]["projected"] += 1
-        elif action == "archived_late_firing":
-            counters["events"]["archived_late_firing"] += 1
-    return counters
-
-
 def settings_allowlist() -> str:
     from app.config import settings
     return settings.alertmanager_alertname_allowlist
+
+
+MAX_TX_RETRIES = 3
+
+
+def _insert_incident(session, resolved, group_key, received_at, labels, annotations):
+    """新建聚合 Incident(OPEN/FIRING/occurrence=1)。故障注入点。"""
+    incident = Incident(
+        title=f"[{resolved.environment}] {resolved.alertname} on {resolved.service}",
+        severity=resolved.severity, service_ref=resolved.service,
+        affected_operation_ref=resolved.operation, status="created",
+        source="alertmanager", alert_name=resolved.alertname,
+        environment=resolved.environment, alert_status="FIRING",
+        lifecycle_status="OPEN", group_key=group_key, open_group_key=group_key,
+        first_seen_at=received_at, last_seen_at=received_at, occurrence_count=1,
+        labels_json=labels, annotations_json=annotations)
+    session.add(incident)
+    session.flush()
+    return incident
+
+
+def _link_incident_alert(session, incident_id, instance_key):
+    """权威关联(实例键唯一;重复关联由唯一键约束兜底)。故障注入点。"""
+    session.add(IncidentAlert(incident_id=incident_id,
+                              alert_instance_key=instance_key))
+    session.flush()
+
+
+def _insert_queued_run(session, incident):
+    """新建 Incident 的首个 queued Run(alertmanager,基线 None)。故障注入点。"""
+    from app.repositories.run_repo import _insert_run_in_session
+
+    return _insert_run_in_session(
+        session, incident, baseline=None, trigger_source="alertmanager",
+        status="queued", active_run_key=f"incident:{incident.id}")
+
+
+def _linked_incident_id(session, instance_key):
+    """权威关联查询(incident_alert)。"""
+    return session.scalars(text(
+        "SELECT incident_id FROM incident_alert WHERE alert_instance_key=:ik "
+        "FOR UPDATE"), {"ik": instance_key}).first()
+
+
+def _firing_instances_remaining(session, incident_id):
+    """resolved 汇总:任一关联实例仍 FIRING → Incident 保持 FIRING(复核修正 1)。"""
+    return session.execute(text(
+        "SELECT COUNT(*) FROM incident_alert ia "
+        "JOIN alert_instance ai ON ai.alert_instance_key = ia.alert_instance_key "
+        "WHERE ia.incident_id = :lid AND ai.current_status = 'FIRING'"),
+        {"lid": incident_id}).scalar() or 0
+
+
+def _is_group_conflict_or_deadlock(exc):
+    """open_group_key 唯一冲突或死锁(整事务重试;其余异常不重试)。"""
+    msg = str(exc).lower()
+    return "uk_incident_open_group" in msg or "deadlock" in msg or "1213" in msg
+
+
+def _process_one(source, alert, received_at, allowlist):
+    """单条告警:事件 + 投影 + 聚合 + 关联 + queued Run(同一 Session 事务;
+    open_group_key 冲突/死锁 → 整事务回滚 + 有上限重试,失败 Session 不复用)。"""
+    labels = dict(alert.labels)
+    alertname = labels.get("alertname")
+    if alertname not in allowlist:
+        return {"received": 1, "ignored": 1, "reason": "alertname_not_allowed"}
+    kept, violations = normalize_labels(labels)
+    if violations or "alertname" not in kept:
+        return {"received": 1, "ignored": 1, "reason": "label_bounds"}
+    resolved = resolve_alert(kept)   # 服务端映射;None → 归档+投影照常但不聚合(V2.1-B §四)
+    starts_at = _to_naive_utc(alert.startsAt)
+    ends_at = _to_naive_utc(alert.endsAt)
+    starts_iso = starts_at.isoformat()   # 已归一化 UTC(Z/+00:00/其他时区同刻同实例)
+    instance_key = alert_instance_key(source, alert.fingerprint, starts_iso)
+    normalized = {"status": alert.status, "labels": kept,
+                  "annotations": dict(alert.annotations), "startsAt": starts_iso,
+                  "endsAt": ends_at.isoformat() if ends_at else None,
+                  "fingerprint": alert.fingerprint}
+    delivery = delivery_hash(normalized)
+
+    # advisory lock(独立连接)按 source+fingerprint 串行化,跨事务持有直到提交后释放
+    # (同 group 不同 fingerprint 由 open_group_key 唯一裁决 + 整事务重试收敛)
+    lock_conn = get_control_engine().connect()
+    lock_name = gateway_lock_name(source, alert.fingerprint)
+    got = lock_conn.execute(text("SELECT GET_LOCK(:l, 5)"), {"l": lock_name}).scalar()
+    if got != 1:
+        lock_conn.close()
+        raise ToolBusinessError("GATEWAY_LOCK_TIMEOUT",
+                                f"获取告警实例锁超时: {lock_name}", retryable=True)
+    last_exc = None
+    try:
+        for _attempt in range(1, MAX_TX_RETRIES + 1):
+            session = Session(get_control_engine())
+            try:
+                with session.begin():
+                    event_id = _insert_event(
+                        session, source=source, fingerprint=alert.fingerprint,
+                        instance_key=instance_key, delivery=delivery,
+                        status=alert.status, starts_at=starts_at, ends_at=ends_at,
+                        received_at=received_at, labels_json=canonical_json(kept),
+                        annotations_json=canonical_json(dict(alert.annotations)),
+                        payload_json=canonical_json(normalized))
+                    if event_id is None:
+                        return {"received": 1, "events": {"duplicates": 1}}
+                    action = upsert_instance(
+                        session, instance_key=instance_key, source=source,
+                        fingerprint=alert.fingerprint, starts_at=starts_at,
+                        received_at=received_at, event_id=event_id,
+                        status=alert.status, ends_at=ends_at)
+                    if action == "archived_late_firing":
+                        return {"received": 1, "events": {"archived_late_firing": 1}}
+                    out = {"received": 1, "events": {"appended": 1}}
+                    if resolved is None:
+                        # 服务端映射失败:事件+实例照常归档/投影,但不聚合、不建
+                        # Run、不计 occurrence(复核意见 6 的唯一语义)
+                        out["ignored"] = 1
+                        out["reason"] = "incomplete_labels"
+                    linked_id = _linked_incident_id(session, instance_key)
+                    incident = None
+                    is_new_incident = False
+                    if action in ("created_firing", "touched_firing") and \
+                            resolved is not None:
+                        group_key = group_key_hash(
+                            source, resolved.alertname, resolved.environment,
+                            resolved.service, resolved.operation)
+                        if linked_id is not None:
+                            incident = session.get(Incident, linked_id)
+                            incident.occurrence_count += 1
+                            incident.last_seen_at = received_at
+                            incident.alert_status = "FIRING"
+                        else:
+                            incident = session.scalars(
+                                select(Incident).where(
+                                    Incident.open_group_key == group_key
+                                ).with_for_update()).first()
+                            if incident is None:
+                                incident = _insert_incident(
+                                    session, resolved, group_key, received_at,
+                                    kept, dict(alert.annotations))
+                                is_new_incident = True
+                            else:
+                                incident.occurrence_count += 1
+                                incident.last_seen_at = received_at
+                                incident.alert_status = "FIRING"
+                        _link_incident_alert(session, incident.id, instance_key)
+                    if action in ("advanced_resolved", "touched_resolved"):
+                        if linked_id is None:
+                            linked_id = _linked_incident_id(session, instance_key)
+                        if linked_id is not None:
+                            incident = session.get(Incident, linked_id)
+                            # resolved 汇总按实例全集:任一关联实例仍 FIRING →
+                            # 保持 FIRING;全部非 FIRING → RESOLVED
+                            # (不关 lifecycle、不清 open_group_key、无 SELF_RECOVERED)
+                            if _firing_instances_remaining(session, linked_id) == 0:
+                                incident.alert_status = "RESOLVED"
+                    if (is_new_incident and resolved is not None
+                            and action == "created_firing"):
+                        _insert_queued_run(session, incident)
+                    if incident is not None:
+                        if is_new_incident:
+                            out["created_incidents"] = [incident.id]
+                        else:
+                            out["updated_incidents"] = [incident.id]
+                    return out
+            except (IntegrityError, OperationalError) as exc:
+                last_exc = exc
+                session.close()   # 失败 Session 不复用(禁止在失败 Session 中继续查询)
+                if not _is_group_conflict_or_deadlock(exc):
+                    raise
+        raise ToolBusinessError(
+            "AGGREGATION_RETRY_EXHAUSTED",
+            f"聚合事务重试 {MAX_TX_RETRIES} 次仍冲突: {last_exc}", retryable=True)
+    finally:
+        try:
+            lock_conn.execute(text("SELECT RELEASE_LOCK(:l)"), {"l": lock_name})
+        except Exception:  # noqa: BLE001 释放失败不覆盖业务异常、不阻止关连接
+            logger.warning("RELEASE_LOCK 失败(连接将关闭): %s", lock_name)
+        finally:
+            lock_conn.close()
+
+
+def settings_allowlist():
+    from app.config import settings
+    return settings.alertmanager_alertname_allowlist
+
+
+def process_alert_batch(source, payload):
+    """处理一批 Alertmanager 告警;返回方案约定的响应结构 + 事件明细计数。
+    V2.1-B:事件/投影/聚合/关联/queued Run 同一事务(Webhook 仅快速持久化,
+    Agent 由 Dispatcher 启动)。"""
+    allowlist = {a.strip() for a in settings_allowlist().split(",") if a.strip()}
+    received_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    counters = {"received": len(payload.alerts), "ignored": 0,
+                "created_incidents": [], "updated_incidents": [], "reasons": [],
+                "events": {"appended": 0, "duplicates": 0,
+                           "archived_late_firing": 0}}
+    for alert in payload.alerts:
+        out = _process_one(source, alert, received_at, allowlist)
+        if out.get("ignored"):
+            counters["ignored"] += 1
+            if out.get("reason"):
+                counters["reasons"].append(out["reason"])
+        for key in ("created_incidents", "updated_incidents"):
+            counters[key].extend(out.get(key) or [])
+        for k, v in (out.get("events") or {}).items():
+            counters["events"][k] = counters["events"].get(k, 0) + v
+    return counters

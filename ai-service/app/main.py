@@ -9,7 +9,8 @@ import app.tools  # noqa: E402,F401
 from app.api import (approvals, demo, evals, incidents, integrations,
                      observation, replay, runs, stream)  # noqa: E402
 from app.mcp.client import McpClientManager, set_mcp_client  # noqa: E402
-from app.services import runner  # noqa: E402
+from app.config import settings
+from app.services import dispatcher, runner  # noqa: E402
 from app.services.approval_scanner import scanner_loop  # noqa: E402
 
 mcp_manager: McpClientManager | None = None
@@ -28,9 +29,19 @@ async def lifespan(app: FastAPI):
     await mcp_manager.start()
     set_mcp_client(mcp_manager)
     await runner.recover_pending_runs()  # 启动先恢复未完成任务,再接收流量
+    if settings.dispatch_enabled:
+        app.state.dispatch_task = asyncio.create_task(dispatcher.dispatch_loop())
     task = asyncio.create_task(scanner_loop())
     yield
-    task.cancel()
+    # V2.1-B:应用关闭时取消 Dispatcher,防残留后台任务
+    task = getattr(app.state, "dispatch_task", None)
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    task.cancel()              # scanner_loop(原有后台任务)
     await mcp_manager.stop()
     set_mcp_client(None)
     mcp_manager = None

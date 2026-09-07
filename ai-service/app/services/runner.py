@@ -39,6 +39,11 @@ _saver: SqliteSaver | None = None
 _tasks: dict[int, asyncio.Task] = {}
 
 
+def pending_task_count() -> int:
+    """Dispatcher 容量计算:当前存活图任务数(含恢复启动的任务)。"""
+    return len(_tasks)
+
+
 def get_saver() -> SqliteSaver:
     global _saver
     if _saver is None:

@@ -32,6 +32,19 @@ class Incident(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # V1.1 状态属性(degraded 是属性不是主状态)
     termination_reason: Mapped[Optional[str]] = mapped_column(String(64))
+    # V2.1-B:告警聚合(三状态分离:alert_status/lifecycle_status 与调查 status 解耦)
+    source: Mapped[str] = mapped_column(String(32), default="manual")
+    alert_name: Mapped[Optional[str]] = mapped_column(String(128))
+    environment: Mapped[Optional[str]] = mapped_column(String(32))
+    alert_status: Mapped[Optional[str]] = mapped_column(String(16))
+    lifecycle_status: Mapped[Optional[str]] = mapped_column(String(16))
+    group_key: Mapped[Optional[str]] = mapped_column(String(64))
+    open_group_key: Mapped[Optional[str]] = mapped_column(String(64))
+    first_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(3))
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(3))
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=0)
+    labels_json: Mapped[Optional[dict]] = mapped_column(JSON)
+    annotations_json: Mapped[Optional[dict]] = mapped_column(JSON)
     degraded: Mapped[bool] = mapped_column(default=False)
     degradation_reasons: Mapped[Optional[str]] = mapped_column(String(500))
 
@@ -54,6 +67,13 @@ class AgentRun(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # V1.5 回放:序号分配与版本冻结;V2.0-A 版本冻结前移至 Run 创建事务
     next_replay_sequence: Mapped[int] = mapped_column(Integer, default=0)
+    # V2.1-B:聚合调度(trigger_source/active_run_key/dispatch 租约)
+    trigger_source: Mapped[str] = mapped_column(String(16), default="manual")
+    active_run_key: Mapped[Optional[str]] = mapped_column(String(64))
+    dispatch_status: Mapped[str] = mapped_column(String(16), default="DISPATCHED")
+    lease_owner: Mapped[Optional[str]] = mapped_column(String(64))
+    lease_until: Mapped[Optional[datetime]] = mapped_column(DateTime(3))
+    dispatch_attempts: Mapped[int] = mapped_column(Integer, default=0)
     expected_policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
     policy_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
     capability_bundle_version: Mapped[Optional[str]] = mapped_column(String(32))
@@ -250,3 +270,12 @@ class IncidentReplayStep(Base):
     snapshot_hash: Mapped[Optional[str]] = mapped_column(String(64))
     payload_size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class IncidentAlert(Base):
+    """V2.1-B:Incident ↔ AlertInstance 权威关联(实例键唯一,一实例至多属一 Incident)。"""
+    __tablename__ = "incident_alert"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    alert_instance_key: Mapped[str] = mapped_column(String(190), nullable=False,
+                                                    unique=True)

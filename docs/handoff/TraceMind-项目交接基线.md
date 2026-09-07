@@ -501,3 +501,38 @@ cd web && npm run dev
 8. [ ] 核对 §12 已知问题清单,确认哪些已修复/仍存在。
 
 > **不要**基于历史对话记忆直接声称能力已实现/已验证;一切以当前代码 + 重新执行测试为准。
+
+
+## 13. V2.1-B 聚合与调度(2026-09-08)
+
+实施计划:docs/superpowers/plans/2026-09-04-v2.1-b-aggregation-dispatcher.md(v3,含 5 项确定性修正)。
+
+- **migration 011**(追加式):incident 聚合列(source/alert_name/environment/alert_status/
+  lifecycle_status/group_key CHAR(64)/open_group_key 唯一/first_seen_at/last_seen_at/
+  occurrence_count/labels_json/annotations_json);incident_alert 权威关联(实例键唯一);
+  agent_run 调度列(trigger_source/active_run_key 唯一/dispatch_status/lease_owner/
+  lease_until/dispatch_attempts)。
+- **聚合原子事务**:事件+投影+Incident+关联+queued Run 同一 Session 事务
+  (`_insert_run_in_session` 不自行提交);open_group_key 唯一裁决 + 冲突/死锁整事务
+  有上限重试(3 次,失败 Session 不复用);故障注入测试 ×4(回滚无孤儿、重试收敛)。
+- **occurrence 矩阵**:重放不计;created/touched_firing +1;archived_late_firing 与
+  resolved 类不计;resolved 汇总按实例全集(任一 FIRING → Incident 仍 FIRING)。
+- **服务端映射**:`incident_gateway/registry.py`(ALERT_RULES 组合校验、ENVIRONMENTS
+  白名单、SEVERITY_MAP);group_key = canonical_json 结构化哈希(无分隔符拼接)。
+- **Dispatcher**:`services/dispatcher.py`,READY→CLAIMED(租约 CAS,过期 CLAIMED 可重领,
+  DISPATCHED 永不重领)→DISPATCHED(CAS 校验 owner+租约,过期原 owner 不得启动);
+  max_concurrent_runs 按 runner 存活任务真实计容量(SQLite 下强制 1);lifespan 启动/
+  cancel+await;settings:dispatch_enabled/interval/lease/max_concurrent_runs。
+- **基线语义**:alertmanager Run 基线=None;digest 服务抛 BASELINE_INSUFFICIENT;
+  E3 passed=None(unknown),capabilities extract_facts 对 None 不输出 Fact —— 无基线
+  禁止确认根因(自动 Run 走 needs_human);V2.1-C 用独立 012 一次写入历史基线快照。
+- **不完整标签唯一语义**:归档事件+投影实例,不聚合、不建 Run、计 ignored(reason)。
+
+测试:test_alert_aggregation.py(10)、test_dispatcher.py(8)、test_migration_011.py;
+网关测试适配(B 后 FIRING 创建 Incident,清理含聚合产物)。
+
+**最终验收结果**:全量 **634 passed / 1 skipped 零失败**(V2.0-B 的 611 基线 + 23 项 B 新测试);
+E3 unknown 语义经 Dispatcher 集成测试验证(无基线 Run 不确认根因,needs_human 终态,active_run_key 释放);
+test_slow_query_no_baseline_no_current 等既有测试适配新契约(断言语义保留)。
+注意:本切片后 alertmanager 告警会真实创建 Incident(此前恒空);Dispatcher 默认开启,
+测试环境通过 _drain_stale_queued/_purge_demo_group 夹具保证确定性。

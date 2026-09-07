@@ -20,7 +20,14 @@ def _load_run_baseline(incident_id: int, agent_run_id: int) -> dict:
             "RUN_CONTEXT_UNRESOLVED",
             f"agent_run {agent_run_id} 缺失或不属于 incident {incident_id}", retryable=False)
     baseline = run.incident_digest_baseline
-    return baseline if isinstance(baseline, dict) else {}
+    if not isinstance(baseline, dict) or not baseline:
+        # V2.1-B closure:无基线时禁止把累计值当增量证据(自动 Run 无历史基线)
+        from app.tools_core.errors import ToolBusinessError
+        raise ToolBusinessError(
+            "BASELINE_INSUFFICIENT",
+            f"agent_run {agent_run_id} 无 digest 基线,E3 记为 unknown(禁止累计冒充增量)",
+            retryable=False)
+    return baseline
 
 
 def _fetch_current_digests() -> dict[str, dict]:

@@ -139,11 +139,15 @@ class BlockingTransactionCapability(DiagnosticCapability):
         for ev_key, fact in (("l1", "F_TARGET_LOCK_WAIT"), ("l2", "F_BLOCKER_LONG_RUNNING")):
             ev = evidence_map.get(ev_key)
             if ev is not None:
-                out[fact] = bool(ev.get("passed"))
+                passed = ev.get("passed")
+                if passed is None:
+                    continue   # unknown 不输出
+                out[fact] = bool(passed)
         # F_BLOCKER_CONFIRMED:目标锁等待 + 阻塞事务详情复合成立(评估器 L1/L2 各自判定)
         if evidence_map.get("l1") is not None and evidence_map.get("l2") is not None:
-            out["F_BLOCKER_CONFIRMED"] = bool(evidence_map["l1"].get("passed")
-                                              and evidence_map["l2"].get("passed"))
+            p1, p2 = evidence_map["l1"].get("passed"), evidence_map["l2"].get("passed")
+            if p1 is not None and p2 is not None:
+                out["F_BLOCKER_CONFIRMED"] = bool(p1 and p2)
         return out
 
     def exclusion(self, facts: dict[str, bool]) -> bool:

@@ -65,6 +65,10 @@ def evaluate_trace(result: dict, state: dict) -> list[dict]:
 
 
 def evaluate_digests(result: dict, state: dict) -> list[dict]:
+    # V2.1-B closure:无基线 → E3 unknown(passed=None),禁止确认根因
+    if result.get("error_code") == "BASELINE_INSUFFICIENT":
+        return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
+                 "content": {"baseline_insufficient": True}, "passed": None}]
     digests = (result.get("data") or []) if result.get("success") else []
     top = digests[0] if digests else {}
     op = state.get("affected_operation_ref") or ""
@@ -128,7 +132,10 @@ class MissingIndexCapability(DiagnosticCapability):
         for ev_key, fact in _FACT_MAP.items():
             ev = evidence_map.get(ev_key)
             if ev is not None:
-                out[fact] = bool(ev.get("passed"))
+                passed = ev.get("passed")
+                if passed is None:
+                    continue   # V2.1-B closure:passed=None = unknown,不输出 Fact
+                out[fact] = bool(passed)
         return out
 
     def exclusion(self, facts: dict[str, bool]) -> bool:
