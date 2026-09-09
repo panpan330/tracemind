@@ -49,7 +49,16 @@ async def dispatch_once() -> int:
             continue     # 租约过期/被回收:换下一个(不计容量)
         logger.info("dispatcher 领取 queued run %s (incident=%s)",
                     run.id, run.incident_id)
-        await runner.start_investigation(run.incident_id, run.id, run.thread_id)
+        try:
+            await runner.start_investigation(run.incident_id, run.id, run.thread_id)
+        except Exception:  # noqa: BLE001
+            # V2.1-B closure:DISPATCHED 后、任务注册前失败 → 安全重试
+            # (回退 queued/READY 清租约,下一轮重新领取)。失败同样消耗本 tick
+            # 容量,避免 start 持续失败时 while 循环无限领取/回退。
+            logger.exception("启动失败,回退 queued(run=%s)", run.id)
+            run_repo.revert_dispatch(run.id, owner)
+            capacity -= 1
+            continue
         started += 1
         capacity -= 1
     return started

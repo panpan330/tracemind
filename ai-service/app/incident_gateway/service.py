@@ -1,16 +1,16 @@
-"""V2.1-A:告警网关服务 —— AlertEvent 落库 + AlertInstance 单向投影。
+"""V2.1-B:告警网关服务 —— AlertEvent 落库 + AlertInstance 单向投影
++ Incident 聚合/关联/queued Run(单一 Session 事务,Webhook 仅快速持久化)。
 
 处理流程(逐条 alert):
 1. 边界校验:alertname 白名单、标签白名单/长度 → 违规 ignored(不落库);
 2. delivery_hash 幂等:INSERT alert_event,唯一键 (source, delivery_hash) 冲突
-   → 计 duplicate 并跳过(精确重放不重复计数、不重复投影);
-3. AlertInstance 投影(单向状态机):
-   - 无实例:FIRING → 建 FIRING(v1);RESOLVED → 建 RESOLVED(resolved-only 归档语义);
-   - 有 FIRING 实例:RESOLVED → CAS 推进(version+1, resolved_at);
-     FIRING → 仅更新 last_received_at/last_event_id;
-   - 有 RESOLVED 实例:RESOLVED → 更新 last_received_at;FIRING → 迟到,只归档不重开。
-
-V2.1-A 不创建 Incident、不启动 Run(响应 created/updated 恒为空;聚合与调度属 V2.1-B)。
+   → duplicate 并跳过(精确重放不重复计数、不重复投影);
+3. AlertInstance 投影(单向状态机:FIRING → RESOLVED,version CAS,迟到 FIRING 只归档);
+4. 服务端映射失败 → 归档+投影照常但 ignored(不聚合不建 Run,V2.1-B §四 唯一语义);
+5. 聚合:open_group_key 唯一裁决(FOR UPDATE)+ created/touched_firing 时
+   occurrence+1(Incident 行锁)+ incident_alert 权威关联(仅首次)+
+   resolved 按实例全集汇总(任一 FIRING → 保持 FIRING);
+6. 仅新建 Incident 时创建 queued Run(基线 None);Agent 由 Dispatcher 启动。
 """
 import logging
 from datetime import datetime, timezone
@@ -19,13 +19,12 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.db.engine import get_control_engine
-from app.db.models import AgentRun, Incident, IncidentAlert
+from app.db.models import Incident, IncidentAlert
 from sqlalchemy.orm import Session
 from app.incident_gateway.fingerprint import (alert_instance_key, canonical_json,
                                               delivery_hash, gateway_lock_name,
                                               normalize_labels)
 from app.tools_core.errors import ToolBusinessError
-from app.tools_core.errors import ToolBusinessError as _TBE
 from app.incident_gateway.registry import group_key_hash, resolve_alert
 from app.incident_gateway.schemas import AlertmanagerWebhookIn
 
@@ -281,7 +280,9 @@ def _process_one(source, alert, received_at, allowlist):
                             source, resolved.alertname, resolved.environment,
                             resolved.service, resolved.operation)
                         if linked_id is not None:
-                            incident = session.get(Incident, linked_id)
+                            # V2.1-B closure:更新前锁定共同 Incident 行(并发聚合不丢计数)
+                            incident = session.get(Incident, linked_id,
+                                                   with_for_update=True)
                             incident.occurrence_count += 1
                             incident.last_seen_at = received_at
                             incident.alert_status = "FIRING"
@@ -296,15 +297,20 @@ def _process_one(source, alert, received_at, allowlist):
                                     kept, dict(alert.annotations))
                                 is_new_incident = True
                             else:
+                                # 并发同 group:重读胜出 Incident 后同样锁定更新
+                                session.flush()
+                                incident = session.get(Incident, incident.id,
+                                                       with_for_update=True)
                                 incident.occurrence_count += 1
                                 incident.last_seen_at = received_at
                                 incident.alert_status = "FIRING"
-                        _link_incident_alert(session, incident.id, instance_key)
+                            _link_incident_alert(session, incident.id, instance_key)
                     if action in ("advanced_resolved", "touched_resolved"):
                         if linked_id is None:
                             linked_id = _linked_incident_id(session, instance_key)
                         if linked_id is not None:
-                            incident = session.get(Incident, linked_id)
+                            incident = session.get(Incident, linked_id,
+                                                   with_for_update=True)
                             # resolved 汇总按实例全集:任一关联实例仍 FIRING →
                             # 保持 FIRING;全部非 FIRING → RESOLVED
                             # (不关 lifecycle、不清 open_group_key、无 SELF_RECOVERED)

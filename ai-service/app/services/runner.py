@@ -37,6 +37,33 @@ logger = logging.getLogger(__name__)
 
 _saver: SqliteSaver | None = None
 _tasks: dict[int, asyncio.Task] = {}
+_execution_gate: asyncio.Semaphore | None = None
+_execution_gate_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _effective_max_concurrent() -> int:
+    """SQLite checkpointer(单实例声明)下强制为 1;换共享 checkpointer 后放开。"""
+    if settings.checkpoint_path.endswith(".sqlite"):
+        return 1
+    return max(1, settings.max_concurrent_runs)
+
+
+def execution_gate() -> asyncio.Semaphore:
+    """统一图执行门:start_investigation/resume/recover 的真实 graph.invoke
+    均经此门串行化(max_concurrent_runs 覆盖全部执行路径,不只 Dispatcher)。
+    信号量按运行事件循环懒创建并缓存(生产为单一常驻循环;测试每用例
+    新循环时自动重建,避免跨循环绑定错误)。"""
+    global _execution_gate, _execution_gate_loop
+    loop = asyncio.get_running_loop()
+    if _execution_gate is None or _execution_gate_loop is not loop:
+        _execution_gate = asyncio.Semaphore(_effective_max_concurrent())
+        _execution_gate_loop = loop
+    return _execution_gate
+
+
+def pending_task_count() -> int:
+    """Dispatcher 容量计算:当前存活图任务数(含恢复启动的任务)。"""
+    return len(_tasks)
 
 
 def pending_task_count() -> int:
@@ -126,11 +153,12 @@ async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dic
     from app.agent.graph import build_graph
     graph = build_graph(checkpointer=get_saver())
     try:
-        result = await asyncio.to_thread(
-            graph.invoke,
-            initial,
-            _graph_config(thread_id),
-        )
+        async with execution_gate():
+            result = await asyncio.to_thread(
+                graph.invoke,
+                initial,
+                _graph_config(thread_id),
+            )
     except Exception:
         logger.exception("graph run failed incident=%s run=%s", incident_id, run_id)
         run_repo.update_run_status(run_id, "failed")
@@ -180,11 +208,12 @@ async def resume_investigation(thread_id: str, resume_value: dict) -> None:
         logger.warning("run %s 恢复被拒绝(%s): %s", run.id, reason, exc)
         return
     graph = build_graph(checkpointer=get_saver())
-    result = await asyncio.to_thread(
-        graph.invoke,
-        Command(resume=resume_value),
-        _graph_config(thread_id),
-    )
+    async with execution_gate():
+        result = await asyncio.to_thread(
+            graph.invoke,
+            Command(resume=resume_value),
+            _graph_config(thread_id),
+        )
     run = run_repo.get_run_by_thread(thread_id)
     if run is not None:
         status = result.get("status") or "finished"
@@ -211,6 +240,6 @@ async def recover_pending_runs() -> None:
         task = asyncio.create_task(
             _run_graph(run.incident_id, run.id, run.thread_id, initial))
         _tasks[run.id] = task
-        task.add_done_callback(lambda _t: _tasks.pop(run.id, None))
+        task.add_done_callback(lambda _t, rid=run.id: _tasks.pop(rid, None))
     if pending:
         logger.info("recovered %d pending run(s)", len(pending))

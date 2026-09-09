@@ -29,22 +29,27 @@ async def lifespan(app: FastAPI):
     await mcp_manager.start()
     set_mcp_client(mcp_manager)
     await runner.recover_pending_runs()  # 启动先恢复未完成任务,再接收流量
-    if settings.dispatch_enabled:
-        app.state.dispatch_task = asyncio.create_task(dispatcher.dispatch_loop())
-    task = asyncio.create_task(scanner_loop())
-    yield
-    # V2.1-B:应用关闭时取消 Dispatcher,防残留后台任务
-    task = getattr(app.state, "dispatch_task", None)
-    if task is not None:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    task.cancel()              # scanner_loop(原有后台任务)
-    await mcp_manager.stop()
-    set_mcp_client(None)
-    mcp_manager = None
+    # V2.1-B closure:两个后台任务独立变量管理(不得互相覆盖)
+    scanner_task = asyncio.create_task(scanner_loop())
+    dispatch_task = (asyncio.create_task(dispatcher.dispatch_loop())
+                     if settings.dispatch_enabled else None)
+    app.state.scanner_task = scanner_task
+    app.state.dispatch_task = dispatch_task
+    try:
+        yield
+    finally:
+        # 两种 dispatch_enabled 配置下都必须 cancel + await 全部后台任务
+        for bg in (dispatch_task, scanner_task):
+            if bg is None:
+                continue
+            bg.cancel()
+            try:
+                await bg
+            except asyncio.CancelledError:
+                pass
+        await mcp_manager.stop()
+        set_mcp_client(None)
+        mcp_manager = None
 
 
 app = FastAPI(title="TraceMind AI Service", lifespan=lifespan)

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -198,3 +199,21 @@ def mark_dispatched(run_id: int, owner: str, now) -> bool:
                 "AND lease_owner=:o AND lease_until >= :now"),
                 {"id": run_id, "o": owner, "now": now})
             return res.rowcount == 1
+
+
+def revert_dispatch(run_id: int, owner: str) -> None:
+    """V2.1-B closure:DISPATCHED 后启动失败 → 回退 queued/READY 并清租约,
+    下一轮 Dispatcher 可安全重试(仅原 owner 可回退)。"""
+    from datetime import timedelta
+
+    from sqlalchemy import text as _text
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    with Session(get_control_engine()) as session:
+        with session.begin():
+            session.execute(_text(
+                "UPDATE agent_run SET dispatch_status='READY', status='queued', "
+                "lease_owner=NULL, lease_until=NULL "
+                "WHERE id=:id AND dispatch_status='DISPATCHED' AND lease_owner=:o "
+                "AND lease_until >= :now"),
+                {"id": run_id, "o": owner, "now": now - timedelta(seconds=1)})
