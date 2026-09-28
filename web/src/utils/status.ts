@@ -7,12 +7,13 @@ export const STATUS_META: Record<IncidentStatus, { label: string; tag: 'success'
   executing: { label: '执行中', tag: 'primary' },
   verifying: { label: '验证中', tag: 'primary' },
   recovered: { label: '已恢复', tag: 'success' },
+  self_recovered: { label: '告警自愈', tag: 'success' },
   needs_human: { label: '需人工介入', tag: 'danger' },
   rejected: { label: '已拒绝', tag: 'info' },
   failed: { label: '失败', tag: 'danger' },
 }
 
-const TERMINAL: ReadonlySet<IncidentStatus> = new Set(['recovered', 'needs_human', 'rejected', 'failed'])
+const TERMINAL: ReadonlySet<IncidentStatus> = new Set(['recovered', 'needs_human', 'rejected', 'failed', 'self_recovered'])
 
 export function isTerminal(status: IncidentStatus): boolean {
   return TERMINAL.has(status)

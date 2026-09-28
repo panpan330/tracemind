@@ -621,11 +621,20 @@ def execute_fix(state: IncidentState) -> dict:
         return state
     if proposal.get("action_type") == "TERMINATE_BLOCKING_SESSION":
         from app.services import session_terminator as st
-        result = st.execute(proposal, approval)
+        result = st.execute(proposal, approval,
+                            incident_id=state["incident_id"],
+                            baseline=state.get("healthy_baseline_ref"),
+                            agent_run_id=state.get("run_id") or 0)
         if result["execution_result"] == "executed":
             fix_status = "succeeded"
         elif result["execution_result"] in ("already_resolved", "already_executed"):
             fix_status = "no_op"   # 安全无操作(事务已结束/幂等)
+        elif result["execution_result"] == "rejected_preflight_self_healed":
+            # V2.1-C:Preflight 拒绝(当前已自愈)→ 转人工,不做任何写操作
+            fix_status = "failed"
+            state["status"] = "needs_human"
+            state["termination_reason"] = result.get("preflight_reason") or \
+                "PREFLIGHT_ALREADY_RECOVERED"
         elif result["execution_result"] in ("target_changed", "evidence_stale",
                                             "rejected_not_approved", "rejected_expired",
                                             "rejected_forbidden_account",
@@ -638,6 +647,8 @@ def execute_fix(state: IncidentState) -> dict:
             "execution_result": result["execution_result"],
             "actual_processlist_id": result.get("actual_processlist_id"),
             "idempotency_key": proposal.get("parameters_hash"),
+            # V2.1-C:完成时刻(锁恢复验证的信号时刻来源;应用侧 UTC)
+            "created_at": _time.strftime("%Y-%m-%dT%H:%M:%S", _time.gmtime()),
         }
         # 审计落库:fix_execution 表(Task 9 落库;此处 stub 兼容测试)
         _record_fix_execution(state, proposal, approval, fix_status, result)
@@ -658,7 +669,12 @@ def execute_fix(state: IncidentState) -> dict:
             approval_id=approval.get("approval_id"),
         )
     except ValueError as exc:
-        state["status"] = "failed"
+        # V2.1-C:Preflight 拒绝(已自愈/前置条件变化)→ 转人工,不标记为执行失败
+        if str(exc).startswith("PREFLIGHT_"):
+            state["status"] = "needs_human"
+            state["termination_reason"] = str(exc)
+        else:
+            state["status"] = "failed"
         state["error"] = str(exc)
         _emit_status(state)
         _replay(state, "FIX_EXECUTED", "failed", logical_step_id=replay_lid,
@@ -723,6 +739,95 @@ def reflect(state: IncidentState) -> dict:
     return state
 
 
+def resolved_recheck(state: IncidentState) -> dict:
+    """V2.1-C:告警 resolved 复核(确定性;每轮证据评估后进入)。
+
+    语义(方案 §V2.1 条目 9):
+    - alert_status 非 RESOLVED → 直通(零额外开销);
+    - 已执行写动作(FixExecution 存在)→ 不宣告自愈(写后恢复由恢复验证判定);
+    - 未写动作:取**信号之后**的新鲜 HTTP P95(与告警同口径),已恢复 → SELF_RECOVERED;
+      仍异常 → 继续调查;无法判定(信号后无流量/观测不可用)→ 不宣告自愈。
+    决策与依据写 Replay(ALERT_RESOLVED_RECHECK)与 SSE(run.self_recovered)。
+    """
+    from datetime import datetime, timezone
+
+    from app.services import recovery_signal
+
+    incident_id = state["incident_id"]
+    status = _incident_alert_status(incident_id)
+    if status != "RESOLVED":
+        return {}
+    if _has_write_execution(incident_id):
+        return {"resolved_recheck": {"status": "write_already_executed"}}
+    signal_at = _alert_resolved_at(incident_id) or \
+        datetime.now(timezone.utc).replace(tzinfo=None)
+    signal = recovery_signal.measure_post_signal_p95(
+        state.get("service_ref") or "", state.get("affected_operation_ref"),
+        signal_at, baseline=state.get("healthy_baseline_ref") or None)
+    detail = signal.as_dict()
+    if signal.status == recovery_signal.STATUS_RECOVERED:
+        detail["status"] = "self_recovered"
+        _replay(state, "ALERT_RESOLVED_RECHECK", "completed",
+                logical_step_id=f"ls-resolved-{incident_id}",
+                state_after=_snap(state),
+                decision={"alertStatus": "RESOLVED", "recoverySignal": detail,
+                          "thresholdSource": signal.source},
+                outcome="self_recovered")
+        event_repo.append_event(incident_id, "run.self_recovered",
+                                {"run_id": state.get("run_id"),
+                                 "sampleCount": signal.sample_count,
+                                 "thresholdSource": signal.source,
+                                 "windowSeconds": signal.window_seconds})
+        return {"status": "self_recovered", "termination_reason": None,
+                "resolved_recheck": detail, "recovery": detail}
+    detail["status"] = ("still_degraded"
+                        if signal.status == recovery_signal.STATUS_NOT_RECOVERED
+                        else "recheck_inconclusive")
+    _replay(state, "ALERT_RESOLVED_RECHECK", "completed",
+            logical_step_id=f"ls-resolved-{incident_id}",
+            state_after=_snap(state),
+            decision={"alertStatus": "RESOLVED", "recoverySignal": detail},
+            outcome=detail["status"])
+    return {"resolved_recheck": detail}
+
+
+def _incident_alert_status(incident_id: int) -> str | None:
+    """动态信号:告警生命周期状态(不参与冻结上下文,仅用于自愈复核)。"""
+    from sqlalchemy import text as _text
+    from sqlalchemy.orm import Session as _Session
+
+    from app.db.engine import get_control_engine as _engine
+    with _Session(_engine()) as s:
+        return s.execute(_text("SELECT alert_status FROM incident WHERE id=:i"),
+                         {"i": incident_id}).scalar()
+
+
+def _alert_resolved_at(incident_id: int):
+    """信号时刻 = 关联实例最近 resolved_at(自愈判定窗口的起点)。"""
+    from sqlalchemy import text as _text
+    from sqlalchemy.orm import Session as _Session
+
+    from app.db.engine import get_control_engine as _engine
+    with _Session(_engine()) as s:
+        return s.execute(_text(
+            "SELECT MAX(ai.resolved_at) FROM incident_alert ia "
+            "JOIN alert_instance ai ON ai.alert_instance_key = ia.alert_instance_key "
+            "WHERE ia.incident_id = :i"), {"i": incident_id}).scalar()
+
+
+def _has_write_execution(incident_id: int) -> bool:
+    """该 Incident 是否已有写动作执行记录(有则不再宣告自愈)。"""
+    from sqlalchemy import text as _text
+    from sqlalchemy.orm import Session as _Session
+
+    from app.db.engine import get_control_engine as _engine
+    with _Session(_engine()) as s:
+        n = s.execute(_text("SELECT COUNT(*) FROM fix_execution "
+                            "WHERE incident_id=:i AND status IN ('succeeded','no_op')"),
+                      {"i": incident_id}).scalar()
+    return bool(n)
+
+
 @_replay_node("RECOVERY_VERIFIED")
 def verify_recovery_node(state: IncidentState) -> dict:
     """恢复验证。按根因分发:恢复策略由 Capability Registry 提供
@@ -738,11 +843,17 @@ def verify_recovery_node(state: IncidentState) -> dict:
     result = _call_tool(state, "verify_recovery",
                         incident_id=state["incident_id"],
                         fix_execution_id=fix_execution_id)
-    if result["success"] and result["data"].get("status") == "recovered":
-        state["recovery"] = result["data"]
+    data = result.get("data") or {}
+    if result["success"] and data.get("status") == "recovered":
+        state["recovery"] = data
         state["status"] = "recovered"
+    elif data.get("status") == "INCONCLUSIVE":
+        # V2.1-C:无法判定(信号后无流量/观测不可用)→ 转人工,不宣告恢复也不宣告失败
+        state["recovery"] = data
+        state["status"] = "needs_human"
+        state["termination_reason"] = "recovery_inconclusive"
     else:
-        state["recovery"] = result.get("data") or {"status": "not_recovered"}
+        state["recovery"] = data or {"status": "not_recovered"}
         state["status"] = "needs_human"
         state["termination_reason"] = "recovery_failed"
     _emit_status(state)

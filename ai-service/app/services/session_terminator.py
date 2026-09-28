@@ -87,13 +87,27 @@ def _to_positive_int(value) -> int | None:
     return n if n > 0 else None
 
 
-def execute(proposal: dict, approval: dict, engine=None) -> dict:
-    """执行前重查(8 项语义)+ 三结果 + 幂等。返回执行结果,绝不抛异常(由调用方落库)。"""
+def execute(proposal: dict, approval: dict, engine=None, *,
+            incident_id: int | None = None, baseline: dict | None = None,
+            agent_run_id: int = 0) -> dict:
+    """执行前重查(8 项语义)+ 三结果 + 幂等。返回执行结果,绝不抛异常(由调用方落库)。
+
+    V2.1-C:与建索引写路径共用同一 Preflight(当前是否已自愈);已自愈 → 拒绝,
+    零 KILL 操作。Preflight 位于既有 8 项重查之前(语义不变,只是多一道闸门)。
+    """
     eng = engine if engine is not None else get_terminator_engine()
     if approval.get("status") != "approved":
         return {"execution_result": "rejected_not_approved", "kill_attempted": False}
     if approval.get("expires_at") and approval["expires_at"] < _now_iso():
         return {"execution_result": "rejected_expired", "kill_attempted": False}
+    if incident_id:
+        from app.services import preflight
+        pf = preflight.preflight_for_kill(incident_id, baseline,
+                                         agent_run_id=agent_run_id)
+        if not pf.ok:
+            return {"execution_result": "rejected_preflight_self_healed",
+                    "kill_attempted": False, "preflight": pf.checks,
+                    "preflight_reason": pf.reason}
     params = proposal.get("parameters") or {}
     pid = _to_positive_int(params.get("processlist_id"))
     if pid is None:

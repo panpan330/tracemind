@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     baseline_min_samples: int = 30              # 窗口内最少样本数
     baseline_max_p95_ms: int = 100              # 健康阈值(与 demo 告警规则阈值同源)
     slo_p95_ms: int = 100                       # 显式 SLO(无合格基线时使用)
+    # 恢复信号(与告警同口径的 HTTP P95):窗口必须完全位于恢复信号之后
+    recovery_signal_window_s: int = 60          # 信号后判定窗口
+    recovery_min_samples: int = 20              # 信号后最少新请求数
+    recovery_signal_wait_s: int = 90            # 等待窗口填满的上限
+    recovery_poll_interval_s: float = 5.0       # 轮询间隔
 
     # ---- V2.1-A Alertmanager 接入 ----
     alertmanager_webhook_token: str = ""      # 空 = webhook 禁用(403);Bearer 校验

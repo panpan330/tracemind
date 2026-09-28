@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.db.engine import get_control_engine, get_executor_engine
 from app.db.models import Approval, FixExecution, FixProposal, utcnow
+from app.repositories import incident_repo
+from app.services import preflight
 
 # 预定义修复动作目录(fix_definition 元数据 + 代码内固化 DDL 模板)
 FIX_ACTIONS = {
@@ -14,6 +16,33 @@ FIX_ACTIONS = {
                       "AND index_name = 'idx_sku_warehouse'"),
     },
 }
+
+
+def _index_present() -> bool:
+    """目标索引是否已存在(幂等 no_op 判据)。"""
+    with get_executor_engine().connect() as conn:
+        return conn.execute(text(FIX_ACTIONS["CREATE_INVENTORY_INDEX"]["check_sql"])
+                            ).scalar_one() > 0
+
+
+def _index_plan_ok() -> bool:
+    """前置条件复核:目标查询计划仍为全表扫描(索引缺失的实测证据)。"""
+    try:
+        with get_executor_engine().connect() as conn:
+            row = conn.execute(text(
+                "EXPLAIN FORMAT=JSON SELECT id FROM inventory "
+                "WHERE sku_id = 42 AND warehouse_id = 7")).fetchone()
+        import json
+        plan = json.loads(row[0]) if row and isinstance(row[0], str) else None
+        access_type = plan["query_block"]["table"].get("access_type") if plan else None
+        return access_type == "ALL"
+    except Exception:  # noqa: BLE001 复核失败不阻断执行(既有审批/幂等已保证安全)
+        return True
+
+
+def _execute_ddl(ddl: str) -> None:
+    with get_executor_engine().connect() as conn:
+        conn.execute(text(ddl))
 
 
 def execute_fix(incident_id: int, fix_proposal_id: int, approval_id: int) -> dict:
@@ -46,19 +75,26 @@ def execute_fix(incident_id: int, fix_proposal_id: int, approval_id: int) -> dic
             return {"status": "no_op", "detail": "already_executed",
                     "fix_execution_id": existing.id}
 
-        # 索引已存在 → no_op,不重复创建
-        with get_executor_engine().connect() as conn:
-            present = conn.execute(text(action["check_sql"])).scalar_one()
-            if present:
-                execution = FixExecution(incident_id=incident_id, fix_proposal_id=fix_proposal_id,
-                                         approval_id=approval_id, idempotency_key=idempotency_key,
-                                         status="no_op", result={"detail": "index already present"})
-                session.add(execution)
-                session.commit()
-                session.refresh(execution)
-                return {"status": "no_op", "fix_execution_id": execution.id}
+        # 索引已存在 → no_op,不重复创建(V2.1-C:Preflight 不介入 no_op 路径,
+        # 保持既有安全幂等语义)
+        if _index_present():
+            execution = FixExecution(incident_id=incident_id, fix_proposal_id=fix_proposal_id,
+                                     approval_id=approval_id, idempotency_key=idempotency_key,
+                                     status="no_op", result={"detail": "index already present"})
+            session.add(execution)
+            session.commit()
+            session.refresh(execution)
+            return {"status": "no_op", "fix_execution_id": execution.id}
 
-            conn.execute(text(action["ddl"]))
+        # V2.1-C Preflight:写操作前用当前实测状态复核(已自愈 → 拒绝,零写操作)
+        pf = preflight.preflight_for_index(incident_id, proposal.parameters_json
+                                           if isinstance(proposal.parameters_json, dict)
+                                           else None)
+        if not pf.ok:
+            incident_repo.update_status(incident_id, "needs_human",
+                                        termination_reason=pf.reason[:64])
+            raise ValueError(pf.reason)
+        _execute_ddl(action["ddl"])
 
         execution = FixExecution(incident_id=incident_id, fix_proposal_id=fix_proposal_id,
                                  approval_id=approval_id, idempotency_key=idempotency_key,

@@ -91,7 +91,8 @@ def list_runs(incident_id: int) -> list[AgentRun]:
 
 
 TERMINAL_STATUSES = frozenset(
-    {"recovered", "failed", "needs_human", "rejected", "cancelled"})
+    {"recovered", "failed", "needs_human", "rejected", "cancelled",
+     "self_recovered"})   # V2.1-C:告警 resolved 且指标已恢复、未执行写动作
 
 
 def update_run_status(run_id: int, status: str) -> None:

@@ -61,13 +61,11 @@ def evaluate_transaction_details(result: dict, state: dict) -> list[dict]:
              "content": data, "passed": passed}]
 
 
-def verify_lock_recovery(state: dict) -> dict:
-    """锁根因恢复验证(六项目标范围,设计 §6):
-    轮询目标锁等待关系消失(≤60s)→ 连续三批库存预占探测 → recovered / needs_human(recovery_timeout)。"""
+def _poll_target_lock_gone(deadline_s: int = 60) -> bool:
+    """轮询目标锁等待关系是否消失(≤deadline_s)。"""
     import time
     from app.tools import lock_queries
-    deadline = time.time() + 60  # 轮询截止 N=60s
-    target_gone = False
+    deadline = time.time() + deadline_s
     while time.time() < deadline:
         r = lock_queries.get_lock_waiters("tracemind_business", "inventory", 3000)
         waits = (r.get("data") or {}).get("waits") or []
@@ -76,26 +74,97 @@ def verify_lock_recovery(state: dict) -> dict:
                   and w.get("object_table") == "inventory"
                   and w.get("waiting_query_ref") == "INVENTORY_RESERVATION"]
         if not target:
-            target_gone = True
-            break
+            return True
         time.sleep(5)
-    if not target_gone:
-        state["recovery"] = {"status": "needs_human",
-                             "termination_reason": "recovery_timeout"}
-        state["status"] = "needs_human"
-        event_repo.append_event(state["incident_id"], "status_changed",
-                                {"status": state.get("status")})
-        return state
-    # 目标关系已消失:连续三批库存预占探测(复用 order check-stock 探测逻辑)
-    probes = run_probe_batches(state, batches=3)
-    ok = all(p.get("success") for p in probes)
-    state["recovery"] = {"status": "recovered" if ok else "needs_human",
-                         "probes": probes,
-                         "termination_reason": None if ok else "recovery_probe_failed"}
-    state["status"] = state["recovery"]["status"]
+    return False
+
+
+def _finish_lock_verification(state: dict, *, status: str, termination_reason,
+                              extra: dict) -> dict:
+    state["recovery"] = {"status": status, "termination_reason": termination_reason,
+                         **extra}
+    state["status"] = status
     event_repo.append_event(state["incident_id"], "status_changed",
                             {"status": state.get("status")})
     return state
+
+
+def verify_lock_recovery(state: dict) -> dict:
+    """锁根因恢复验证(六项目标范围,设计 §6)。
+
+    V2.1-C:锁证据消失 + 三批探测通过后,必须再通过**与通用验证器相同的 HTTP P95
+    恢复信号**(recovery_signal,服务/操作取冻结上下文,窗口位于修复完成之后);
+    信号未恢复 → needs_human(recovery_p95_not_recovered);
+    INCONCLUSIVE → needs_human(recovery_inconclusive)。"""
+    from app.services import recovery_signal
+
+    if not _poll_target_lock_gone(60):
+        return _finish_lock_verification(
+            state, status="needs_human", termination_reason="recovery_timeout",
+            extra={})
+    # 目标关系已消失:连续三批库存预占探测(复用 order check-stock 探测逻辑)
+    probes = run_probe_batches(state, batches=3)
+    if not all(p.get("success") for p in probes):
+        return _finish_lock_verification(
+            state, status="needs_human", termination_reason="recovery_probe_failed",
+            extra={"probes": probes})
+    # 统一恢复信号(与通用验证器同口径);信号时刻无法证明 → 转人工,不伪造
+    signal_at = _fix_completed_at(state)
+    if signal_at is None:
+        return _finish_lock_verification(
+            state, status="needs_human",
+            termination_reason="recovery_signal_time_unknown",
+            extra={"probes": probes})
+    try:
+        signal = recovery_signal.measure_post_signal_p95(
+            state.get("service_ref") or "", state.get("affected_operation_ref"),
+            signal_at, baseline=state.get("healthy_baseline_ref") or None)
+    except ValueError:
+        # 未注册 service/operation(配置错误)→ 不崩溃,转人工(fail closed)
+        logger.exception("锁恢复信号口径错误 incident=%s", state.get("incident_id"))
+        return _finish_lock_verification(
+            state, status="needs_human", termination_reason="recovery_inconclusive",
+            extra={"probes": probes,
+                   "recoverySignal": {"reason": "metrics_result_invalid"}})
+    if signal.status == recovery_signal.STATUS_RECOVERED:
+        return _finish_lock_verification(
+            state, status="recovered", termination_reason=None,
+            extra={"probes": probes, "recoverySignal": signal.as_dict()})
+    if signal.status == recovery_signal.STATUS_NOT_RECOVERED:
+        return _finish_lock_verification(
+            state, status="needs_human",
+            termination_reason="recovery_p95_not_recovered",
+            extra={"probes": probes, "recoverySignal": signal.as_dict()})
+    return _finish_lock_verification(
+        state, status="needs_human", termination_reason="recovery_inconclusive",
+        extra={"probes": probes, "recoverySignal": signal.as_dict()})
+
+
+def _fix_completed_at(state: dict):
+    """恢复信号时刻 = 修复动作完成时刻。
+
+    优先取 state 显式注入(测试/调用方);否则查 fix_execution 最近一次
+    succeeded/no_op 的 finished_at(真实写库完成时刻)。两者都缺失 → None
+    (调用方转人工,绝不能回退"当前时间"——那会让"信号后窗口"永不满足,
+    也会把信号前的流量当作恢复证据)。"""
+    from datetime import datetime
+
+    from sqlalchemy import text as _text
+    from sqlalchemy.orm import Session as _Session
+
+    from app.db.engine import get_control_engine as _engine
+
+    raw = (state.get("fix_execution") or {}).get("created_at")
+    if raw:
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError:
+            pass
+    with _Session(_engine()) as s:
+        return s.execute(_text(
+            "SELECT created_at FROM fix_execution "
+            "WHERE incident_id = :i AND status IN ('succeeded','no_op') "
+            "ORDER BY id DESC LIMIT 1"), {"i": state.get("incident_id")}).scalar()
 
 
 def run_probe_batches(state: dict, batches: int = 3) -> list[dict]:

@@ -2,7 +2,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.nodes import (
     collect_evidence, diagnose, execute_fix, human_approval, hypothesize,
-    ingest, propose_fix, reflect, report, verify_recovery_node,
+    ingest, propose_fix, reflect, report, resolved_recheck, verify_recovery_node,
 )
 from app.agent.state import IncidentState
 
@@ -14,6 +14,11 @@ def _after_diagnose(state: IncidentState) -> str:
     if state.get("status") == "needs_human":
         return "needs_human"
     return "retry"
+
+
+def _after_resolved_recheck(state: IncidentState) -> str:
+    """resolved 复核后:自愈 → report(终态复盘);其余 → 继续诊断。"""
+    return "self_recovered" if state.get("status") == "self_recovered" else "continue"
 
 
 def _after_approval(state: IncidentState) -> str:
@@ -39,6 +44,7 @@ def build_graph(checkpointer=None):
     g.add_node("ingest", ingest)
     g.add_node("hypothesize", hypothesize)
     g.add_node("collect_evidence", collect_evidence)
+    g.add_node("resolved_recheck", resolved_recheck)
     g.add_node("diagnose", diagnose)
     g.add_node("propose_fix", propose_fix)
     g.add_node("human_approval", human_approval)
@@ -49,7 +55,12 @@ def build_graph(checkpointer=None):
     g.add_edge(START, "ingest")
     g.add_edge("ingest", "hypothesize")
     g.add_edge("hypothesize", "collect_evidence")
-    g.add_edge("collect_evidence", "diagnose")
+    g.add_edge("collect_evidence", "resolved_recheck")
+    g.add_conditional_edges(
+        "resolved_recheck",
+        _after_resolved_recheck,
+        {"self_recovered": "report", "continue": "diagnose"},
+    )
     g.add_conditional_edges(
         "diagnose",
         _after_diagnose,

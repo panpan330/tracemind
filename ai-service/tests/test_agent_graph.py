@@ -184,8 +184,10 @@ def test_lock_wait_graph_reaches_confirmed(monkeypatch):
 
 
 def test_lock_recovery_checks_target_scope(monkeypatch):
-    """锁根因恢复:目标锁关系消失 → 三批探测通过 → recovered(不要求全库无锁)。"""
+    """锁根因恢复:目标锁关系消失 → 三批探测通过 → 统一恢复信号恢复 → recovered
+    (不要求全库无锁)。V2.1-C:最后一步必须过与通用验证器同口径的 HTTP P95 信号。"""
     from app.agent import nodes
+    from app.services import recovery_signal
 
     class FakeLockQueries:
         def get_lock_waiters(self, *a, **kw):
@@ -196,10 +198,20 @@ def test_lock_recovery_checks_target_scope(monkeypatch):
     monkeypatch.setattr(
         "app.capabilities.mysql_blocking_transaction.capability.run_probe_batches",
                         lambda state, batches=3: [{"success": True}] * batches)
+    monkeypatch.setattr(recovery_signal, "measure_post_signal_p95",
+                        lambda *a, **kw: recovery_signal.RecoverySignal(
+                            status=recovery_signal.STATUS_RECOVERED,
+                            source=recovery_signal.SOURCE_BASELINE,
+                            threshold_ms=60.0, p95_ms=20.0, sample_count=80,
+                            window_seconds=60, post_signal_window=True))
 
     state = {"incident_id": 9, "run_id": 9, "status": "executing",
              "root_cause_code": "LONG_RUNNING_TRANSACTION_BLOCKING_INVENTORY_RESERVATION",
-             "fix_execution": {"status": "succeeded"}}
+             "service_ref": "order-service",
+             "affected_operation_ref": "ORDER_CREATE",
+             "healthy_baseline_ref": {"p95_ms": 50},
+             "fix_execution": {"status": "succeeded",
+                               "created_at": "2026-09-28T05:59:00"}}
     out = nodes.verify_recovery_node(state)
     assert out.get("recovery", {}).get("status") == "recovered"
     assert state["status"] == "recovered"

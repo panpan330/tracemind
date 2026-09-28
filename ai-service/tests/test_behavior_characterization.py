@@ -144,7 +144,7 @@ def test_scn002_root_cause_and_action_stable(monkeypatch):
     _patch_mcp(monkeypatch, LOCK_MCP)
     _patch_repos(monkeypatch, executed)
 
-    def fake_terminator(proposal, approval):
+    def fake_terminator(proposal, approval, **kw):   # V2.1-C:execute 增加 Preflight 上下文参数
         executed.append(("terminator", proposal.get("parameters", {}).get("processlist_id")))
         return {"execution_result": "executed", "kill_attempted": True,
                 "actual_processlist_id": 88}
@@ -155,6 +155,14 @@ def test_scn002_root_cause_and_action_stable(monkeypatch):
                         lambda *a, **kw: {"data": {"waits": []}})
     monkeypatch.setattr("app.capabilities.mysql_blocking_transaction.capability.run_probe_batches",
                         lambda state, batches=3: [{"success": True}] * batches)
+    # V2.1-C:统一恢复信号(与通用验证器同口径)注入为已恢复
+    from app.services import recovery_signal
+    monkeypatch.setattr(recovery_signal, "measure_post_signal_p95",
+                        lambda *a, **kw: recovery_signal.RecoverySignal(
+                            status=recovery_signal.STATUS_RECOVERED,
+                            source=recovery_signal.SOURCE_BASELINE,
+                            threshold_ms=60.0, p95_ms=20.0, sample_count=80,
+                            window_seconds=60, post_signal_window=True))
 
     graph = build_graph(checkpointer=InMemorySaver())
     first = graph.invoke(_base_state(affected_operation_ref="INVENTORY_RESERVATION"),

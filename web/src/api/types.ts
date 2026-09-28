@@ -1,6 +1,6 @@
 export type IncidentStatus =
   | 'created' | 'investigating' | 'awaiting_approval' | 'executing' | 'verifying'
-  | 'recovered' | 'needs_human' | 'rejected' | 'failed'
+  | 'recovered' | 'needs_human' | 'rejected' | 'failed' | 'self_recovered'
 
 export interface IncidentListItem {
   id: number

@@ -51,6 +51,20 @@ def uri_regex_for_service(service_ref: str) -> str:
     return "^(" + "|".join(parts) + ")$"
 
 
+def uri_regex_for_operation(service_ref: str, operation_ref: str | None) -> str:
+    """operation 级 uri 正则(V2.1-C 恢复信号:与告警规则同服务**同操作**)。
+
+    已知 operation → 该模板的锚定正则;operation 缺失/未注册 → 回退 service 级
+    全部 operation 正则(仍禁止通配 uri,不掩盖映射错误)。"""
+    if operation_ref:
+        template = OPERATION_TO_URI.get(operation_ref)
+        if template is not None and operation_ref in SERVICE_TO_OPERATIONS.get(
+                service_ref, ()):
+            return "^(" + re.escape(template).replace(r"\{", "\\{").replace(
+                r"\}", "\\}") + ")$"
+    return uri_regex_for_service(service_ref)
+
+
 def uri_templates_for_service(service_ref: str) -> tuple[str, ...]:
     ops = SERVICE_TO_OPERATIONS.get(service_ref)
     if not ops:

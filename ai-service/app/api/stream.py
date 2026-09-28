@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/incidents")
 POLL_SECONDS = 2
 HEARTBEAT_SECONDS = 20
 
-TERMINAL_STATUSES = {"recovered", "needs_human", "rejected", "failed"}
+TERMINAL_STATUSES = {"recovered", "needs_human", "rejected", "failed",
+                     "self_recovered"}
 
 
 def _format_event(event) -> str:
