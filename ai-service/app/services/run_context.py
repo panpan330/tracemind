@@ -42,8 +42,11 @@ class RunContextSnapshot(BaseModel):
     affected_operation_ref: Optional[str] = None
     observed_at: Optional[str] = None     # Incident 观测时间(调查窗口起点参考)
     investigation_window: dict = {}
-    baseline_ref: Optional[dict] = None           # Run 级 digest 基线(创建时采集)
-    healthy_baseline_ref: Optional[dict] = None   # incident.healthy_metrics_baseline
+    baseline_ref: Optional[dict] = None           # Run 级 digest 基线(创建时/启动前封存)
+    healthy_baseline_ref: Optional[dict] = None   # 健康基线(权威来源=incident.baseline_metrics_json,仅 quality='OK')
+    # V2.1-C:启动前基线封存(阶段 2)写入;quality ∈ OK | BASELINE_INSUFFICIENT
+    baseline_quality: Optional[str] = None
+    baseline_window: Optional[dict] = None        # {"start": iso, "end": iso}
     checkpoint: dict                              # {"thread_id", "namespace"}
     bundle_versions: dict                         # {"capability","policy","prompt","tool"}
     frozen_at: str
@@ -74,7 +77,11 @@ def build_snapshot(incident, agent_run_id: int, thread_id: str,
         observed_at=str(incident.observed_at) if incident.observed_at else None,
         investigation_window={"window_start": frozen_at, "window_end": None},
         baseline_ref=baseline,
-        healthy_baseline_ref=incident.healthy_metrics_baseline,
+        # V2.1-C:健康基线权威来源切换 —— 仅 baseline_quality='OK' 的历史窗口指标有效;
+        # healthy_metrics_baseline 旧列(故障态实时值)停止读取,不得充当健康基线
+        healthy_baseline_ref=(incident.baseline_metrics_json
+                              if getattr(incident, "baseline_quality", None) == "OK"
+                              else None),
         checkpoint={"thread_id": thread_id, "namespace": ""},
         bundle_versions=dict(bundle_versions),
         frozen_at=frozen_at,

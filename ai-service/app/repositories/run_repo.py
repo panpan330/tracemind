@@ -217,3 +217,140 @@ def revert_dispatch(run_id: int, owner: str) -> None:
                 "WHERE id=:id AND dispatch_status='DISPATCHED' AND lease_owner=:o "
                 "AND lease_until >= :now"),
                 {"id": run_id, "o": owner, "now": now - timedelta(seconds=1)})
+
+
+def record_capture_failed(run_id: int, owner: str, now) -> bool:
+    """V2.1-C:基线采集异常 → 记 CAPTURE_FAILED(未封存)并回退 CLAIMED→READY 清租约,
+    下一轮按同一封存 CAS 重试。仅原 owner 可操作。"""
+    from sqlalchemy import text as _text
+
+    with Session(get_control_engine()) as session:
+        with session.begin():
+            res = session.execute(_text(
+                "UPDATE agent_run SET baseline_capture_status='CAPTURE_FAILED', "
+                "dispatch_status='READY', status='queued', "
+                "lease_owner=NULL, lease_until=NULL "
+                "WHERE id=:id AND dispatch_status='CLAIMED' AND lease_owner=:o "
+                "AND status='queued'"),
+                {"id": run_id, "o": owner})
+            return res.rowcount == 1
+
+
+def seal_run_baselines_and_dispatch(run_id: int, owner: str, now,
+                                    *, capture: "BaselineCapture | None") -> bool:
+    """V2.1-C 阶段 2:启动图前单次封存基线并调度(短 CAS 事务,单次往返)。
+
+    事务内步骤(锁顺序与网关一致:先 incident 后 agent_run):
+    ① SELECT incident ... FOR UPDATE(行锁,防与聚合事务交叠);
+    ② UPDATE agent_run:原子校验(status=queued ∧ dispatch_status=CLAIMED ∧
+       lease_owner=:owner ∧ lease_until>=:now ∧ 未封存)→ 写基线列 + 快照基线字段 +
+       baseline_capture_status + dispatch_status='DISPATCHED' + status='investigating';
+    ③ UPDATE incident:baseline_window_*/baseline_metrics_json/baseline_quality +
+       auto_run_started_at(仅首次)。
+    校验失败 → 整体回滚返回 False(调用方不启动图);外部采集必须在调用前完成
+    (见 services/baseline_capture,capture 为其结果)。
+
+    封存终值:OK / INSUFFICIENT(单次封存,不重采);
+    CAPTURE_FAILED 未封存,可按同一 CAS 重试(重试条件 ≡ 封存条件)。
+
+    capture=None:该 Run 已封存(此前 DISPATCHED 后启动失败回退、图从未启动)——
+    **复用已封存基线,仅重新调度**,不重采、不重写(封存不可被改写)。
+    """
+    from sqlalchemy import JSON, bindparam
+    from sqlalchemy import text as _text
+
+    from app.services.baseline_capture import (STATUS_INSUFFICIENT, STATUS_OK,
+                                               BaselineCapture)
+
+    if capture is not None and (not isinstance(capture, BaselineCapture)
+                                or capture.status not in (STATUS_OK,
+                                                          STATUS_INSUFFICIENT)):
+        return False
+    with Session(get_control_engine()) as session:
+        with session.begin():
+            run = session.execute(_text(
+                "SELECT incident_id, run_context_snapshot_json, "
+                "baseline_capture_status FROM agent_run "
+                "WHERE id=:id FOR UPDATE"), {"id": run_id}).fetchone()
+            if run is None:
+                return False
+            incident_id = run.incident_id
+            already_sealed = run.baseline_capture_status in (STATUS_OK,
+                                                             STATUS_INSUFFICIENT)
+            if capture is None and not already_sealed:
+                return False          # 未封存却要求复用 → 调用方顺序错误
+            session.execute(_text(
+                "SELECT id FROM incident WHERE id=:iid FOR UPDATE"),
+                {"iid": incident_id})
+            import json as _json
+            if already_sealed:
+                snap = None           # 已封存:不读不改快照
+            else:
+                raw = run.run_context_snapshot_json
+                snap = raw if isinstance(raw, dict) else (
+                    _json.loads(raw) if isinstance(raw, str) else None)
+                if not isinstance(snap, dict):
+                    return False      # 快照缺失 fail closed,不调度
+            if already_sealed:
+                # 复用已封存基线:仅重做"领取→调度"CAS,不写任何基线字段
+                res = session.execute(_text(
+                    "UPDATE agent_run SET dispatch_status='DISPATCHED', "
+                    "status='investigating' "
+                    "WHERE id=:id AND status='queued' AND dispatch_status='CLAIMED' "
+                    "AND lease_owner=:owner AND lease_until >= :now"),
+                    {"id": run_id, "owner": owner, "now": now})
+                if res.rowcount != 1:
+                    return False
+                session.execute(_text(
+                    "UPDATE incident SET "
+                    "auto_run_started_at=COALESCE(auto_run_started_at, :now) "
+                    "WHERE id=:iid"), {"now": now, "iid": incident_id})
+                return True
+            healthy = (capture.healthy_metrics
+                       if capture is not None and capture.status == STATUS_OK
+                       else None)
+            snap = {**snap,
+                    "baseline_ref": capture.digest_baseline,
+                    "healthy_baseline_ref": healthy,
+                    "baseline_quality": capture.status,
+                    "baseline_window": {
+                        "start": capture.window_start.isoformat()
+                        if capture.window_start else None,
+                        "end": capture.window_end.isoformat()
+                        if capture.window_end else None}}
+            seal_stmt = _text(
+                "UPDATE agent_run SET incident_digest_baseline=:digest, "
+                "baseline_capture_status=:cs, run_context_snapshot_json=:snap, "
+                "dispatch_status='DISPATCHED', status='investigating' "
+                "WHERE id=:id AND status='queued' AND dispatch_status='CLAIMED' "
+                "AND lease_owner=:owner AND lease_until >= :now "
+                "AND (baseline_capture_status IS NULL "
+                "OR baseline_capture_status='CAPTURE_FAILED')").bindparams(
+                bindparam("digest", type_=JSON), bindparam("snap", type_=JSON))
+            res = session.execute(seal_stmt,
+                {"digest": capture.digest_baseline, "cs": capture.status,
+                 "snap": snap, "id": run_id, "owner": owner, "now": now})
+            if res.rowcount != 1:
+                return False
+            if healthy is None:
+                # INSUFFICIENT:不写健康值(SQL NULL,不伪造基线)
+                session.execute(_text(
+                    "UPDATE incident SET baseline_window_start=:ws, "
+                    "baseline_window_end=:we, baseline_metrics_json=NULL, "
+                    "baseline_quality=:q, "
+                    "auto_run_started_at=COALESCE(auto_run_started_at, :now) "
+                    "WHERE id=:iid"),
+                    {"ws": capture.window_start, "we": capture.window_end,
+                     "q": capture.status, "now": now, "iid": incident_id})
+            else:
+                incident_stmt = _text(
+                    "UPDATE incident SET baseline_window_start=:ws, "
+                    "baseline_window_end=:we, baseline_metrics_json=:metrics, "
+                    "baseline_quality=:q, "
+                    "auto_run_started_at=COALESCE(auto_run_started_at, :now) "
+                    "WHERE id=:iid").bindparams(bindparam("metrics", type_=JSON))
+                session.execute(incident_stmt,
+                    {"ws": capture.window_start, "we": capture.window_end,
+                     "metrics": healthy, "q": capture.status,
+                     "now": now, "iid": incident_id})
+            return True

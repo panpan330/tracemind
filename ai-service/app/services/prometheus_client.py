@@ -19,6 +19,28 @@ class PrometheusMetricsClient:
 
     def query(self, query_template_id: str, labels: dict,
               window_seconds: int) -> list[dict]:
+        return self._instant(query_template_id, labels, window_seconds,
+                             at_time=time.time())
+
+    def query_at(self, query_template_id: str, labels: dict, window_seconds: int,
+                 at_time: float) -> list[dict]:
+        """V2.1-C:显式时间点的 instant 查询(历史窗口基线采集)。
+        仍只执行固定模板;at_time 为 epoch 秒。"""
+        return self._instant(query_template_id, labels, window_seconds, at_time=at_time)
+
+    def sample_count(self, query_template_id: str, labels: dict,
+                     start: float, end: float) -> int:
+        """V2.1-C:窗口内请求样本数(count_over_time 固定模板,评估点=end)。
+        用于最小样本数校验;start/end 为 epoch 秒。"""
+        window = max(1, int(end - start))
+        rows = self._instant("HTTP_SERVER_REQ_COUNT_V1", labels, window, at_time=end)
+        try:
+            return int(float(rows[0].get("value", [0, "0"])[1]))
+        except (IndexError, TypeError, ValueError):
+            return 0
+
+    def _instant(self, query_template_id: str, labels: dict, window_seconds: int,
+                 *, at_time: float) -> list[dict]:
         tpl = promql_templates.TEMPLATES.get(query_template_id)
         if tpl is None:
             raise ValueError(ERROR_METRICS_RESULT_INVALID)
@@ -26,7 +48,7 @@ class PrometheusMetricsClient:
         try:
             with httpx.Client(base_url=self.base_url, timeout=10.0) as client:
                 resp = client.post("/api/v1/query",
-                                   data={"query": expr, "time": str(int(time.time()))})
+                                   data={"query": expr, "time": str(int(at_time))})
                 resp.raise_for_status()
                 body = resp.json()
         except httpx.HTTPError as e:

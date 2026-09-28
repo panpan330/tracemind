@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.services.health_baseline_service import capture_health_baseline
+from app.services.health_baseline_service import capture_current_health_snapshot
 from app.services.recovery_service import _p95_recovered
 
 
@@ -32,21 +32,22 @@ class FakeMetricsResponseNull:
 def test_capture_health_baseline_ok():
     with patch("app.services.health_baseline_service.httpx.get",
                return_value=FakeMetricsResponse()) as m:
-        baseline = capture_health_baseline("inventory-service")
-    assert baseline == {"p95_ms": 2, "qps": 20.0, "error_rate": 0.0}
+        baseline = capture_current_health_snapshot("inventory-service")
+    assert baseline == {"p95_ms": 2, "qps": 20.0, "error_rate": 0.0,
+                      "captured_at_is_current": True}
     m.assert_called_once()
 
 
 def test_capture_health_baseline_unavailable_returns_none():
     with patch("app.services.health_baseline_service.httpx.get",
                side_effect=Exception("connection refused")):
-        assert capture_health_baseline("inventory-service") is None
+        assert capture_current_health_snapshot("inventory-service") is None
 
 
 def test_capture_health_baseline_null_p95_returns_none():
     with patch("app.services.health_baseline_service.httpx.get",
                return_value=FakeMetricsResponseNull()):
-        assert capture_health_baseline("inventory-service") is None
+        assert capture_current_health_snapshot("inventory-service") is None
 
 
 @pytest.mark.parametrize("p95_after,baseline,expected", [

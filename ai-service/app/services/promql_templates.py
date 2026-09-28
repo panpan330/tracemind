@@ -21,4 +21,10 @@ TEMPLATES = {
                  'uri=~"%(uri)s"%(extra)s}[%(window)s])) + 1e-9)'),
         "queryType": "instant",
     },
+    # V2.1-C:历史窗口样本数(count_over_time 固定模板;不接收 LLM 生成的查询文本)
+    "HTTP_SERVER_REQ_COUNT_V1": {
+        "expr": ('sum(count_over_time(http_server_requests_seconds_count'
+                 '{service=~"%(service)s",uri=~"%(uri)s"%(extra)s}[%(window)s]))'),
+        "queryType": "instant",
+    },
 }

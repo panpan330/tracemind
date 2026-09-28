@@ -8,7 +8,7 @@ from app.db.models import (Approval, FixDefinition, FixExecution, FixProposal,
                            Postmortem, RecoveryCheck)
 from app.repositories import evidence_repo, hypothesis_repo, incident_repo
 from app.repositories.tool_repo import list_tool_calls
-from app.services.health_baseline_service import capture_health_baseline
+from app.services.health_baseline_service import capture_current_health_snapshot
 from app.services.operation_registry import OPERATION_REFS
 
 router = APIRouter(prefix="/api/incidents")
@@ -34,9 +34,10 @@ def create_incident(payload: IncidentIn):
         payload.title, payload.description, payload.severity, payload.service_ref,
         affected_service_ref=payload.affected_service_ref or payload.service_ref,
         affected_operation_ref=payload.affected_operation_ref)
-    # 健康指标基线:Incident 创建时从 Java 采集(失败为 None 不影响创建)
-    health = capture_health_baseline(payload.service_ref)
-    incident_repo.save_health_baseline(inc.id, health)
+    # V2.1-C:手动路径保存"当前快照"(非健康基线);健康基线仅来自
+    # baseline_quality='OK' 的历史窗口指标,无合格基线时 E1/Verifier 走显式 SLO
+    snapshot = capture_current_health_snapshot(payload.service_ref)
+    incident_repo.save_current_health_snapshot(inc.id, snapshot)
     return {"id": inc.id, "status": inc.status, "title": inc.title,
             "service_ref": inc.service_ref,
             "affected_service_ref": inc.affected_service_ref,

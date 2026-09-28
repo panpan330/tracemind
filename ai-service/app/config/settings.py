@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     dispatch_lease_seconds: int = 30
     max_concurrent_runs: int = 1             # SQLite checkpointer 下代码强制为 1
 
+    # ---- V2.1-C 告警闭环:历史基线与 SLO(真实验收前以校准脚本回填)----
+    baseline_window_before_start_s: int = 600   # 历史窗口起点:startsAt-10m
+    baseline_window_end_offset_s: int = 60      # 历史窗口终点:startsAt-1m(避开告警前沿)
+    baseline_min_samples: int = 30              # 窗口内最少样本数
+    baseline_max_p95_ms: int = 100              # 健康阈值(与 demo 告警规则阈值同源)
+    slo_p95_ms: int = 100                       # 显式 SLO(无合格基线时使用)
+
     # ---- V2.1-A Alertmanager 接入 ----
     alertmanager_webhook_token: str = ""      # 空 = webhook 禁用(403);Bearer 校验
     alertmanager_alertname_allowlist: str = "OrderOperationP95High"

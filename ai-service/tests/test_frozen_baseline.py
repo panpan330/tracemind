@@ -24,6 +24,8 @@ from app.tools_core.errors import ToolBusinessError
 
 
 def _make_incident_with_baseline(healthy: dict | None):
+    """V2.1-C:健康基线权威来源 = baseline_metrics_json(仅 quality='OK' 有效);
+    healthy_metrics_baseline 旧列(故障态实时值)已停止读取。"""
     inc = incident_repo.create_incident(
         f"基线冻结-{uuid.uuid4().hex[:6]}", None, "high", "inventory-service",
         affected_service_ref="inventory-service",
@@ -31,17 +33,19 @@ def _make_incident_with_baseline(healthy: dict | None):
     if healthy is not None:
         import json
         with Session(get_control_engine()) as s:
-            s.execute(text("UPDATE incident SET healthy_metrics_baseline=:h WHERE id=:i"),
+            s.execute(text("UPDATE incident SET baseline_metrics_json=:h, "
+                           "baseline_quality='OK' WHERE id=:i"),
                       {"h": json.dumps(healthy), "i": inc.id})
             s.commit()
     return inc
 
 
 def _mutate_incident_baseline(inc_id: int, healthy: dict):
-    """模拟恢复窗口期内 Incident 健康基线被修改。"""
+    """模拟恢复窗口期内 Incident 健康基线被修改(改权威来源列)。"""
     import json
     with Session(get_control_engine()) as s:
-        s.execute(text("UPDATE incident SET healthy_metrics_baseline=:h WHERE id=:i"),
+        s.execute(text("UPDATE incident SET baseline_metrics_json=:h, "
+                       "baseline_quality='OK' WHERE id=:i"),
                   {"h": json.dumps(healthy), "i": inc_id})
         s.commit()
 

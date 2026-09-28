@@ -22,11 +22,16 @@ def create_incident(title: str, description: str | None, severity: str,
         return inc
 
 
-def save_health_baseline(incident_id: int, baseline: dict | None) -> None:
-    """保存健康指标基线(P95/QPS/错误率);采集失败时允许写 NULL。"""
+def save_current_health_snapshot(incident_id: int, snapshot: dict | None) -> None:
+    """V2.1-C:保存手动路径的**当前快照**(非健康基线)。
+
+    旧实现把创建时的实时 P95 写入 healthy_metrics_baseline —— 告警场景下那就是
+    故障态值,不得充当健康基线;该列停止写入/读取(保留,不清洗存量)。"""
     with Session(get_control_engine()) as session:
         inc = session.get(Incident, incident_id)
-        inc.healthy_metrics_baseline = baseline
+        if inc is None:
+            return
+        inc.current_health_snapshot_json = snapshot
         session.commit()
 
 

@@ -31,9 +31,12 @@ def _owner() -> str:
 async def dispatch_once() -> int:
     """领取并启动至多(剩余容量)个 queued Run;返回启动数。
 
+    V2.1-C 两段式:alertmanager Run 在启动图前先做**事务外**基线采集
+    (Prometheus 历史窗口 + digest 快照),再以**短 CAS 事务**单次封存并调度;
+    采集异常/CAS 失败都不启动图,消耗本轮容量,Run 留待重领(重试条件=封存 CAS)。
     容量上限取 runner.max_concurrent_runs()(唯一来源:按实际 checkpointer 类型
     判定,当前 SqliteSaver 恒为 1),与图执行门同源。"""
-    from app.services import runner
+    from app.services import baseline_capture, runner
 
     capacity = runner.max_concurrent_runs() - runner.pending_task_count()
     started = 0
@@ -42,10 +45,39 @@ async def dispatch_once() -> int:
         run = run_repo.claim_queued_run(owner, settings.dispatch_lease_seconds, _now())
         if run is None:
             break
-        if not run_repo.mark_dispatched(run.id, owner, _now()):
-            continue     # 租约过期/被回收:换下一个(不计容量)
-        logger.info("dispatcher 领取 queued run %s (incident=%s)",
-                    run.id, run.incident_id)
+        if run.trigger_source == "alertmanager":
+            already_sealed = run.baseline_capture_status in ("OK", "INSUFFICIENT")
+            if already_sealed:
+                # 此前 DISPATCHED 后启动失败回退、图从未启动:复用已封存基线,
+                # 不重采、不重写(封存不可改写)
+                capture = None
+            else:
+                try:
+                    capture = baseline_capture.capture_run_baselines(run)  # 事务外
+                except Exception:  # noqa: BLE001 采集层兜底失效也不阻断调度循环
+                    logger.exception("run %s 基线采集异常,按 CAPTURE_FAILED 处理",
+                                     run.id)
+                    run_repo.record_capture_failed(run.id, owner, _now())
+                    capacity -= 1
+                    continue
+                if capture.status == baseline_capture.STATUS_CAPTURE_FAILED:
+                    logger.warning("run %s 基线采集失败,回退 READY 待重领", run.id)
+                    run_repo.record_capture_failed(run.id, owner, _now())
+                    capacity -= 1
+                    continue
+            if not run_repo.seal_run_baselines_and_dispatch(run.id, owner, _now(),
+                                                            capture=capture):
+                logger.warning("run %s 基线封存 CAS 失败(租约/状态漂移),不启动", run.id)
+                capacity -= 1
+                continue
+            logger.info("dispatcher 封存基线并调度 run %s (incident=%s, quality=%s)",
+                        run.id, run.incident_id,
+                        capture.status if capture else "REUSED_SEALED")
+        else:
+            if not run_repo.mark_dispatched(run.id, owner, _now()):
+                continue     # 租约过期/被回收:换下一个(不计容量)
+            logger.info("dispatcher 领取 queued run %s (incident=%s)",
+                        run.id, run.incident_id)
         try:
             await runner.start_investigation(run.incident_id, run.id, run.thread_id)
         except Exception:  # noqa: BLE001
