@@ -18,6 +18,12 @@ V2.0-A closure:
 - 启动/恢复/重启恢复统一走 validate_run_for_resume:快照存在且合法、schema_version
   受支持、incident/agent_run/thread/namespace 与 Run 一致、Capability/Policy/Prompt/
   Tool 四类冻结版本与当前可执行版本一致;任一失败禁止恢复并转 needs_human。
+
+V2.1-B closure:
+- 后台任务体(_run_graph)与审批恢复(resume_investigation)的图异常都自行落终态
+  (Run failed + Incident needs_human/failed + 原因短码),异常不得逃逸;
+- 恢复类失败语义:初始化 → GRAPH_RESUME_INIT_FAILED,执行 → GRAPH_RESUME_EXECUTION_FAILED;
+  调用方已裁决 Approval(不可重试),故一律不自动重放/不回退 queued(避免重复写)。
 """
 import asyncio
 import logging
@@ -208,12 +214,30 @@ async def start_investigation(incident_id: int, run_id: int, thread_id: str) -> 
     task.add_done_callback(lambda _t: _tasks.pop(run_id, None))
 
 
+def _terminate_resume_failed(run_id: int, incident_id: int, reason: str) -> None:
+    """审批恢复失败终态:Run failed(终态自动清 active_run_key/租约)+
+    Incident needs_human(坐席可见)+ 原因短码(列宽 64)。
+
+    不自动重放、不回退 queued:调用方(审批 API / 过期扫描器)已把 Approval CAS 为
+    approved/rejected/expired,不可重试;且 invoke 可能已产生副作用,自动二次执行
+    会重复写。恢复失败一律转人工。
+    """
+    run_repo.update_run_status(run_id, "failed")
+    incident_repo.update_status(incident_id, "needs_human", termination_reason=reason[:64])
+
+
 async def resume_investigation(thread_id: str, resume_value: dict) -> None:
     """用同一 thread_id 恢复挂起的图(interrupt 处继续)。
-    V2.0-A closure:恢复前统一校验(快照/绑定/四类冻结版本),任一失败禁止恢复、
-    标记明确原因并转 needs_human,不调用图。"""
-    from app.agent.graph import build_graph
 
+    V2.0-A closure:恢复前统一校验(快照/绑定/四类冻结版本),任一失败禁止恢复、
+    标记明确原因并转 needs_human,不调用图。
+    V2.1-B closure:调用方已把 Approval 裁决为 approved/rejected/expired(不可重试),
+    因此初始化与执行异常必须在此自行落终态,不允许异常逃逸把 Run 留在
+    awaiting_approval:
+
+    - 初始化失败(图尚未启动,无写操作)→ GRAPH_RESUME_INIT_FAILED;
+    - 执行失败(已进入 invoke,可能已写)→ GRAPH_RESUME_EXECUTION_FAILED,绝不重跑。
+    """
     run = run_repo.get_run_by_thread(thread_id)
     if run is None:
         logger.error("resume_investigation: thread=%s 无对应 Run(fail closed)", thread_id)
@@ -222,18 +246,27 @@ async def resume_investigation(thread_id: str, resume_value: dict) -> None:
         validate_run_for_resume(run, current_bundle_versions=_current_bundle_versions())
     except (ResumeBlocked, RunContextMissing, RunContextInvalid) as exc:
         reason = getattr(exc, "reason", "context_snapshot_invalid")
-        run_repo.update_run_status(run.id, "failed")
-        incident_repo.update_status(run.incident_id, "needs_human",
-                                    termination_reason=reason[:64])
+        _terminate_resume_failed(run.id, run.incident_id, reason)
         logger.warning("run %s 恢复被拒绝(%s): %s", run.id, reason, exc)
         return
-    graph = build_graph(checkpointer=get_saver())
-    async with execution_gate():
-        result = await asyncio.to_thread(
-            graph.invoke,
-            Command(resume=resume_value),
-            _graph_config(thread_id),
-        )
+    try:
+        from app.agent.graph import build_graph
+        graph = build_graph(checkpointer=get_saver())
+    except Exception:
+        logger.exception("graph resume init failed run=%s thread=%s", run.id, thread_id)
+        _terminate_resume_failed(run.id, run.incident_id, "GRAPH_RESUME_INIT_FAILED")
+        return
+    try:
+        async with execution_gate():
+            result = await asyncio.to_thread(
+                graph.invoke,
+                Command(resume=resume_value),
+                _graph_config(thread_id),
+            )
+    except Exception:
+        logger.exception("graph resume failed run=%s thread=%s", run.id, thread_id)
+        _terminate_resume_failed(run.id, run.incident_id, "GRAPH_RESUME_EXECUTION_FAILED")
+        return
     run = run_repo.get_run_by_thread(thread_id)
     if run is not None:
         status = result.get("status") or "finished"

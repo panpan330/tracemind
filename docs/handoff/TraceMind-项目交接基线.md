@@ -537,7 +537,7 @@ test_slow_query_no_baseline_no_current 等既有测试适配新契约(断言语�
 注意:本切片后 alertmanager 告警会真实创建 Incident(此前恒空);Dispatcher 默认开启,
 测试环境通过 _drain_stale_queued/_purge_demo_group 夹具保证确定性。
 
-## 16. V2.1-B closure 复核修复(2026-09-09)— 五缺口
+## 16. V2.1-B closure 复核修复(2026-09-09)— 五缺口 + 审批恢复
 
 - **映射失败禁止进入聚合**:`resolve_alert` 返回 None 时,AlertEvent/AlertInstance
   仍按既有规则归档/投影,但**不得改写 Incident 聚合**——FIRING 路径(不建
@@ -551,6 +551,17 @@ test_slow_query_no_baseline_no_current 等既有测试适配新契约(断言语�
   invoke、可能已产生写操作)→ `GRAPH_EXECUTION_FAILED`。两者都落 Run/Incident
   failed + 原因短码(incident.termination_reason),都**不回退 queued 重跑**
   (任务已注册、租约归 Dispatcher;确定性初始化失败回退会形成领取→失败→回退死循环)。
+- **审批恢复失败终态**(`runner.resume_investigation`,审批 API / 过期扫描器两条路径):
+  调用方先把 Approval CAS 裁决为 approved/rejected/expired(**不可重试**),随后才
+  调用恢复,因此恢复失败必须自行落终态,否则 Run 永久停在 `awaiting_approval`、
+  active_run_key 不释放、Incident 停在 `created`(已实测复现)。
+  初始化失败 → `GRAPH_RESUME_INIT_FAILED`;执行失败(可能已产生副作用)→
+  `GRAPH_RESUME_EXECUTION_FAILED`;两者都落 Run **failed**(终态自动清
+  active_run_key 与租约)+ Incident **needs_human**(坐席可见)+ 原因短码,
+  且**不自动重放、不回退 queued**(避免重复执行写操作)。
+  与 V2.0-A 的校验失败分支共用同一终态助手(`_terminate_resume_failed`)。
+  回归测试 ×4(API 路径 / 扫描器路径 × init / execution):断言 Approval 已裁决、
+  Run 不残留 awaiting_approval、活动键与租约释放、原因码准确、二次扫描不重复执行图。
 - **lifespan 清理边界前移**:`try` 从 MCP `start()` 之前开始,覆盖 MCP 启动、
   pending Run 恢复、后台任务创建与 yield;`finally` 内 cancel+await 两个后台任务,
   MCP `stop()` 包在 try/finally 中,保证引用清空。恢复阶段异常测试断言 MCP
@@ -561,8 +572,5 @@ test_slow_query_no_baseline_no_current 等既有测试适配新契约(断言语�
   仍强制 1(单元 + Dispatcher 行为)。
 - **清理**:删除 `runner.py` 中重复的 `pending_task_count` 定义。
 
-**本轮测试结果**(仅本机,无 live 验收):聚合/Dispatcher/closure/网关专项 63 passed;
-全量 **651 passed / 1 skipped 零失败**。
-**未修复的同类风险(待确认)**:`resume_investigation` 的 `build_graph` 仍在 try 之外
-(审批恢复由 approvals API / approval_scanner 调用),初始化异常会逃逸且无重试路径;
-本轮按用户限定范围未改动,建议下一轮按同一语义补齐。
+**本轮测试结果**(仅本机,无 live 验收、无真实库迁移):聚合/Dispatcher/closure/网关
+专项 67 passed;审批/恢复/回滚上下文专项 59 passed;全量 **655 passed / 1 skipped 零失败**。

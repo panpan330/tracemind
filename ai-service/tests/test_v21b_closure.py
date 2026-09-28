@@ -7,7 +7,11 @@
 4. 共享 Incident 并发聚合(真实线程并发,行锁保证);
 5. DISPATCHED 后启动失败 → 回退 queued 安全重试;
 6. 图执行门统一串行(max_concurrent_runs 覆盖 recover/resume)+ 图初始化异常
-   不使 Run/Incident 永久处于进行中。
+   不使 Run/Incident 永久处于进行中;
+7. 并发上限唯一来源(按实际 Saver 类型判定,.db 后缀同样强制 1);
+8. 图异常终态(初始化/执行)不使 Run/Incident 永久处于进行中;
+9. 审批恢复失败(初始化/执行)不得残留 awaiting_approval——审批 API 与过期
+   扫描器两条路径都落终态、释放活动键、原因码准确、不二次执行。
 """
 import asyncio
 import threading
@@ -21,13 +25,14 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.engine import get_control_engine
-from app.db.models import AgentRun, Incident
+from app.db.models import AgentRun, Approval, Incident, utcnow
 from app.incident_gateway import service as gateway_service
 from app.incident_gateway.schemas import AlertmanagerWebhookIn
 from app.main import app as fastapi_app
 from app.repositories import incident_repo, run_repo
 from tests.test_dispatcher import _drain_stale_queued, _mk_queued, _run_row
 from app.services import dispatcher, runner
+from app.services.approval_scanner import scan_expired_approvals_once
 from langgraph.types import Command
 
 
@@ -565,3 +570,104 @@ async def test_graph_failure_never_leaves_run_in_progress(
     assert inc.termination_reason == expected_reason
     assert bool(executed) is expect_executed        # 区分"图尚未启动"与"执行已开始"
     assert run_id not in runner._tasks              # 任务已收尾,不占容量
+
+
+# ---------- 9) 审批恢复失败(初始化/执行)不得残留 awaiting_approval ----------
+
+def _mk_awaiting_run(*, expired: bool):
+    """建 Incident + 冻结快照 Run(awaiting_approval,持有 active_run_key)
+    + 绑定该 Run 的 Approval(pending;expired=True 时已过期)。"""
+    with Session(get_control_engine()) as s:
+        inc = Incident(title=f"resume-{uuid.uuid4().hex[:6]}", severity="high",
+                       service_ref="inventory-service",
+                       affected_operation_ref="INVENTORY_LOOKUP")
+        s.add(inc)
+        s.commit()
+        s.refresh(inc)
+    run = run_repo.create_run(inc.id, active_run_key=f"incident:{inc.id}")
+    run_repo.update_run_status(run.id, "awaiting_approval")
+    with Session(get_control_engine()) as s:
+        a = Approval(incident_id=inc.id, fix_proposal_id=1,
+                     action_type="CREATE_INVENTORY_INDEX", parameters_hash="h",
+                     status="pending", agent_run_id=run.id,
+                     expires_at=(utcnow() - timedelta(seconds=1) if expired
+                                 else utcnow() + timedelta(minutes=5)))
+        s.add(a)
+        s.commit()
+        s.refresh(a)
+    return inc.id, run.id, a.id
+
+
+def _approval_status(approval_id):
+    with Session(get_control_engine()) as s:
+        return s.get(Approval, approval_id).status
+
+
+def _patch_graph_failure(monkeypatch, phase, calls):
+    """phase=init → build_graph 抛错(图尚未启动);execution → invoke 抛错(已开始)。"""
+    if phase == "init":
+        def failing_build(**kwargs):
+            calls.append("build")
+            raise RuntimeError("resume build_graph 注入失败")
+
+        monkeypatch.setattr("app.agent.graph.build_graph", failing_build)
+    else:
+        class FailingGraph:
+            def invoke(self, initial, config=None):
+                calls.append("invoke")
+                raise RuntimeError("resume invoke 注入失败")
+
+        monkeypatch.setattr("app.agent.graph.build_graph", lambda **kw: FailingGraph())
+
+
+@pytest.mark.parametrize("phase,expected_reason", [
+    ("init", "GRAPH_RESUME_INIT_FAILED"),
+    ("execution", "GRAPH_RESUME_EXECUTION_FAILED"),
+])
+def test_scanner_resume_failure_terminates_run(monkeypatch, phase, expected_reason):
+    """过期扫描器路径:Approval 已置 expired 后恢复失败,Run 必须落终态
+    (不残留 awaiting_approval)、活动键释放、原因码准确,且不会二次执行。"""
+    inc_id, run_id, approval_id = _mk_awaiting_run(expired=True)
+    calls = []
+    _patch_graph_failure(monkeypatch, phase, calls)
+
+    asyncio.run(scan_expired_approvals_once())
+
+    assert _approval_status(approval_id) == "expired"        # 已裁决(不可重试)
+    assert calls == (["build"] if phase == "init" else ["invoke"])
+    state = _run_state(run_id)
+    assert state.status == "failed"                          # 不是 awaiting_approval
+    assert state.active_run_key is None and state.lease_owner is None
+    inc = _incident_row(inc_id)
+    assert inc.status == "needs_human"                       # 坐席可见
+    assert inc.termination_reason == expected_reason
+
+    asyncio.run(scan_expired_approvals_once())               # 二次扫描
+    assert len(calls) == 1                                   # 无自动重放/二次执行
+
+
+@pytest.mark.parametrize("phase,expected_reason", [
+    ("init", "GRAPH_RESUME_INIT_FAILED"),
+    ("execution", "GRAPH_RESUME_EXECUTION_FAILED"),
+])
+def test_api_decision_resume_failure_terminates_run(monkeypatch, phase, expected_reason):
+    """审批 API 路径:CAS 裁决成功但恢复失败 → Run 落终态、活动键释放、
+    Incident needs_human + 原因码;图只被调用一次(不自动重试)。"""
+    inc_id, run_id, approval_id = _mk_awaiting_run(expired=False)
+    calls = []
+    _patch_graph_failure(monkeypatch, phase, calls)
+
+    # 不进 lifespan(recover_pending_runs 会恢复共享测试库里的其他遗留 Run,
+    # 干扰"图只被调用一次"的断言);审批 API 路径本身不依赖 MCP/后台任务
+    client = TestClient(fastapi_app)
+    resp = client.post(f"/api/incidents/{inc_id}/approvals/{approval_id}/decision",
+                       json={"decision": "approved"})
+    assert resp.status_code == 200
+    assert _approval_status(approval_id) == "approved"       # 已裁决(不可重试)
+    assert calls == (["build"] if phase == "init" else ["invoke"])
+    state = _run_state(run_id)
+    assert state.status == "failed"                          # 不是 awaiting_approval
+    assert state.active_run_key is None and state.lease_owner is None
+    inc = _incident_row(inc_id)
+    assert inc.status == "needs_human"
+    assert inc.termination_reason == expected_reason
