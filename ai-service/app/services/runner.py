@@ -41,9 +41,14 @@ _execution_gate: asyncio.Semaphore | None = None
 _execution_gate_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _effective_max_concurrent() -> int:
-    """SQLite checkpointer(单实例声明)下强制为 1;换共享 checkpointer 后放开。"""
-    if settings.checkpoint_path.endswith(".sqlite"):
+def max_concurrent_runs() -> int:
+    """并发上限的唯一来源(图执行门与 Dispatcher 共用,禁止各自判断)。
+
+    上限由**实际 checkpointer 类型**决定,与 checkpoint_path 的文件名/扩展名无关:
+    当前 checkpointer 恒为单实例 SqliteSaver → 强制 1(单连接写序列化,并发跑图会
+    互相阻塞/损坏);将来换共享 checkpointer 时只改此处单点放开。
+    """
+    if isinstance(get_saver(), SqliteSaver):
         return 1
     return max(1, settings.max_concurrent_runs)
 
@@ -56,14 +61,9 @@ def execution_gate() -> asyncio.Semaphore:
     global _execution_gate, _execution_gate_loop
     loop = asyncio.get_running_loop()
     if _execution_gate is None or _execution_gate_loop is not loop:
-        _execution_gate = asyncio.Semaphore(_effective_max_concurrent())
+        _execution_gate = asyncio.Semaphore(max_concurrent_runs())
         _execution_gate_loop = loop
     return _execution_gate
-
-
-def pending_task_count() -> int:
-    """Dispatcher 容量计算:当前存活图任务数(含恢复启动的任务)。"""
-    return len(_tasks)
 
 
 def pending_task_count() -> int:
@@ -149,9 +149,30 @@ def _finalize_run(incident_id: int, run_id: int, status: str,
         logger.exception("finalize_run failed incident=%s run=%s", incident_id, run_id)
 
 
+def _terminate_failed(incident_id: int, run_id: int, reason: str) -> None:
+    """图异常统一终态:Run/Incident 落 failed + 原因短码(列宽 64)。
+
+    不在此处回退 queued:任务已注册(dispatch/租约归 Dispatcher 管理),且确定性
+    初始化失败回退会形成 领取→失败→回退 的死循环;需要重试时由新 Run 承担。
+    """
+    run_repo.update_run_status(run_id, "failed")
+    incident_repo.update_status(incident_id, "failed", termination_reason=reason[:64])
+
+
 async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dict) -> None:
-    from app.agent.graph import build_graph
-    graph = build_graph(checkpointer=get_saver())
+    """图执行(后台任务体)。两类失败语义不同,都不允许异常逃出任务体:
+
+    - 初始化失败(图尚未启动,未产生任何写操作)→ GRAPH_INIT_FAILED;
+    - 执行失败(已进入 invoke,可能已产生写操作)→ GRAPH_EXECUTION_FAILED,绝不重跑。
+    否则异常逃逸后 Run 会永久停在 investigating / DISPATCHED(Dispatcher 无法捕获)。
+    """
+    try:
+        from app.agent.graph import build_graph
+        graph = build_graph(checkpointer=get_saver())
+    except Exception:
+        logger.exception("graph init failed incident=%s run=%s", incident_id, run_id)
+        _terminate_failed(incident_id, run_id, "GRAPH_INIT_FAILED")
+        return
     try:
         async with execution_gate():
             result = await asyncio.to_thread(
@@ -161,8 +182,7 @@ async def _run_graph(incident_id: int, run_id: int, thread_id: str, initial: dic
             )
     except Exception:
         logger.exception("graph run failed incident=%s run=%s", incident_id, run_id)
-        run_repo.update_run_status(run_id, "failed")
-        incident_repo.update_status(incident_id, "failed")
+        _terminate_failed(incident_id, run_id, "GRAPH_EXECUTION_FAILED")
         return
     status = result.get("status") or "finished"
     run_repo.update_run_status(run_id, status)

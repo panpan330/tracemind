@@ -1,7 +1,8 @@
 """V2.1-B:数据库租约 Dispatcher —— 领取 queued Run 并启动调查。
 
-- 每轮领取前计算剩余容量:effective_max − runner 存活任务数
-  (含 recover_pending_runs 恢复的任务);SQLite checkpointer 下 effective_max 强制 1;
+- 每轮领取前计算剩余容量:runner.max_concurrent_runs() − runner 存活任务数
+  (含 recover_pending_runs 恢复的任务);上限唯一来源在 runner(按实际
+  checkpointer 类型判定,当前 SqliteSaver 恒为 1);
 - 领取(CAS,含过期 CLAIMED 回收)→ DISPATCHED CAS(status=queued、owner、租约校验)
   → start_investigation(快照驱动);
 - 测试环境默认关闭(dispatch_enabled),显式开启的测试直接调 loop 函数;
@@ -23,22 +24,18 @@ def _now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _effective_max_concurrent() -> int:
-    """SQLite checkpointer(单实例声明)下强制为 1;换共享 checkpointer 后放开。"""
-    if settings.checkpoint_path.endswith(".sqlite"):
-        return 1
-    return max(1, settings.max_concurrent_runs)
-
-
 def _owner() -> str:
     return f"dispatcher-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
 async def dispatch_once() -> int:
-    """领取并启动至多(剩余容量)个 queued Run;返回启动数。"""
+    """领取并启动至多(剩余容量)个 queued Run;返回启动数。
+
+    容量上限取 runner.max_concurrent_runs()(唯一来源:按实际 checkpointer 类型
+    判定,当前 SqliteSaver 恒为 1),与图执行门同源。"""
     from app.services import runner
 
-    capacity = _effective_max_concurrent() - runner.pending_task_count()
+    capacity = runner.max_concurrent_runs() - runner.pending_task_count()
     started = 0
     owner = _owner()
     while capacity > 0:

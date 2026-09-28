@@ -1,10 +1,13 @@
-"""V2.1-B closure:六项修复的回归测试。
+"""V2.1-B closure:修复项的回归测试。
 
-1. lifespan 任务管理(dispatch_enabled 两种配置,无泄漏/无 AttributeError);
+1. lifespan 任务管理(dispatch_enabled 两种配置,无泄漏/无 AttributeError;
+   recover 阶段异常时 MCP Manager 仍必须被 stop);
 2. touched_firing 不重复关联(occurrence 按矩阵);
-3. 共享 Incident 并发聚合(真实线程并发,行锁保证);
-4. 图执行门统一串行(max_concurrent_runs 覆盖 recover/resume);
-5. DISPATCHED 后启动失败 → 回退 queued 安全重试。
+3. 映射失败(resolve_alert → None)不得改写聚合 Incident(FIRING/RESOLVED 两条路径);
+4. 共享 Incident 并发聚合(真实线程并发,行锁保证);
+5. DISPATCHED 后启动失败 → 回退 queued 安全重试;
+6. 图执行门统一串行(max_concurrent_runs 覆盖 recover/resume)+ 图初始化异常
+   不使 Run/Incident 永久处于进行中。
 """
 import asyncio
 import threading
@@ -29,13 +32,14 @@ from langgraph.types import Command
 
 
 def _payload(*, fp=None, starts_at="2026-09-06T05:00:00.000Z", status="firing",
-             annotations=None, ends_at=None):
+             annotations=None, ends_at=None, service="order-service",
+             operation="ORDER_CREATE"):
     return {
         "version": "4", "groupKey": "g", "status": status, "receiver": "tracemind",
         "alerts": [{
             "status": status,
-            "labels": {"alertname": "OrderOperationP95High", "service": "order-service",
-                       "operation": "ORDER_CREATE", "environment": "demo"},
+            "labels": {"alertname": "OrderOperationP95High", "service": service,
+                       "operation": operation, "environment": "demo"},
             "annotations": annotations or {"summary": "t"},
             "startsAt": starts_at, "endsAt": ends_at,
             "fingerprint": fp or uuid.uuid4().hex[:12],
@@ -84,9 +88,16 @@ def _links_for(inc_id):
 
 def _runs_for(inc_id):
     with Session(get_control_engine()) as s:
-        return s.scalars(text(
+        return s.execute(text(
             "SELECT id, status, trigger_source, dispatch_status FROM agent_run "
-            "WHERE incident_id = :i ORDER BY id"), {"i": inc_id}).all()
+            "WHERE incident_id = :i ORDER BY id"), {"i": inc_id}).fetchall()
+
+
+def _instance_status(fp):
+    with Session(get_control_engine()) as s:
+        return s.scalar(text(
+            "SELECT current_status FROM alert_instance "
+            "WHERE external_fingerprint = :f"), {"f": fp})
 
 
 # ---------- 1) lifespan 任务管理 ----------
@@ -111,6 +122,62 @@ def test_lifespan_manages_background_tasks(monkeypatch, dispatch_enabled):
     assert main_mod.mcp_manager is None
 
 
+def test_lifespan_stops_mcp_when_recover_fails(monkeypatch):
+    """恢复阶段异常时清理边界必须已生效:MCP Manager 被真正 stop()、
+    客户端引用被清空(而不是仅把全局变量置 None 了事)。"""
+    stopped = []
+
+    class FakeMgr:
+        is_ready = True
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            stopped.append(True)
+
+    monkeypatch.setattr("app.main.McpClientManager", lambda *a, **k: FakeMgr())
+
+    async def failing_recover():
+        raise RuntimeError("recover 注入失败")
+
+    monkeypatch.setattr(runner, "recover_pending_runs", failing_recover)
+
+    import app.main as main_mod
+    from app.mcp import client as mcp_client_mod
+    with pytest.raises(RuntimeError):
+        with TestClient(fastapi_app):
+            pass
+    assert stopped == [True]                 # stop 确实被调用
+    assert main_mod.mcp_manager is None
+    assert mcp_client_mod._client is None    # 客户端引用已清空
+
+
+def test_lifespan_stops_mcp_when_start_fails(monkeypatch):
+    """MCP 启动失败同样走清理边界:半启动的 Manager 必须被 stop(),引用清空。"""
+    stopped = []
+
+    class FailingMgr:
+        is_ready = False
+
+        async def start(self):
+            raise RuntimeError("MCP 契约校验失败")
+
+        async def stop(self):
+            stopped.append(True)
+
+    monkeypatch.setattr("app.main.McpClientManager", lambda *a, **k: FailingMgr())
+
+    import app.main as main_mod
+    from app.mcp import client as mcp_client_mod
+    with pytest.raises(RuntimeError):
+        with TestClient(fastapi_app):
+            pass
+    assert stopped == [True]
+    assert main_mod.mcp_manager is None
+    assert mcp_client_mod._client is None
+
+
 # ---------- 2) touched_firing 不重复关联 ----------
 
 def test_touched_firing_updates_existing_link_only():
@@ -132,7 +199,58 @@ def test_touched_firing_updates_existing_link_only():
     _purge_demo_group()
 
 
-# ---------- 3) 共享 Incident 并发聚合(真实线程并发) ----------
+# ---------- 3) 映射失败:不得改写聚合 Incident(FIRING/RESOLVED 两条路径) ----------
+
+def test_mapping_failure_firing_does_not_touch_incident():
+    """映射失败的 FIRING:事件+实例照常,但不聚合/不建 Incident/不建 Run。"""
+    _purge_demo_group()
+    fp = uuid.uuid4().hex[:12]
+    out = _process(_payload(fp=fp, service="unknown-service",
+                            operation="UNKNOWN_OP"))
+    assert out["ignored"] == 1 and out["reasons"] == ["incomplete_labels"]
+    assert out["events"]["appended"] == 1
+    assert out["created_incidents"] == [] and out["updated_incidents"] == []
+    assert _incident_for(fp) is None                    # 未建 Incident
+    assert _instance_status(fp) == "FIRING"             # 实例照常投影
+
+
+def test_mapping_failure_resolved_does_not_touch_incident():
+    """映射失败的 RESOLVED 不得改写既有 Incident 聚合。
+
+    先用合法标签建 FIRING(建 Incident + 关联 + queued Run),再用同 fingerprint、
+    同 startsAt、但 service/operation 不符合服务端映射的 RESOLVED:请求按
+    incomplete_labels 被 ignored,Incident 的 alert_status/occurrence_count/关联/Run
+    均不被聚合逻辑改写(仅 AlertEvent/AlertInstance 归档投影)。
+    """
+    _purge_demo_group()
+    fp = uuid.uuid4().hex[:12]
+    starts = "2026-09-06T05:00:00.000Z"
+    _process(_payload(fp=fp, starts_at=starts))         # 合法 FIRING:建 Incident
+    inc = _incident_for(fp)
+    assert inc.occurrence_count == 1 and inc.alert_status == "FIRING"
+    links_before = [tuple(r) for r in _links_for(inc.id)]
+    runs_before = [tuple(r) for r in _runs_for(inc.id)]
+    assert len(links_before) == 1 and len(runs_before) == 1
+
+    out = _process(_payload(fp=fp, starts_at=starts, status="resolved",
+                            ends_at="2026-09-06T06:00:00.000Z",
+                            service="unknown-service", operation="UNKNOWN_OP"))
+    assert out["ignored"] == 1 and out["reasons"] == ["incomplete_labels"]
+    assert out["events"]["appended"] == 1                # 事件照常归档
+    assert out["created_incidents"] == [] and out["updated_incidents"] == []
+
+    inc_after = _incident_for(fp)
+    assert inc_after.alert_status == "FIRING"            # 未被误改为 RESOLVED
+    assert inc_after.occurrence_count == 1               # 未计数
+    assert inc_after.lifecycle_status == "OPEN"
+    assert [tuple(r) for r in _links_for(inc_after.id)] == links_before
+    assert [tuple(r) for r in _runs_for(inc_after.id)] == runs_before
+    assert _instance_status(fp) == "RESOLVED"            # 实例单向投影照常
+    _purge_demo_group()
+
+
+# ---------- 4) 共享 Incident 并发聚合(真实线程并发) ----------
+
 
 def _concurrent_deliveries(payloads, workers):
     from concurrent.futures import ThreadPoolExecutor
@@ -238,7 +356,7 @@ async def test_start_failure_reverts_to_queued(monkeypatch):
     assert _run_row(run_id).dispatch_attempts == 2
 
 
-# ---------- 4) 图执行门:recover 串行 + resume 期间 Dispatcher 不启动第二图 ----------
+# ---------- 6) 图执行门:recover 串行 + resume 期间 Dispatcher 不启动第二图 ----------
 
 @pytest.mark.asyncio
 async def test_recover_pending_runs_not_parallel(monkeypatch, tmp_path):
@@ -349,3 +467,101 @@ async def test_resume_holds_gate_dispatcher_blocked(monkeypatch, tmp_path):
         await task
     except asyncio.CancelledError:
         pass
+
+
+# ---------- 7) 并发上限唯一来源:按实际 Saver 类型(不看路径扩展名) ----------
+
+def test_concurrency_limit_keys_off_saver_type(monkeypatch, tmp_path):
+    """上限由实际 checkpointer 类型决定:.db 后缀 + max_concurrent_runs=4 仍强制 1;
+    换成非 SqliteSaver 的共享 checkpointer 时同一点放开。"""
+    monkeypatch.setattr(runner, "_saver", None)
+    monkeypatch.setattr(runner.settings, "checkpoint_path", str(tmp_path / "cp.db"))
+    monkeypatch.setattr(runner.settings, "max_concurrent_runs", 4)
+    assert runner.max_concurrent_runs() == 1            # 后缀 .db 不再决定行为
+
+    monkeypatch.setattr(runner, "get_saver", lambda: object())
+    assert runner.max_concurrent_runs() == 4
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_capacity_uses_unified_limit(monkeypatch, tmp_path):
+    """Dispatcher 容量与执行门同源:.db 后缀 + max_concurrent_runs=4 时单轮仍只
+    启动 1 个 queued Run(容量=SqliteSaver 强制的 1,而不是配置的 4)。"""
+    monkeypatch.setattr(runner, "_saver", None)
+    monkeypatch.setattr(runner.settings, "checkpoint_path", str(tmp_path / "cp.db"))
+    monkeypatch.setattr(runner.settings, "max_concurrent_runs", 4)
+
+    started = []
+
+    async def recording_start(incident_id, run_id, thread_id):
+        started.append(run_id)
+
+    monkeypatch.setattr(runner, "start_investigation", recording_start)
+    _drain_stale_queued()
+    _mk_queued(drain=False)
+    _mk_queued(drain=False)
+    await dispatcher.dispatch_once()
+    assert len(started) == 1
+
+
+# ---------- 8) 图异常(初始化/执行)不得把 Run/Incident 永久留在进行中 ----------
+
+def _incident_row(inc_id):
+    with Session(get_control_engine()) as s:
+        return s.execute(text(
+            "SELECT status, termination_reason FROM incident WHERE id=:i"),
+            {"i": inc_id}).fetchone()
+
+
+def _run_state(run_id):
+    with Session(get_control_engine()) as s:
+        return s.execute(text(
+            "SELECT status, lease_owner, active_run_key FROM agent_run WHERE id=:i"),
+            {"i": run_id}).fetchone()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase,expected_reason,expect_executed", [
+    ("init", "GRAPH_INIT_FAILED", False),
+    ("execution", "GRAPH_EXECUTION_FAILED", True),
+])
+async def test_graph_failure_never_leaves_run_in_progress(
+        monkeypatch, tmp_path, phase, expected_reason, expect_executed):
+    """真实 Dispatcher 路径(mark_dispatched → start_investigation → 后台任务):
+    初始化失败与执行失败都落明确终态,Run/Incident 不会永久处于进行中;
+    两类失败原因码区分,且都不回退 queued 重跑(执行可能已产生写操作)。"""
+    monkeypatch.setattr(runner, "_saver", None)
+    monkeypatch.setattr(runner.settings, "checkpoint_path", str(tmp_path / "cp.sqlite"))
+    monkeypatch.setattr(runner.settings, "max_concurrent_runs", 1)
+
+    executed = []
+
+    if phase == "init":
+        def failing_build(**kwargs):        # 图尚未启动:init 阶段即抛错
+            raise RuntimeError("build_graph 注入失败")
+
+        monkeypatch.setattr("app.agent.graph.build_graph", failing_build)
+    else:
+        class FailingGraph:                 # 执行已开始:invoke 阶段抛错
+            def invoke(self, initial, config):
+                executed.append(True)
+                raise RuntimeError("invoke 注入失败")
+
+        monkeypatch.setattr("app.agent.graph.build_graph", lambda **kw: FailingGraph())
+
+    _drain_stale_queued()
+    inc_id, run_id = _mk_queued(drain=False)
+    await dispatcher.dispatch_once()
+    for _ in range(100):                    # 等待后台任务收尾
+        if _run_state(run_id).status == "failed":
+            break
+        await asyncio.sleep(0.05)
+
+    state = _run_state(run_id)
+    assert state.status == "failed"                 # 不是 investigating/queued
+    assert state.lease_owner is None and state.active_run_key is None
+    inc = _incident_row(inc_id)
+    assert inc.status == "failed"                   # 不是 investigating/created
+    assert inc.termination_reason == expected_reason
+    assert bool(executed) is expect_executed        # 区分"图尚未启动"与"执行已开始"
+    assert run_id not in runner._tasks              # 任务已收尾,不占容量

@@ -7,6 +7,7 @@
    → duplicate 并跳过(精确重放不重复计数、不重复投影);
 3. AlertInstance 投影(单向状态机:FIRING → RESOLVED,version CAS,迟到 FIRING 只归档);
 4. 服务端映射失败 → 归档+投影照常但 ignored(不聚合不建 Run,V2.1-B §四 唯一语义);
+   FIRING 与 RESOLVED 两条路径都不得改写 Incident 聚合(仅归档/投影);
 5. 聚合:open_group_key 唯一裁决(FOR UPDATE)+ created/touched_firing 时
    occurrence+1(Incident 行锁)+ incident_alert 权威关联(仅首次)+
    resolved 按实例全集汇总(任一 FIRING → 保持 FIRING);
@@ -305,7 +306,12 @@ def _process_one(source, alert, received_at, allowlist):
                                 incident.last_seen_at = received_at
                                 incident.alert_status = "FIRING"
                             _link_incident_alert(session, incident.id, instance_key)
-                    if action in ("advanced_resolved", "touched_resolved"):
+                    if resolved is not None and action in ("advanced_resolved",
+                                                           "touched_resolved"):
+                        # 映射失败(resolved is None)时禁止进入聚合:事件与实例
+                        # 照常归档/投影,但 Incident 的 alert_status/occurrence/
+                        # 关联一律不改写(否则映射失败的 RESOLVED 会把仍 FIRING
+                        # 的 Incident 误判为 RESOLVED)
                         if linked_id is None:
                             linked_id = _linked_incident_id(session, instance_key)
                         if linked_id is not None:

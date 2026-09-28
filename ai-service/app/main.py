@@ -24,18 +24,22 @@ async def lifespan(app: FastAPI):
     profile = getattr(settings, "run_profile", "local")
     if profile in ("vm_release", "production") and settings.mcp_transport != "streamable_http":
         raise RuntimeError("vm_release/production 必须使用 mcp_transport=streamable_http,禁止 stdio")
-    # MCP Server 启动/契约校验失败 → start() 抛异常 → 应用启动失败(readiness=false)
+    # 清理边界从 MCP 启动前开始:MCP 启动、pending Run 恢复、后台任务创建与 yield
+    # 任一阶段异常都必须走同一 finally(MCP 已半启动时也要 stop,客户端引用必须清空)。
+    scanner_task = None
+    dispatch_task = None
     mcp_manager = McpClientManager()
-    await mcp_manager.start()
-    set_mcp_client(mcp_manager)
-    await runner.recover_pending_runs()  # 启动先恢复未完成任务,再接收流量
-    # V2.1-B closure:两个后台任务独立变量管理(不得互相覆盖)
-    scanner_task = asyncio.create_task(scanner_loop())
-    dispatch_task = (asyncio.create_task(dispatcher.dispatch_loop())
-                     if settings.dispatch_enabled else None)
-    app.state.scanner_task = scanner_task
-    app.state.dispatch_task = dispatch_task
     try:
+        # MCP Server 启动/契约校验失败 → start() 抛异常 → 应用启动失败(readiness=false)
+        await mcp_manager.start()
+        set_mcp_client(mcp_manager)
+        await runner.recover_pending_runs()  # 启动先恢复未完成任务,再接收流量
+        # V2.1-B closure:两个后台任务独立变量管理(不得互相覆盖)
+        scanner_task = asyncio.create_task(scanner_loop())
+        dispatch_task = (asyncio.create_task(dispatcher.dispatch_loop())
+                         if settings.dispatch_enabled else None)
+        app.state.scanner_task = scanner_task
+        app.state.dispatch_task = dispatch_task
         yield
     finally:
         # 两种 dispatch_enabled 配置下都必须 cancel + await 全部后台任务
@@ -47,9 +51,11 @@ async def lifespan(app: FastAPI):
                 await bg
             except asyncio.CancelledError:
                 pass
-        await mcp_manager.stop()
-        set_mcp_client(None)
-        mcp_manager = None
+        try:
+            await mcp_manager.stop()
+        finally:
+            set_mcp_client(None)
+            mcp_manager = None
 
 
 app = FastAPI(title="TraceMind AI Service", lifespan=lifespan)

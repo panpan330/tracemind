@@ -536,3 +536,33 @@ E3 unknown 语义经 Dispatcher 集成测试验证(无基线 Run 不确认根因
 test_slow_query_no_baseline_no_current 等既有测试适配新契约(断言语义保留)。
 注意:本切片后 alertmanager 告警会真实创建 Incident(此前恒空);Dispatcher 默认开启,
 测试环境通过 _drain_stale_queued/_purge_demo_group 夹具保证确定性。
+
+## 16. V2.1-B closure 复核修复(2026-09-09)— 五缺口
+
+- **映射失败禁止进入聚合**:`resolve_alert` 返回 None 时,AlertEvent/AlertInstance
+  仍按既有规则归档/投影,但**不得改写 Incident 聚合**——FIRING 路径(不建
+  Incident/Run/不计 occurrence)与 RESOLVED 路径(不按实例全集改 alert_status)
+  都受此约束;否则映射失败的 RESOLVED 会把仍 FIRING 的 Incident 误判为 RESOLVED。
+  回归测试:合法 FIRING 建 Incident 后,同 fingerprint/同 startsAt 但 service/operation
+  不符合服务端映射的 RESOLVED → ignored(incomplete_labels),Incident 的
+  alert_status/occurrence_count/关联/Run 全部不变,实例仍单向投影为 RESOLVED。
+- **图异常终态语义**(`services/runner.py::_run_graph`,后台任务体,异常不得逃逸):
+  初始化失败(图尚未启动、无写操作)→ `GRAPH_INIT_FAILED`;执行失败(已进入
+  invoke、可能已产生写操作)→ `GRAPH_EXECUTION_FAILED`。两者都落 Run/Incident
+  failed + 原因短码(incident.termination_reason),都**不回退 queued 重跑**
+  (任务已注册、租约归 Dispatcher;确定性初始化失败回退会形成领取→失败→回退死循环)。
+- **lifespan 清理边界前移**:`try` 从 MCP `start()` 之前开始,覆盖 MCP 启动、
+  pending Run 恢复、后台任务创建与 yield;`finally` 内 cancel+await 两个后台任务,
+  MCP `stop()` 包在 try/finally 中,保证引用清空。恢复阶段异常测试断言 MCP
+  `stop()` 确实被调用(非仅全局置 None)。
+- **并发上限唯一来源**:`runner.max_concurrent_runs()` 按**实际 checkpointer 类型**
+  判定(`isinstance(saver, SqliteSaver)` → 1),不再看 `checkpoint_path` 扩展名;
+  图执行门与 Dispatcher 容量同源。测试:路径后缀 `.db` + max_concurrent_runs=4
+  仍强制 1(单元 + Dispatcher 行为)。
+- **清理**:删除 `runner.py` 中重复的 `pending_task_count` 定义。
+
+**本轮测试结果**(仅本机,无 live 验收):聚合/Dispatcher/closure/网关专项 63 passed;
+全量 **651 passed / 1 skipped 零失败**。
+**未修复的同类风险(待确认)**:`resume_investigation` 的 `build_graph` 仍在 try 之外
+(审批恢复由 approvals API / approval_scanner 调用),初始化异常会逃逸且无重试路径;
+本轮按用户限定范围未改动,建议下一轮按同一语义补齐。
