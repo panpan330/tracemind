@@ -12,6 +12,11 @@
    occurrence+1(Incident 行锁)+ incident_alert 权威关联(仅首次)+
    resolved 按实例全集汇总(任一 FIRING → 保持 FIRING);
 6. 仅新建 Incident 时创建 queued Run(基线 None);Agent 由 Dispatcher 启动。
+
+V2.1-C:episode 收尾 —— resolved 汇总为 RESOLVED 时发 incident.alert_resolved
+(recovered: false)并在同事务尝试关闭 episode(maybe_close_incident,条件含
+"无非终态 Run");批后补偿独立短事务收敛。生命周期事件与聚合同事务落库;
+不发 alert.received(原始告警由 alert_event 不可变留痕,D4 裁决)。
 """
 import logging
 from datetime import datetime, timezone
@@ -28,6 +33,9 @@ from app.incident_gateway.fingerprint import (alert_instance_key, canonical_json
 from app.tools_core.errors import ToolBusinessError
 from app.incident_gateway.registry import group_key_hash, resolve_alert
 from app.incident_gateway.schemas import AlertmanagerWebhookIn
+from app.repositories.event_repo import append_event_in_session
+from app.services.incident_lifecycle import (close_incident_if_resolved,
+                                             maybe_close_incident)
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +314,20 @@ def _process_one(source, alert, received_at, allowlist):
                                 incident.last_seen_at = received_at
                                 incident.alert_status = "FIRING"
                             _link_incident_alert(session, incident.id, instance_key)
+                            if is_new_incident:
+                                # V2.1-C:生命周期事件与聚合同事务(坐席可见)
+                                append_event_in_session(
+                                    session, incident.id, "incident.created_from_alert",
+                                    {"incident_id": incident.id,
+                                     "alert_name": resolved.alertname,
+                                     "service": resolved.service,
+                                     "operation": resolved.operation,
+                                     "occurrence_count": incident.occurrence_count})
+                            else:
+                                append_event_in_session(
+                                    session, incident.id, "incident.alert_merged",
+                                    {"incident_id": incident.id,
+                                     "occurrence_count": incident.occurrence_count})
                     if resolved is not None and action in ("advanced_resolved",
                                                            "touched_resolved"):
                         # 映射失败(resolved is None)时禁止进入聚合:事件与实例
@@ -322,6 +344,13 @@ def _process_one(source, alert, received_at, allowlist):
                             # (不关 lifecycle、不清 open_group_key、无 SELF_RECOVERED)
                             if _firing_instances_remaining(session, linked_id) == 0:
                                 incident.alert_status = "RESOLVED"
+                                # V2.1-C:resolved ≠ 恢复(坐席可见);同事务尝试关闭
+                                # episode(条件含"无非终态 Run",§九)
+                                append_event_in_session(
+                                    session, linked_id, "incident.alert_resolved",
+                                    {"incident_id": linked_id, "recovered": False})
+                                out["resolved_incidents"] = [linked_id]
+                                maybe_close_incident(session, linked_id)
                     if (is_new_incident and resolved is not None
                             and action == "created_firing"):
                         _insert_queued_run(session, incident)
@@ -373,4 +402,10 @@ def process_alert_batch(source, payload):
             counters[key].extend(out.get(key) or [])
         for k, v in (out.get("events") or {}).items():
             counters["events"][k] = counters["events"].get(k, 0) + v
+        counters.setdefault("resolved_incidents", []).extend(
+            out.get("resolved_incidents") or [])
+    # V2.1-C:批后补偿 —— Run 终态提交与 resolved 提交错开时,两次关闭尝试可能都
+    # 落在对方提交前;此处独立短事务再试一次(幂等),保证 episode 收敛关闭。
+    for inc_id in dict.fromkeys(counters.get("resolved_incidents") or []):
+        close_incident_if_resolved(inc_id)
     return counters

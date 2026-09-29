@@ -97,12 +97,21 @@ TERMINAL_STATUSES = frozenset(
 
 def update_run_status(run_id: int, status: str) -> None:
     """运行状态更新;进入终态即释放 active_run_key 与租约(V2.1-B 集中清键,
-    仅对能按 run_id 准确绑定的路径生效;审批绑定损坏不猜测清键)。"""
+    仅对能按 run_id 准确绑定的路径生效;审批绑定损坏不猜测清键)。
+
+    V2.1-C:终态**提交后**以独立短事务尝试关闭 episode(T4,锁序与网关一致:
+    incident_alert → incident,agent_run 只读)——覆盖"Run 终态 + 告警已 resolved"
+    的组合;关闭失败不影响已提交终态(仅记日志,下一次终态/复核会收敛)。"""
+    import logging
+
     from app.db.models import utcnow
+    logger = logging.getLogger(__name__)
+    incident_id = None
     with Session(get_control_engine()) as session:
         run = session.get(AgentRun, run_id)
         if run is None:
             return
+        incident_id = run.incident_id
         run.status = status
         if status in TERMINAL_STATUSES:
             run.finished_at = utcnow()
@@ -110,6 +119,12 @@ def update_run_status(run_id: int, status: str) -> None:
             run.lease_owner = None
             run.lease_until = None
         session.commit()
+    if status in TERMINAL_STATUSES and incident_id is not None:
+        from app.services.incident_lifecycle import close_incident_if_resolved
+        try:
+            close_incident_if_resolved(incident_id)
+        except Exception:  # noqa: BLE001 关闭尝试失败不回滚已提交终态
+            logger.exception("episode 关闭尝试失败 incident=%s", incident_id)
 
 
 def list_pending_runs() -> list[AgentRun]:

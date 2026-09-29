@@ -5,6 +5,8 @@
   checkpointer 类型判定,当前 SqliteSaver 恒为 1);
 - 领取(CAS,含过期 CLAIMED 回收)→ DISPATCHED CAS(status=queued、owner、租约校验)
   → start_investigation(快照驱动);
+- V2.1-C:alertmanager Run 封存+调度成功后发 run.auto_started(与封存 CAS 同成功路径,
+  幂等不重复);
 - 测试环境默认关闭(dispatch_enabled),显式开启的测试直接调 loop 函数;
 - 应用关闭:lifespan cancel + await,防残留后台任务。
 """
@@ -16,6 +18,7 @@ from datetime import datetime, timezone
 
 from app.config import settings
 from app.repositories import run_repo
+from app.repositories.event_repo import append_event
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,9 @@ async def dispatch_once() -> int:
             logger.info("dispatcher 封存基线并调度 run %s (incident=%s, quality=%s)",
                         run.id, run.incident_id,
                         capture.status if capture else "REUSED_SEALED")
+            # V2.1-C:run.auto_started(坐席可见;恰一次 —— 封存 CAS 幂等保证)
+            append_event(run.incident_id, "run.auto_started",
+                         {"run_id": run.id, "trigger_source": "alertmanager"})
         else:
             if not run_repo.mark_dispatched(run.id, owner, _now()):
                 continue     # 租约过期/被回收:换下一个(不计容量)

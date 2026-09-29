@@ -47,8 +47,14 @@ def create_incident(payload: IncidentIn):
 @router.get("")
 def list_incidents():
     incidents = incident_repo.list_incidents()
+    # V2.1-C:暴露告警生命周期与基线质量(坐席可见,计划 v2 §十一)
     return [{"id": i.id, "title": i.title, "status": i.status,
-             "severity": i.severity, "created_at": str(i.created_at)} for i in incidents]
+             "severity": i.severity, "created_at": str(i.created_at),
+             "source": i.source,
+             "alert_status": i.alert_status,
+             "lifecycle_status": i.lifecycle_status,
+             "occurrence_count": i.occurrence_count,
+             "baseline_quality": i.baseline_quality} for i in incidents]
 
 
 @router.get("/{incident_id}")
@@ -84,6 +90,18 @@ def get_incident(incident_id: int):
         "degradation_reasons": (inc.degradation_reasons.split(",")
                                 if inc.degradation_reasons else []),
         "termination_reason": inc.termination_reason,
+        # V2.1-C:告警生命周期与基线窗口(坐席可见)
+        "source": inc.source,
+        "alert_status": inc.alert_status,
+        "lifecycle_status": inc.lifecycle_status,
+        "occurrence_count": inc.occurrence_count,
+        "baseline_quality": inc.baseline_quality,
+        "baseline_window": ({"start": str(inc.baseline_window_start),
+                             "end": str(inc.baseline_window_end)}
+                            if inc.baseline_window_start else None),
+        "auto_run_started_at": (str(inc.auto_run_started_at)
+                                if inc.auto_run_started_at else None),
+        "closed_at": str(inc.closed_at) if inc.closed_at else None,
         "hypotheses": [{"id": h.id, "description": h.description, "status": h.status}
                        for h in hypotheses],
         "evidence": [{"id": e.id, "source": e.source,
