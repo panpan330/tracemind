@@ -80,15 +80,16 @@ class Settings(BaseSettings):
     dispatch_lease_seconds: int = 30
     max_concurrent_runs: int = 1             # SQLite checkpointer 下代码强制为 1
 
-    # ---- V2.1-C 告警闭环:历史基线与 SLO(真实验收前以校准脚本回填)----
+    # ---- V2.1-C 告警闭环:历史基线与 SLO(2026-09-29 校准回填,报告见
+    # reports/calibration/:健康上界 6.6ms / 缺索引故障下界 39.5ms / 锁故障 11.4s)----
     baseline_window_before_start_s: int = 600   # 历史窗口起点:startsAt-10m
     baseline_window_end_offset_s: int = 60      # 历史窗口终点:startsAt-1m(避开告警前沿)
-    baseline_min_samples: int = 30              # 窗口内最少样本数
-    baseline_max_p95_ms: int = 100              # 健康阈值(与 demo 告警规则阈值同源)
-    slo_p95_ms: int = 100                       # 显式 SLO(无合格基线时使用)
+    baseline_min_requests: int = 30             # 窗口内最少新请求数(increase 增量)
+    baseline_max_p95_ms: int = 20               # 健康阈值(校准:健康上界 6.6ms 的 3 倍余量)
+    slo_p95_ms: int = 20                        # 显式 SLO(校准:无合格基线时 E1/恢复判定用)
     # 恢复信号(与告警同口径的 HTTP P95):窗口必须完全位于恢复信号之后
     recovery_signal_window_s: int = 60          # 信号后判定窗口
-    recovery_min_samples: int = 20              # 信号后最少新请求数
+    recovery_min_requests: int = 50             # 信号后最少新请求数(increase 增量)
     recovery_signal_wait_s: int = 90            # 等待窗口填满的上限
     recovery_poll_interval_s: float = 5.0       # 轮询间隔
 

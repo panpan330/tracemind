@@ -11,9 +11,6 @@ from app.repositories import incident_repo
 
 logger = logging.getLogger(__name__)
 
-# 基线缺失时的宽松判定阈值(ms):仅当健康基线采集失败时使用
-FALLBACK_E1_P95_MS = 100
-
 # evidence 键 → Fact 键(一一映射,值为评估器 passed 判定)
 _FACT_MAP = {
     "e1": "F_ENDPOINT_DEGRADED",
@@ -38,7 +35,10 @@ def evaluate_metrics(result: dict, state: dict) -> list[dict]:
     if p95 is not None and base_p95 is not None:
         e1 = p95 > int(base_p95) * 1.2
     else:
-        e1 = p95 is not None and p95 > FALLBACK_E1_P95_MS
+        # V2.1-C:无合格基线 → 显式 SLO(校准回填,不再用 100ms 旧常量 —— 缺索引
+        # 故障实测 P95 ≈ 40ms,100ms 会让 E1 误判 False 而否定根因)
+        from app.config import settings
+        e1 = p95 is not None and p95 > settings.slo_p95_ms
     content: dict = {"p95Ms": p95,
                      "sourceBackend": data.get("sourceBackend"),
                      "observationQueryId": data.get("observationQueryId"),

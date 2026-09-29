@@ -9,7 +9,7 @@
    (自动 Run 即服务端映射的告警标签),operation 决定 uri 正则;禁止通配 uri。
 2. **窗口必须完全位于恢复信号之后**(`at_time - window >= signal_at`):
    滚动 rate 查询的结果时间戳只说明"最后一次抓取时刻",不代表窗口内样本都在信号之后。
-3. 信号后必须有足够新请求(`sample_count >= recovery_min_samples`),否则
+3. 信号后必须有足够新请求(`sample_count >= recovery_min_requests`),否则
    INCONCLUSIVE —— 没有流量就不能宣称"指标已恢复"。
 4. 阈值来源:合格基线(quality='OK')→ `baseline.p95_ms × 1.2`;否则显式 SLO
    (`settings.slo_p95_ms`)。两者都不可判定 → INCONCLUSIVE。
@@ -60,11 +60,17 @@ class RecoverySignal:
         if self.reason:
             out["reason"] = self.reason
         if self.evaluated_at:
-            out["evaluatedAt"] = int(self.evaluated_at.timestamp())
+            out["evaluatedAt"] = int(_epoch_utc(self.evaluated_at))
         if self.latest_sample_at:
             out["latestSampleAt"] = self.latest_sample_at
         out.update(self.extra)
         return out
+
+
+def _epoch_utc(naive_utc: datetime) -> float:
+    """naive-UTC datetime → epoch 秒(显式按 UTC 解释,禁止本地时区歧义)。"""
+    from datetime import timezone as _tz
+    return naive_utc.replace(tzinfo=_tz.utc).timestamp()
 
 
 def _client():
@@ -90,12 +96,12 @@ def threshold_for(baseline: dict | None) -> tuple[float, str]:
 def _evaluate(samples: int, p95_ms: float, baseline: dict | None,
               window_seconds: int, evaluated_at: datetime,
               latest_sample_at: int | None, post_signal: bool) -> RecoverySignal:
-    if samples < settings.recovery_min_samples:
+    if samples < settings.recovery_min_requests:
         return RecoverySignal(
             status=STATUS_INCONCLUSIVE, sample_count=samples,
             window_seconds=window_seconds, evaluated_at=evaluated_at,
             latest_sample_at=latest_sample_at, post_signal_window=post_signal,
-            reason="insufficient_post_signal_samples" if post_signal
+            reason="insufficient_post_signal_requests" if post_signal
             else "insufficient_samples")
     threshold, source = threshold_for(baseline)
     recovered = p95_ms <= threshold
@@ -129,12 +135,24 @@ def _measure(service_ref: str, operation_ref: str | None, *,
                 now = datetime.now(timezone.utc).replace(tzinfo=None)
                 continue
         labels = _labels(service_ref, operation_ref, window_seconds)
-        end_ts = evaluated_at.timestamp()
+        end_ts = _epoch_utc(evaluated_at)
         start_ts = end_ts - window_seconds
         try:
             client = _client()
             samples = client.sample_count("HTTP_SERVER_REQ_COUNT_V1", labels,
                                           start_ts, end_ts)
+        except ValueError as exc:
+            if str(exc) == "METRICS_NOT_FOUND":
+                # 窗口内无任何序列(该时段无流量)→ 样本按 0 计,走"请求不足"分支
+                samples = 0
+            else:
+                logger.exception("恢复信号采集失败 service=%s op=%s",
+                                 service_ref, operation_ref)
+                return RecoverySignal(status=STATUS_INCONCLUSIVE,
+                                      window_seconds=window_seconds,
+                                      evaluated_at=evaluated_at,
+                                      post_signal_window=require_post_signal,
+                                      reason="metrics_unavailable")
         except Exception:  # noqa: BLE001 观测后端不可用 → 不宣告任何结论
             logger.exception("恢复信号采集失败 service=%s op=%s",
                              service_ref, operation_ref)
@@ -143,12 +161,12 @@ def _measure(service_ref: str, operation_ref: str | None, *,
                                   evaluated_at=evaluated_at,
                                   post_signal_window=require_post_signal,
                                   reason="metrics_unavailable")
-        if samples < settings.recovery_min_samples:
+        if samples < settings.recovery_min_requests:
             out = RecoverySignal(
                 status=STATUS_INCONCLUSIVE, sample_count=samples,
                 window_seconds=window_seconds, evaluated_at=evaluated_at,
                 post_signal_window=require_post_signal,
-                reason="insufficient_post_signal_samples")
+                reason="insufficient_post_signal_requests")
             if time.monotonic() < deadline and require_post_signal:
                 last = out
                 time.sleep(settings.recovery_poll_interval_s)

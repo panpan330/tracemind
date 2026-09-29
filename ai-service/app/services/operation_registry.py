@@ -46,9 +46,26 @@ def uri_regex_for_service(service_ref: str) -> str:
     parts = []
     for op in ops:
         template = OPERATION_TO_URI[op]
-        # PromQL RE2:花括号是重复计数符,模板路径的字面花括号必须转义
-        parts.append(re.escape(template).replace(r"\{", "\\{").replace(r"\}", "\\}"))
+        parts.append(_literal_regex(template))
     return "^(" + "|".join(parts) + ")$"
+
+
+def _literal_regex(template: str) -> str:
+    """模板路径 → 字面匹配正则(**无反斜杠**形式,V2.1-C live 修复)。
+
+    2026-09-29 live 实测矩阵(Prometheus 2.55):
+    - 模板经 re.escape 产生的 `\\{`/`\\-` 拼进 PromQL 字符串:单反斜杠 → 400
+      (PromQL/RE2 拒绝 `\\{` 转义);双反斜杠 → 200 但**匹配不到任何序列**;
+    - 字符类 `[{}]`/`[-]` 与不转义字面量均正确匹配。
+    因此统一用字符类转义特殊字符:对 RE2 与 Python re 都无歧义、无反斜杠,
+    也就不存在 PromQL 字符串字面量的二次转义问题。"""
+    out = []
+    for ch in template:
+        if ch.isalnum() or ch in "/:_":
+            out.append(ch)
+        else:
+            out.append("[" + ch + "]")
+    return "".join(out)
 
 
 def uri_regex_for_operation(service_ref: str, operation_ref: str | None) -> str:
@@ -60,8 +77,7 @@ def uri_regex_for_operation(service_ref: str, operation_ref: str | None) -> str:
         template = OPERATION_TO_URI.get(operation_ref)
         if template is not None and operation_ref in SERVICE_TO_OPERATIONS.get(
                 service_ref, ()):
-            return "^(" + re.escape(template).replace(r"\{", "\\{").replace(
-                r"\}", "\\}") + ")$"
+            return "^(" + _literal_regex(template) + ")$"
     return uri_regex_for_service(service_ref)
 
 

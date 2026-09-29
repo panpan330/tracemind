@@ -1,0 +1,26 @@
+{
+  "healthy": {
+    "count": 51,
+    "min": 3.4,
+    "p50": 5.2,
+    "p90": 6.3,
+    "max": 6.6,
+    "insufficient": false
+  },
+  "scn001": {
+    "count": 51,
+    "min": 39.5,
+    "p50": 42.5,
+    "p90": 44.0,
+    "max": 44.4,
+    "insufficient": false
+  },
+  "scn002": {
+    "count": 30,
+    "min": 11381.7,
+    "p50": 11381.7,
+    "p90": 11381.7,
+    "max": 11381.7,
+    "insufficient": false
+  }
+}

@@ -65,7 +65,8 @@ def test_post_signal_window_uses_explicit_time(monkeypatch):
     tpl, labels, window, at_time = fake.query_calls[0]
     assert tpl == "HTTP_SERVER_P95_V1"
     assert window == 60
-    assert abs(at_time - now.timestamp()) < 1
+    # naive 时间按 UTC 解释(与实现一致;本地时区解释会差 8h)
+    assert abs(at_time - now.replace(tzinfo=__import__("datetime").timezone.utc).timestamp()) < 1
     # 窗口起点 = at_time - 60s ≥ signal_at(信号后新请求)
     _, _, cstart, cend = fake.count_calls[0]
     assert cstart >= _signal_at().timestamp()
@@ -82,7 +83,7 @@ def test_no_post_signal_traffic_is_inconclusive(monkeypatch):
                                      now=_signal_at() + timedelta(seconds=120),
                                      wait_seconds=0)
     assert out.status == rs.STATUS_INCONCLUSIVE
-    assert out.reason == "insufficient_post_signal_samples"
+    assert out.reason == "insufficient_post_signal_requests"
     assert out.sample_count == 0
 
 

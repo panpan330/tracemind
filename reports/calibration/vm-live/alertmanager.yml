@@ -1,0 +1,17 @@
+# TraceMind demo Alertmanager 路由(V2.1-A):告警投递到 Incident Gateway webhook。
+# token 为 demo 占位值(与 compose 内其他 demo 凭据同级);真实部署用受控凭据渲染,不提交密钥。
+route:
+  receiver: tracemind-webhook
+  group_by: [alertname, service, operation]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 2m
+receivers:
+  - name: tracemind-webhook
+    webhook_configs:
+      - url: http://192.168.88.1:8000/api/integrations/alertmanager/webhook
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: demo-am-token-2026
+        send_resolved: true

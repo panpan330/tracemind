@@ -44,7 +44,12 @@ class PrometheusMetricsClient:
         tpl = promql_templates.TEMPLATES.get(query_template_id)
         if tpl is None:
             raise ValueError(ERROR_METRICS_RESULT_INVALID)
-        expr = tpl["expr"] % labels
+        # V2.1-C live 修复:标签值经 re.escape 后含 \{ \- 等,直接拼进 PromQL
+        # 字符串字面量是非法转义(400)。PromQL 字符串里反斜杠必须加倍,
+        # 解码后才是预期的 RE2 正则(/api/orders/\{orderId\}/...)。
+        safe_labels = {k: (v.replace("\\", "\\\\") if isinstance(v, str) else v)
+                       for k, v in labels.items()}
+        expr = tpl["expr"] % safe_labels
         try:
             with httpx.Client(base_url=self.base_url, timeout=10.0) as client:
                 resp = client.post("/api/v1/query",

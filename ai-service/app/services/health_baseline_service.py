@@ -37,12 +37,14 @@ def capture_health_baseline_window(service_ref: str, alert_starts_at: datetime,
                       - settings.baseline_window_end_offset_s)
     labels = {"service": service_ref, "uri": uri_regex_for_service(service_ref),
               "extra": "", "window": f"{window_seconds}s"}
-    start_ts, end_ts = window_start.timestamp(), window_end.timestamp()
+    from datetime import timezone as _tz
+    start_ts, end_ts = (window_start.replace(tzinfo=_tz.utc).timestamp(),
+                        window_end.replace(tzinfo=_tz.utc).timestamp())
     samples = client.sample_count("HTTP_SERVER_REQ_COUNT_V1", labels,
                                   start_ts, end_ts)
-    if samples < settings.baseline_min_samples:
+    if samples < settings.baseline_min_requests:
         logger.info("健康窗口样本 %d < %d → BASELINE_INSUFFICIENT",
-                    samples, settings.baseline_min_samples)
+                    samples, settings.baseline_min_requests)
         return None
     p95_rows = client.query_at("HTTP_SERVER_P95_V1", labels, window_seconds, end_ts)
     p95_ms = float(p95_rows[0].get("value", [0, "0"])[1]) * 1000.0

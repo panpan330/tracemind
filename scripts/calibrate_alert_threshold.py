@@ -74,9 +74,13 @@ def parse_p95_series(body, min_samples):
     samples = []
     for _, raw in values:
         try:
-            samples.append(round(float(raw) * 1000.0, 1))
+            v = float(raw) * 1000.0
         except (TypeError, ValueError):
             continue
+        # Prometheus 对无样本桶返回 NaN/Inf:不剔除会污染 min/max 与分布
+        if v != v or v in (float("inf"), float("-inf")):
+            continue
+        samples.append(round(v, 1))
     if len(samples) < min_samples:
         raise ValueError(f"insufficient p95 samples: {len(samples)} < {min_samples}")
     return samples

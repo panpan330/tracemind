@@ -1,17 +1,21 @@
 # TraceMind demo 告警规则(V2.1-A):统一表面症状 OrderOperationP95High。
-# 阈值为 demo 初始值(P95 > 100ms 持续 15s),按方案需以真实压测校准后再调整。
+# 阈值已经 2026-09-29 真实压测校准(scripts/calibrate_alert_threshold.py,报告
+# reports/calibration/):健康分布上界 6.6ms,缺索引故障下界 39.5ms,锁故障下界 11.4s
+# → 20ms 与两侧均有余量(初始 100ms 不会触发缺索引故障,校准否决)。
+# rate 窗口 15s→60s:抓取间隔 15s 下 15s 窗口常只有 1 个样本,rate 无数据导致规则
+# 永不触发(live E2E 暴露);60s 含 4 个样本,速率计算可靠。
 groups:
   - name: tracemind-demo
     rules:
       - alert: OrderOperationP95High
         expr: >-
           histogram_quantile(0.95, sum by (le) (
-            rate(http_server_requests_seconds_bucket{service="order-service",uri="/api/orders/{orderId}/check-stock"}[15s])
-          )) > 0.1
+            rate(http_server_requests_seconds_bucket{service="order-service",uri="/api/orders/{orderId}/check-stock"}[60s])
+          )) > 0.02
         for: 15s
         labels:
           service: order-service
           operation: ORDER_CREATE
           environment: demo
         annotations:
-          summary: "order-service ORDER_CREATE P95 above 100ms for 15s"
+          summary: "order-service ORDER_CREATE P95 above 20ms for 15s (calibrated 2026-09-29)"

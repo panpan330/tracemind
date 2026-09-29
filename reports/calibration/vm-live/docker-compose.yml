@@ -1,0 +1,21 @@
+# V2.1-C live 验收观测栈(VM 本地适配,不入库):network_mode:host
+# - Prometheus 经 SSH 反向隧道抓取宿主机 Java 管理端口(VM 回环 9081/9082)
+# - Alertmanager webhook → 宿主机 ai-service(192.168.88.1:8000,防火墙已放行 VM→host:8000)
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: tracemind-prometheus
+    network_mode: host
+    command:
+      - --config.file=/etc/prom/prometheus.yml
+      - --storage.tsdb.retention.time=12h
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prom/prometheus.yml:ro
+      - ./prometheus-rules.yml:/etc/prom/prometheus-rules.yml:ro
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: tracemind-alertmanager
+    network_mode: host
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro

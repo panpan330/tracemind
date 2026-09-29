@@ -95,13 +95,22 @@ def capture_run_baselines(run, *, alert_starts_at: datetime | None = None) -> Ba
               "extra": "", "window": f"{window_seconds}s"}
     try:
         client = _prometheus_client()
-        start_ts = window_start.timestamp()
-        end_ts = window_end.timestamp()
-        samples = client.sample_count("HTTP_SERVER_REQ_COUNT_V1", labels,
-                                      start_ts, end_ts)
-        if samples < settings.baseline_min_samples:
+        from datetime import timezone as _tz
+        start_ts = window_start.replace(tzinfo=_tz.utc).timestamp()
+        end_ts = window_end.replace(tzinfo=_tz.utc).timestamp()
+        try:
+            samples = client.sample_count("HTTP_SERVER_REQ_COUNT_V1", labels,
+                                          start_ts, end_ts)
+        except ValueError as exc:
+            # METRICS_NOT_FOUND = 窗口内无任何序列(如该时段无流量)→ 样本按 0 计,
+            # INSUFFICIENT(走 SLO 兜底);后端不可达等其余错误 → CAPTURE_FAILED 重试
+            if str(exc) == "METRICS_NOT_FOUND":
+                samples = 0
+            else:
+                raise
+        if samples < settings.baseline_min_requests:
             logger.info("baseline capture: run %s 窗口样本 %d < %d → INSUFFICIENT",
-                        run.id, samples, settings.baseline_min_samples)
+                        run.id, samples, settings.baseline_min_requests)
             return BaselineCapture(status=STATUS_INSUFFICIENT, digest_baseline=digest,
                                    window_start=window_start, window_end=window_end)
         p95_rows = client.query_at("HTTP_SERVER_P95_V1", labels, window_seconds, end_ts)

@@ -28,7 +28,7 @@ def _alert_starts_at() -> datetime:
 class FakePrometheus:
     """可编程假客户端:记录 query_at/sample_count 调用,返回可配置结果。"""
 
-    def __init__(self, *, p95_ms=50.0, qps=10.0, error_rate=0.0, samples=120):
+    def __init__(self, *, p95_ms=8.0, qps=10.0, error_rate=0.0, samples=120):
         self.p95_ms = p95_ms
         self.qps = qps
         self.error_rate = error_rate
@@ -81,7 +81,7 @@ def test_capture_window_bounds_and_quality_ok(fake_prom):
     out = capture_run_baselines(run, alert_starts_at=_alert_starts_at())
 
     assert out.status == "OK"
-    assert out.healthy_metrics["p95_ms"] == 50.0
+    assert out.healthy_metrics["p95_ms"] == 8.0
     assert out.healthy_metrics["sample_count"] == 120
     # 窗口边界:终点 = startsAt-60s;rate 窗口 = 600s-60s = 540s
     end = _alert_starts_at() - timedelta(seconds=settings.baseline_window_end_offset_s)
@@ -89,10 +89,11 @@ def test_capture_window_bounds_and_quality_ok(fake_prom):
     tpl, labels, window, at_time = fake_prom.query_at_calls[0]
     assert tpl == "HTTP_SERVER_P95_V1"
     assert window == win
-    assert abs(at_time - end.timestamp()) < 1                 # 评估点 = 窗口终点
+    from datetime import timezone as _tz
+    assert abs(at_time - end.replace(tzinfo=_tz.utc).timestamp()) < 1   # 评估点 = 窗口终点(UTC)
     _, _, cstart, cend = fake_prom.count_calls[0]
-    assert abs(cstart - (end - timedelta(seconds=win)).timestamp()) < 1
-    assert abs(cend - end.timestamp()) < 1
+    assert abs(cstart - (end - timedelta(seconds=win)).replace(tzinfo=_tz.utc).timestamp()) < 1
+    assert abs(cend - end.replace(tzinfo=_tz.utc).timestamp()) < 1
     # 服务/操作来自冻结快照(与服务端映射的告警标签一致)
     assert labels["service"] == "inventory-service"
 

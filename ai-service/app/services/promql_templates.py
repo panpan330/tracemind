@@ -21,10 +21,12 @@ TEMPLATES = {
                  'uri=~"%(uri)s"%(extra)s}[%(window)s])) + 1e-9)'),
         "queryType": "instant",
     },
-    # V2.1-C:历史窗口样本数(count_over_time 固定模板;不接收 LLM 生成的查询文本)
+    # V2.1-C:窗口内**新请求条数**(increase 计数器增量)。
+    # 注意不能用 count_over_time —— 它数的是**抓取样本数**(15s 抓取间隔下 60s
+    # 窗口最多 4-6 个),与"信号后确有新请求"的语义不符(live E2E 暴露)。
     "HTTP_SERVER_REQ_COUNT_V1": {
-        "expr": ('sum(count_over_time(http_server_requests_seconds_count'
-                 '{service=~"%(service)s",uri=~"%(uri)s"%(extra)s}[%(window)s]))'),
+        "expr": ('sum(increase(http_server_requests_seconds_count'
+                 '{service="%(service)s",uri="%(uri)s"%(extra)s}[%(window)s]))'),
         "queryType": "instant",
     },
 }

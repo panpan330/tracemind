@@ -169,10 +169,15 @@ MAX_TX_RETRIES = 3
 
 
 def _insert_incident(session, resolved, group_key, received_at, labels, annotations):
-    """新建聚合 Incident(OPEN/FIRING/occurrence=1)。故障注入点。"""
+    """新建聚合 Incident(OPEN/FIRING/occurrence=1)。故障注入点。
+
+    V2.1-C live 修复:必须写 affected_service_ref(与手动路径
+    `affected_service_ref or service_ref` 对齐)——get_trace 等工具以它为调查
+    上下文,缺失会 INCIDENT_CONTEXT_MISSING fail closed → 证据采不满 → 预算耗尽。"""
     incident = Incident(
         title=f"[{resolved.environment}] {resolved.alertname} on {resolved.service}",
         severity=resolved.severity, service_ref=resolved.service,
+        affected_service_ref=resolved.service,
         affected_operation_ref=resolved.operation, status="created",
         source="alertmanager", alert_name=resolved.alertname,
         environment=resolved.environment, alert_status="FIRING",

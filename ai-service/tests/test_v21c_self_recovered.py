@@ -151,7 +151,7 @@ def test_inconclusive_signal_does_not_declare_recovery(patched):
     _resolved_at(inc_id, utcnow() - timedelta(minutes=5))
     patched["result"] = recovery_signal.RecoverySignal(
         status=recovery_signal.STATUS_INCONCLUSIVE, sample_count=0,
-        window_seconds=60, reason="insufficient_post_signal_samples")
+        window_seconds=60, reason="insufficient_post_signal_requests")
     out = nodes.resolved_recheck({"incident_id": inc_id, "run_id": run.id,
                                   "service_ref": "order-service"})
     assert out.get("status") != "self_recovered"

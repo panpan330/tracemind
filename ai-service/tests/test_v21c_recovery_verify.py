@@ -105,12 +105,12 @@ def test_verify_recovery_inconclusive_is_not_recovered(patched_signal, monkeypat
     fix_id = _fix_execution(inc_id)
     patched_signal["result"] = recovery_signal.RecoverySignal(
         status=recovery_signal.STATUS_INCONCLUSIVE, sample_count=0,
-        window_seconds=60, reason="insufficient_post_signal_samples")
+        window_seconds=60, reason="insufficient_post_signal_requests")
     monkeypatch.setattr(recovery_service, "_index_checks",
                         lambda execution: (True, True, 10))
     out = recovery_service.verify_recovery(inc_id, fix_id, agent_run_id=run.id)
     assert out["status"] == "INCONCLUSIVE"
-    assert out["signal"]["reason"] == "insufficient_post_signal_samples"
+    assert out["signal"]["reason"] == "insufficient_post_signal_requests"
     with Session(get_control_engine()) as s:
         chk = s.execute(text("SELECT status FROM recovery_check WHERE incident_id=:i "
                              "ORDER BY id DESC LIMIT 1"), {"i": inc_id}).fetchone()

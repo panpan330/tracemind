@@ -39,7 +39,10 @@ def test_service_operation_coverage_complete():
 def test_uri_regex_is_anchored_and_escaped():
     rx = uri_regex_for_service("order-service")
     assert rx.startswith("^(") and rx.endswith(")$")   # 锚定,不是子串匹配
-    assert "{" not in rx.replace("\\{", "")             # 字面花括号已转义
+    # V2.1-C live 修复:特殊字符用字符类转义([{]/[-]),整个正则**不含反斜杠**——
+    # 带反斜杠的 \{ \- 拼进 PromQL 字符串后 400 或匹配不到(live 实测矩阵)。
+    assert "\\" not in rx
+    assert "[{]" in rx and "[-]" in rx
     assert ".+" not in rx                               # 禁止通配
     import re
     assert re.match(rx, "/api/orders/{orderId}/check-stock")
@@ -88,7 +91,10 @@ def test_prometheus_query_uses_registry_not_wildcard(monkeypatch):
     c = pc.PrometheusMetricsClient(base_url="http://prom:9090")
     c.get_service_metrics("order-service", "w0", "w1")
     q = captured["query"]
-    assert "\\{orderId\\}" in q                 # 模板路径花括号已转义(字面匹配)
+    # V2.1-C live 修复:registry 正则改用**字符类转义**(无反斜杠)——带反斜杠的
+    # \{ \- 拼进 PromQL 字符串后 400 或匹配不到(fixture 后端掩盖,live 基线采集暴露)。
+    assert "[{]orderId[}]" in q
+    assert chr(92) not in q                     # 查询字符串不含任何反斜杠
     assert 'uri=~".+"' not in q                 # 禁止通配回归
     assert ')$"}' in q                          # 正则锚定结尾(registry 生成)
 
