@@ -381,6 +381,7 @@ cd web && npm run dev
 | trace 服务读 Incident 行取观测窗口 | `trace_service.py` | 运行中 Incident 更新影响 trace 查询窗口 | 未覆盖(V2.0-A 冻结的是 Agent 侧 Run 上下文) | V2.2 统一证据/窗口数据平面时收敛 |
 | Jaeger search_traces 忽略 operation_ref | `jaeger_client.py:34-52` | trace 搜索只按 service(真实验收下工作,但 operation 过滤是装饰) | 未覆盖 | V2.2 改造代表 trace 选择时一并处理(需真实后端确认 span operation 名) |
 | `OPERATION_TO_URI/ROUTE` 此前为死代码且 ORDER_CREATE 映射错误 | 真实端点 `/api/orders/{orderId}/check-stock` | 真实 Prometheus 查询会空结果(fixture 掩盖) | **已修复(V2.0-A)**:映射修正 + `uri=~".+"` 通配删除 + 契约测试(`test_observability_contract.py`,含可选 live 冒烟) | 关闭(live 后端契约仍需在拉起观测栈后跑一次冒烟确认) |
+| `fix_execution_repo.create_execution` INSERT 引用不存在的列 | 实表仅 8 列(id/incident_id/fix_proposal_id/approval_id/idempotency_key/status/result/created_at);repo INSERT 含 blocking_relation_hash/execution_result/kill_attempted/actual_processlist_id/finished_at | **KILL 路径审计落库一直静默失败**(`_record_fix_execution` try/except 吞掉,V2.1-C 锁恢复联测时暴露) | 未覆盖(落库异常被吞) | V2.1-C 发现,待裁决:补迁移列(审计语义完整)或收敛 repo SQL 到实表(最小改动) |
 
 ## 12A. V2.0-A 基线可信化(2026-09-02)变更摘要
 
@@ -574,3 +575,90 @@ test_slow_query_no_baseline_no_current 等既有测试适配新契约(断言语�
 
 **本轮测试结果**(仅本机,无 live 验收、无真实库迁移):聚合/Dispatcher/closure/网关
 专项 67 passed;审批/恢复/回滚上下文专项 59 passed;全量 **655 passed / 1 skipped 零失败**。
+
+## 17. V2.1-C 告警闭环(2026-09-28)— 三个实现提交
+
+计划:`docs/superpowers/plans/2026-09-28-v2.1-c-alert-closure.md`(v2,按 10 条裁决修订;
+D7 单一告警规则 + D8 手动实时快照新列均已采纳)。提交链:①`3f27804` ②`f0eea75` ③`dc2f7f5`。
+
+### 两阶段冻结(①)
+
+- **阶段 1** = Run 创建事务(V2.0-A 既有);**阶段 2** = Dispatcher 启动图前一次性封存
+  (`run_repo.seal_run_baselines_and_dispatch`,短 CAS 事务:先 incident 后 agent_run,与
+  网关同锁序)。外部采集(Prometheus HTTP + 业务库 digest 只读)在**事务外**完成
+  (`services/baseline_capture.py`)——采集不入库长事务(裁决①)。
+- 封存 CAS:`status='queued' ∧ dispatch_status='CLAIMED' ∧ lease_owner ∧ 租约未过期 ∧
+  (baseline_capture_status IS NULL OR ='CAPTURE_FAILED')`;`OK`/`INSUFFICIENT` 为终值
+  (单次封存);已封存未启动(启动失败回退)→ 复用封存值仅重新调度(capture=None,
+  不重采不重写)。
+- **digest 语义**:`None`=未采集(fail closed→BASELINE_INSUFFICIENT);`{}`=有效空快照
+  (增量=当前值)。**健康基线权威来源** = `incident.baseline_metrics_json` 且仅
+  `baseline_quality='OK'`;`healthy_metrics_baseline` 旧列停止写入/读取(存量不清洗);
+  手动路径实时值改存 `current_health_snapshot_json`(012 新列,标注"当前快照,非健康基线")。
+- 历史窗口 `[startsAt-10m, startsAt-1m]` 全配置化(`baseline_window_before_start_s` 等);
+  最小样本数/健康阈值校验,不合格 → `INSUFFICIENT` 且不落健康值(**不伪造基线**)。
+- migration 012(追加式):incident 基线窗口/质量/auto_run_started_at/closed_at/
+  current_health_snapshot_json + agent_run.baseline_capture_status + 生命周期索引。
+
+### 统一恢复信号(②,`services/recovery_signal.py` 唯一实现)
+
+- 口径(通用验证器与锁场景独立验证器**共用**):与告警相同的 `HTTP_SERVER_P95_V1`,
+  服务/操作取冻结 RunContext(新增 `uri_regex_for_operation`);**窗口必须完全位于恢复
+  信号之后**(不能只凭滚动 rate 的结果时间戳);信号后新请求样本数不足 → INCONCLUSIVE;
+  阈值 = 合格基线 ×1.2 或显式 SLO(`slo_p95_ms`),不可判 → `INCONCLUSIVE` 转人工,
+  **不宣告恢复也不宣告失败**。直接 SQL 探针降级为独立佐证(supporting_probe_p95_ms)。
+- `_p95_recovered` fail-open(基线缺失视为通过)**已删除**。
+
+### resolved 复核 + SELF_RECOVERED(②)
+
+- 图内新增确定性节点 `resolved_recheck`(collect_evidence→diagnose 之间,条件边):
+  非 RESOLVED 直通;已执行写动作不宣告自愈;未写动作取**信号后新鲜样本**,已恢复 →
+  `self_recovered` 新终态(根因未确认,报告注明告警自愈);仍异常继续调查;无法判定继续。
+  决策写回放 `ALERT_RESOLVED_RECHECK` + SSE `run.self_recovered`。
+- `self_recovered` 三处覆盖:run_repo/stream 终态集 + `_finalize_run` outcome + 前端
+  `types.ts`/`status.ts`(label"告警自愈")+ status.test。
+- 审批等待期由 Preflight 兜底(见下),两者互补。
+
+### Preflight(②,`services/preflight.py`,双写路径共用)
+
+- 执行前以**当前实测**复核"是否已自愈"(当前窗口 HTTP P95);已恢复 → 拒绝且零写 +
+  `needs_human` + `PREFLIGHT_ALREADY_RECOVERED`;索引已存在/重复执行保持既有 **no_op
+  幂等**(Preflight 不介入 no_op 路径);KILL 在既有 8 项重查之前接入,新结果
+  `rejected_preflight_self_healed`。**删除 last_seen_at 时间戳判据**——新 FIRING 仅触发
+  重新取证,是否可执行只看当前前置条件(裁决⑥)。
+
+### episode 关闭 + 生命周期事件(③)
+
+- `services/incident_lifecycle.py::maybe_close_incident`:四条件(RESOLVED / 全实例非
+  FIRING / **无非终态 Run**(按 status 判定,active_run_key 双保险) / 仍 OPEN)→ CLOSED +
+  `open_group_key=NULL` + closed_at;关闭后同组 FIRING 走 011 唯一键创建**新 episode**。
+- 调用点:`update_run_status` 终态**提交后**独立短事务(T4)+ 网关 resolved 路径 T1 内 +
+  `process_alert_batch` 批后补偿(交错提交时收敛);锁序与网关一致
+  (incident_alert → incident,agent_run 只读,与 T2 无环)。
+- 事件与聚合同事务(`append_event_in_session`):`incident.created_from_alert` /
+  `incident.alert_merged` / `incident.alert_resolved`(recovered:false);**不发
+  alert.received**(D4:原始告警由 alert_event 留痕);`run.auto_started` 由 Dispatcher
+  封存成功后发出(恰一次)。事件序号分配改**锁定读**(并发聚合同 Incident 曾撞
+  uq_incident_seq,真实并发测试暴露后修复)。
+- API 暴露:列表 source/alert_status/lifecycle_status/occurrence_count/baseline_quality;
+  详情再增 baseline_window/auto_run_started_at/closed_at。
+
+### 校准门禁与最终验收(待服务开启)
+
+- `scripts/calibrate_alert_threshold.py`(单测 8 项):healthy/scn001/scn002 三阶段采集
+  (负载 + Prometheus query_range 固定模板)→ 分布摘要 → 断言"健康上界 < 阈值 < 故障下界"
+  → 建议回填 `TRACEMIND_BASELINE_MAX_P95_MS / SLO_P95_MS / BASELINE_MIN_SAMPLES`;
+  报告落 `reports/calibration/`。**live 验收前必须先出校准报告**。
+- 最终验收门禁:校准报告 + `verify-m17 --tier vm-smoke` 告警链路 + SCN-001/002 自动链路
+  E2E(Alertmanager → 自动 Incident → 封存基线 → 根因确认 → 审批 → Preflight → 执行/
+  自愈 → 恢复验证 → episode 关闭),服务开启后执行。
+
+### 已知遗留(详见 §12 已知问题表)
+
+- `fix_execution_repo.create_execution` INSERT 引用不存在的列,KILL 审计一直静默失败
+  (V2.1-C 联测暴露,待裁决补迁移或收敛 SQL);
+- 新增图节点 `resolved_recheck` 对旧 checkpoint 的 resume 兼容性已由条件边降低风险
+  ("旧 checkpoint + 新图"回归通过),live 重启场景仍需观察。
+
+测试累计:提交① +20(`test_v21c_baseline` 16 + `test_migration_012` 4)、提交② +30、
+提交③ +10,全量 **716 passed / 1 skipped 零失败**;前端 vitest/typecheck 绿。
