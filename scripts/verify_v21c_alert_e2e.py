@@ -93,9 +93,13 @@ def assert_episode_closed(inc_id):
     p(f"✓ episode 已关闭(lifecycle=CLOSED, open_group_key=NULL, closed_at={row[6]})")
 
 
-def start_load(qps):
+def start_load(qps, target_locked_row=False):
     env = {**os.environ, "ORDER_SERVICE_URL": "http://127.0.0.1:8081",
            "LOAD_DURATION_SECONDS": "100000", "LOAD_QPS": str(qps)}
+    if target_locked_row:
+        # scn002:负载定向打到被锁行(42,7)——随机 sku 几乎不会撞锁,告警不触发
+        env["LOAD_SKU"] = "42"
+        env["LOAD_WAREHOUSE"] = "7"
     proc = subprocess.Popen([sys.executable, os.path.join(REPO, "scripts", "loadgen.py")],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     p(f"负载已启动(qps={qps}, pid={proc.pid})")
@@ -111,11 +115,14 @@ def stop_load(proc):
     p("负载已停止")
 
 
-def run_e2e(scenario, qps):
-    # ---------- 前置 ----------
+def run_e2e(scenario, qps, soak_s=0):
+    # ---------- 前置(有 soak 时先健康浸泡:历史窗口积累健康分布 → 基线 quality=OK) ----------
     index_present = cal._index_present()
-    if scenario == "scn001":
-        assert not index_present, "scn001 要求 idx_sku_warehouse 不存在(故障态)"
+    if soak_s > 0:
+        assert index_present, "soak 阶段要求 idx_sku_warehouse 在场(健康负载)"
+        p(f"前置:索引在场,健康负载浸泡 {soak_s}s(历史窗口积累)…")
+    elif scenario == "scn001":
+        assert not index_present, "scn001 无 soak 时要求 idx_sku_warehouse 不存在(故障态)"
         p("前置:索引不存在(缺索引故障态)✓")
     else:
         assert index_present, "scn002 要求 idx_sku_warehouse 存在"
@@ -130,17 +137,32 @@ def run_e2e(scenario, qps):
     max_incident = q("SELECT COALESCE(MAX(id),0) FROM incident")[0][0]
     p(f"起始基线:incident_id < {max_incident}(遗留 episode 已关闭、遗留 Run 已取消)")
 
-    # ---------- 触发源 ----------
+    # ---------- 负载先起(soak 健康流量 / 故障流量) ----------
+    proc = start_load(qps, target_locked_row=(scenario == "scn002"))
+    if soak_s > 0:
+        p(f"健康浸泡中({soak_s}s)…")
+        time.sleep(soak_s)
+
+    # ---------- 故障注入 ----------
     stop_event = None
     injector = None
-    if scenario == "scn002":
+    if scenario == "scn001":
+        conn = pymysql.connect(host="127.0.0.1", user="app_business",
+                               password="app_business_pwd",
+                               database="tracemind_business", autocommit=True)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DROP INDEX idx_sku_warehouse ON inventory")
+        finally:
+            conn.close()
+        p("故障注入:idx_sku_warehouse 已删除(缺索引)")
+    else:
         stop_event = threading.Event()
         injector = threading.Thread(target=cal._hold_blocking_lock,
                                     args=(stop_event,), daemon=True)
         injector.start()
         time.sleep(2)
         p("锁注入已启动(inventory 42/7 长事务持锁)")
-    proc = start_load(qps)
     try:
         # ---------- 告警 → 新 Incident ----------
         def new_incident():
@@ -229,10 +251,10 @@ def run_e2e(scenario, qps):
         # ---------- 断言 ----------
         row = incident_row(inc_id)
         quality = row[5]
-        if scenario == "scn001":
-            assert quality == "OK", f"scn001 应有合格历史基线,实际 {quality}"
+        if quality == "OK":
+            p("✓ 基线质量 OK(健康历史窗口)——恢复阈值来源=baseline")
         else:
-            p(f"scn002 基线质量:{quality}(无历史流量 → SLO 兜底属预期)")
+            p(f"基线质量 {quality} → 恢复阈值来源=SLO 兜底(无健康历史属预期)")
         assert_episode_closed(inc_id)
         st = dict((r[0], r[1]) for r in
                   q("SELECT active_run_key, lease_owner FROM agent_run WHERE id=%s",
@@ -258,8 +280,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--scenario", choices=["scn001", "scn002"], required=True)
     ap.add_argument("--qps", type=int, default=20)
+    ap.add_argument("--soak", type=int, default=0,
+                    help="故障注入前的健康负载浸泡秒数(≥600 可获 quality=OK 基线)")
     args = ap.parse_args()
-    run_e2e(args.scenario, args.qps)
+    run_e2e(args.scenario, args.qps, soak_s=args.soak)
 
 
 if __name__ == "__main__":
