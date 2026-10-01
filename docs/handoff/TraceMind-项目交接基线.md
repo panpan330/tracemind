@@ -643,7 +643,7 @@ D7 单一告警规则 + D8 手动实时快照新列均已采纳)。提交链:①
 - API 暴露:列表 source/alert_status/lifecycle_status/occurrence_count/baseline_quality;
   详情再增 baseline_window/auto_run_started_at/closed_at。
 
-### 校准门禁与最终验收(待服务开启)
+### 校准门禁与最终验收
 
 - `scripts/calibrate_alert_threshold.py`(单测 8 项):healthy/scn001/scn002 三阶段采集
   (负载 + Prometheus query_range 固定模板)→ 分布摘要 → 断言"健康上界 < 阈值 < 故障下界"
@@ -652,6 +652,41 @@ D7 单一告警规则 + D8 手动实时快照新列均已采纳)。提交链:①
 - 最终验收门禁:校准报告 + `verify-m17 --tier vm-smoke` 告警链路 + SCN-001/002 自动链路
   E2E(Alertmanager → 自动 Incident → 封存基线 → 根因确认 → 审批 → Preflight → 执行/
   自愈 → 恢复验证 → episode 关闭),服务开启后执行。
+
+### live 验收实测(2026-09-30 ~ 10-01):SCN-001/002 全链路 PASS
+
+- SCN-001(09-30,incident 5629):健康浸泡 660s → DROP INDEX → 告警 36.5s → 封存
+  capture=OK → 审批 #1006 → FIX_EXECUTED → recovered(P95=5ms,阈值来源=baseline)
+  → episode CLOSED;端到端 78s,回放含 RUN_TERMINATED。
+- SCN-002(10-01,incident 5640):内建端点锁注入 → 告警 42.9s → 封存 INSUFFICIENT
+  (走 SLO,符合设计)→ 调查 10s 收敛(根因=锁阻塞)→ 审批 #1007 → KILL →
+  recovered → episode CLOSED;端到端 122s,回放含 FIX_EXECUTED/RECOVERY_VERIFIED。
+
+**SCN-002 排查结论(live 暴露三层问题,均已修复)**:
+
+1. **注入方式**:裸 `UPDATE` 持锁不保证 (42,7) 行存在——行缺失时只有间隙锁,
+   `FOR SHARE` 的间隙锁互不冲突、根本不阻塞(实测 3.4ms 完成)。E2E 改用
+   inventory-service 内建场景端点 `POST /internal/scenarios/SCN-002/inject`
+   (ensureLockTarget 保证行存在 + 同步确认 FOR UPDATE 持锁;reset 幂等);
+   inventory JDBC 带 `sessionVariables=innodb_lock_wait_timeout=10` → 挂起请求
+   10s 后以 500 完成,产生慢样本(实测 ORDER P95≈11.4s,告警正常触发)。
+2. **E3 评估器死循环**:告警 Incident 的 affected_operation_ref=ORDER_CREATE(非
+   手动路径的 INVENTORY_RESERVATION),而 1205 超时语句 rows_examined=0、锁等待
+   耗时计入 SUM_TIMER_WAIT(实测每次 +10s)→ `evaluate_digests` 只认
+   rows_examined_delta>1000,把锁场景判成"暂态空增量"无限重采 →
+   decision_budget_exhausted(实测 delta 0→1→2→3 被持续无视)。修复:E3 补锁等待
+   耗时签名(total_latency_us_delta ≥ LOCK_WAIT_THRESHOLD_MS=3s 即 expensive,
+   审计 content 取耗时增量最大 digest);`tests/test_digest_retry.py` +2。
+3. **ai-service live 启动必备配置**(重启踩坑):`--host 0.0.0.0`(Alertmanager
+   webhook 从 VM 打 192.168.88.1:8000,绑 127.0.0.1 时 notify 超时)、
+   `TRACEMIND_ALERTMANAGER_WEBHOOK_TOKEN=demo-am-token-2026`(settings 带
+   TRACEMIND_ 前缀,漏配返回 403 disabled)、`TRACEMIND_PROMETHEUS_URL=
+   http://192.168.88.10:9090`(默认 localhost:9090 不可达 → 封存 CAPTURE_FAILED)。
+
+其他:负载需定向 `LOAD_SKU=42/LOAD_WAREHOUSE=7`(随机 sku 几乎不撞锁);排查期间
+实验性注入产生的 2 个残留 Incident 已随 E2E 清场关闭。全量回归 **717 passed /
+1 skipped** + 1 预存在失败(test_memory 沉淀用例:百炼 embedding key 403 失效,
+stash 前后对比确认与本次改动无关)。
 
 ### 已知遗留(详见 §12 已知问题表)
 

@@ -20,7 +20,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timedelta
 
@@ -30,6 +29,7 @@ import requests
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AI = os.environ.get("AI_BASE", "http://127.0.0.1:8000")
 PROM = os.environ.get("TRACEMIND_PROMETHEUS_URL", "http://192.168.88.10:9090")
+INVENTORY = os.environ.get("INVENTORY_BASE", "http://127.0.0.1:8082")
 HEADERS = {"x-demo-key": "demo-secret-2026"}
 T0 = time.time()
 sys.path.insert(0, os.path.join(REPO, "scripts"))
@@ -144,8 +144,6 @@ def run_e2e(scenario, qps, soak_s=0):
         time.sleep(soak_s)
 
     # ---------- 故障注入 ----------
-    stop_event = None
-    injector = None
     if scenario == "scn001":
         conn = pymysql.connect(host="127.0.0.1", user="app_business",
                                password="app_business_pwd",
@@ -157,12 +155,13 @@ def run_e2e(scenario, qps, soak_s=0):
             conn.close()
         p("故障注入:idx_sku_warehouse 已删除(缺索引)")
     else:
-        stop_event = threading.Event()
-        injector = threading.Thread(target=cal._hold_blocking_lock,
-                                    args=(stop_event,), daemon=True)
-        injector.start()
-        time.sleep(2)
-        p("锁注入已启动(inventory 42/7 长事务持锁)")
+        # 内建场景端点注入:ensureLockTarget 保证 (42,7) 行存在(裸 UPDATE 在行缺失时
+        # 只拿间隙锁,FOR SHARE 间隙锁互不冲突、不阻塞),并同步确认 FOR UPDATE 持锁成功
+        resp = requests.post(f"{INVENTORY}/internal/scenarios/SCN-002/inject",
+                             headers=HEADERS, timeout=15)
+        assert resp.status_code == 200 and \
+            resp.json().get("detail") == "lock_injected", f"锁注入失败: {resp.text}"
+        p("锁注入已启动(内建场景端点,42/7 FOR UPDATE 持锁)")
     try:
         # ---------- 告警 → 新 Incident ----------
         def new_incident():
@@ -272,8 +271,10 @@ def run_e2e(scenario, qps, soak_s=0):
     finally:
         if proc is not None:
             stop_load(proc)
-        if stop_event is not None:
-            stop_event.set()
+        if scenario == "scn002":
+            # KILL 掉的是持锁会话,JVM 侧 lockHeld 不会自动复位,必须显式 reset
+            requests.post(f"{INVENTORY}/internal/scenarios/SCN-002/reset",
+                          headers=HEADERS, timeout=15)
 
 
 def main():

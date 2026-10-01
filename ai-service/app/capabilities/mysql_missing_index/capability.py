@@ -7,6 +7,8 @@ import logging
 
 from app.capabilities.codes import ROOT_CAUSE_INDEX
 from app.capabilities.base import (DiagnosticCapability, RECOVERY_VERIFY_TOOL)
+from app.capabilities.mysql_blocking_transaction.capability import (
+    LOCK_WAIT_THRESHOLD_MS)
 from app.repositories import incident_repo
 
 logger = logging.getLogger(__name__)
@@ -72,7 +74,14 @@ def evaluate_digests(result: dict, state: dict) -> list[dict]:
     digests = (result.get("data") or []) if result.get("success") else []
     top = digests[0] if digests else {}
     op = state.get("affected_operation_ref") or ""
-    if not result.get("success") or top.get("rows_examined_delta", 0) <= 0:
+    # 锁阻塞签名(live 验收实测):1205 超时语句 rows_examined=0,但锁等待耗时计入
+    # SUM_TIMER_WAIT(每次 +10s)。只认 rows_examined 会把锁场景判成"暂态空增量"
+    # 无限重采,直至 decision_budget_exhausted。阈值与锁等待判定同源。
+    top_latency = max(digests, key=lambda d: d.get("total_latency_us_delta") or 0,
+                      default={})
+    max_latency_ms = (top_latency.get("total_latency_us_delta") or 0) / 1000
+    if not result.get("success") or (top.get("rows_examined_delta", 0) <= 0
+                                     and max_latency_ms < LOCK_WAIT_THRESHOLD_MS):
         # 锁场景(INVENTORY_RESERVATION):无慢查询增量是确定性否定(锁阻塞不产生慢查询),
         # 产 E3=False 证据,继续采集 L1/L2
         if op == "INVENTORY_RESERVATION":
@@ -81,10 +90,15 @@ def evaluate_digests(result: dict, state: dict) -> list[dict]:
         # 慢查询场景:增量 0 是暂态(故障负载尚未进入 performance_schema),触发重采
         # (真实后端验收暴露:digest 采集早于负载 → 增量 0 被误判为确定性否定)
         return []
-    e3 = top.get("rows_examined_delta", 0) > 1000
-    # 单场景:高扫描行数的 digest 即目标查询(系统内只有 INVENTORY_LOOKUP 一个慢查询场景)
+    expensive = (top.get("rows_examined_delta", 0) > 1000
+                 or max_latency_ms >= LOCK_WAIT_THRESHOLD_MS)
+    # 锁等待签名下 top(按 rows_examined 排序)可能是 0 增量行,审计内容取耗时增量最大者
+    content_top = top_latency if max_latency_ms >= LOCK_WAIT_THRESHOLD_MS else top
+    # 单场景:高扫描行数或锁等待耗时的 digest 即目标查询(系统内只有 INVENTORY_LOOKUP 一个慢查询场景)
     return [{"id": "E3", "key": "e3", "source": "list_expensive_query_digests",
-             "content": {"top": top, "query_ref": "INVENTORY_LOOKUP"}, "passed": e3}]
+             "content": {"top": content_top, "query_ref": "INVENTORY_LOOKUP",
+                         "max_latency_ms": round(max_latency_ms, 1)},
+             "passed": expensive}]
 
 
 def evaluate_plan(result: dict, state: dict) -> list[dict]:
