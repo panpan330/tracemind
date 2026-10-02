@@ -69,8 +69,15 @@ def test_record_case_skips_non_reflection_failure():
     assert store.upserts == []
 
 
-def test_record_case_reflection_exhausted_sinks_failure():
-    """反思用尽仍未恢复 → 沉淀 recovered=False 案例。"""
+def test_record_case_reflection_exhausted_sinks_failure(monkeypatch):
+    """反思用尽仍未恢复 → 沉淀 recovered=False 案例(模拟 embedding,不依赖付费 API)。"""
+    import app.rag.embedder as embedder_mod
+
+    class FakeEmbedder:
+        def embed(self, text):
+            return [0.1] * 4
+
+    monkeypatch.setattr(embedder_mod, "Embedder", lambda: FakeEmbedder())
     state = {"run_id": 10, "status": "needs_human",
              "termination_reason": "reflection_exhausted",
              "reflection_count": 3, "root_cause_code": "INDEX_MISSING",

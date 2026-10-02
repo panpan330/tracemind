@@ -1,0 +1,5 @@
+approval: (1029, 'approved')
+fix_execution rows: 1
+["5820", "512", "1029", "appr:1029", "8239ff2373cee15c7fc5e6592d23e732921114cd6f565e2bcf67927e2ad70a38", "succeeded", "executed", "1", "39", "2026-10-02 01:36:52.787000", "2026-10-02 01:36:52.787000", "None", "2026-10-02 01:36:52"]
+events: ['incident.created_from_alert', 'run.auto_started', 'status_changed', 'status_changed', 'status_changed', 'incident.alert_resolved', 'status_changed', 'incident_finished']
+FIX_EXECUTED outcomes: [None, 'succeeded']

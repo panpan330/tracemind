@@ -381,7 +381,7 @@ cd web && npm run dev
 | trace 服务读 Incident 行取观测窗口 | `trace_service.py` | 运行中 Incident 更新影响 trace 查询窗口 | 未覆盖(V2.0-A 冻结的是 Agent 侧 Run 上下文) | V2.2 统一证据/窗口数据平面时收敛 |
 | Jaeger search_traces 忽略 operation_ref | `jaeger_client.py:34-52` | trace 搜索只按 service(真实验收下工作,但 operation 过滤是装饰) | 未覆盖 | V2.2 改造代表 trace 选择时一并处理(需真实后端确认 span operation 名) |
 | `OPERATION_TO_URI/ROUTE` 此前为死代码且 ORDER_CREATE 映射错误 | 真实端点 `/api/orders/{orderId}/check-stock` | 真实 Prometheus 查询会空结果(fixture 掩盖) | **已修复(V2.0-A)**:映射修正 + `uri=~".+"` 通配删除 + 契约测试(`test_observability_contract.py`,含可选 live 冒烟) | 关闭(live 后端契约仍需在拉起观测栈后跑一次冒烟确认) |
-| `fix_execution_repo.create_execution` INSERT 引用不存在的列 | 实表仅 8 列(id/incident_id/fix_proposal_id/approval_id/idempotency_key/status/result/created_at);repo INSERT 含 blocking_relation_hash/execution_result/kill_attempted/actual_processlist_id/finished_at | **KILL 路径审计落库一直静默失败**(`_record_fix_execution` try/except 吞掉,V2.1-C 锁恢复联测时暴露) | 未覆盖(落库异常被吞) | V2.1-C 发现,待裁决:补迁移列(审计语义完整)或收敛 repo SQL 到实表(最小改动) |
+| `fix_execution_repo.create_execution` INSERT 引用不存在的列 | 004 与 006 均为 `CREATE TABLE IF NOT EXISTS`,004 旧结构先建遮蔽 006 新列;且 repo 用 `?` 占位+元组传参(text() 不支持,参数从未正确绑定) | **KILL 路径审计落库一直静默失败**(`_record_fix_execution` try/except 吞掉,V2.1-C 锁恢复联测时暴露) | **已修复(V2.1-D)**:migration 013 补列(备份先行+官方迁移器,checksum 在案);repo 改命名参数绑定;幂等键改 `appr:{approval_id}`(旧裸 parameters_hash 跨 Incident 撞 uq_fix_idem);duplicate 显式语义;写失败落 `audit_write_failed` 事件(坐席可见,不阻塞/不重试 KILL);live 验收 incident 5820 审计行字段全对(`reports/v21d_kill_audit_live.txt`) | 关闭 |
 
 ## 12A. V2.0-A 基线可信化(2026-09-02)变更摘要
 
@@ -690,10 +690,52 @@ stash 前后对比确认与本次改动无关)。
 
 ### 已知遗留(详见 §12 已知问题表)
 
-- `fix_execution_repo.create_execution` INSERT 引用不存在的列,KILL 审计一直静默失败
-  (V2.1-C 联测暴露,待裁决补迁移或收敛 SQL);
+- ~~`fix_execution_repo.create_execution` INSERT 引用不存在的列,KILL 审计一直静默失败~~
+  (**V2.1-D 已修复**,见 §12 表与 §18);
 - 新增图节点 `resolved_recheck` 对旧 checkpoint 的 resume 兼容性已由条件边降低风险
   ("旧 checkpoint + 新图"回归通过),live 重启场景仍需观察。
 
 测试累计:提交① +20(`test_v21c_baseline` 16 + `test_migration_012` 4)、提交② +30、
 提交③ +10,全量 **716 passed / 1 skipped 零失败**;前端 vitest/typecheck 绿。
+
+## 18. V2.1-D KILL 审计修复(2026-10-02)
+
+**V2.1-C 验收结论修正**:SCN-001/002 live E2E 均已 PASS,但 KILL 审计缺口修复前
+V2.1-C 不标记"完整收官";本切片关闭该缺口。
+
+### 缺口真因(比已知问题更深的三层)
+
+1. **表结构**:004/006 迁移均 `CREATE TABLE IF NOT EXISTS fix_execution`,004 旧 8 列
+   结构先建 → 006 的 6 个新列静默未生效(实表停 V1.0 结构,存量 210 行);
+2. **参数绑定**:repo INSERT 用 `?` 占位 + 元组传参,SQLAlchemy `text()` 只支持
+   命名参数——即使列齐也不会绑定成功(此前被 1054 列缺失先炸遮蔽);
+3. **幂等键**:直接用 proposal.parameters_hash,跨 Incident 重复同一动作撞
+   `uq_fix_idem`,第二份审计被吞。
+
+### 修复内容
+
+- **migration 013**(`013_v21d_fix_execution_audit.sql`):补 6 列 + proposal/approval
+  放宽 NULL + status VARCHAR(32);备份先行(`backups/pre013_backup_*.sql`,27MB),
+  官方迁移器执行(checksum 在案,211ms);`test_migration_013` 内容门禁 3 项;
+- **repo**:`build_idempotency_key`(appr:{approval_id},回退 inc:{incident}:prop:*),
+  命名参数绑定,同键重复 → 显式 `duplicate` 语义(不抛、不落第二行);
+- **nodes `_record_fix_execution`**:写失败落 `audit_write_failed` 事件(坐席时间线
+  可见)+ 日志;绝不阻塞/重试处置动作(KILL 幂等仍在 session_terminator);
+- **测试解耦**:`test_memory` 沉淀用例与 `test_config::test_embedding_defaults` 改
+  模拟 embedding / `_env_file=None`,全量测试不再依赖付费 API 与本地 .env.local。
+
+### 验收(TDD 红→绿 + live)
+
+- 新增 `test_fix_execution_audit` 5 项(先红:复现列缺失+键冲突+静默;后绿):
+  落库字段正确/跨 Incident 不冲突/同键 duplicate/失败可见化/调用方键带 approval 维度;
+- **live SCN-002 E2E PASS**(131s,incident 5820):KILL 后审计行 `appr:1029`,
+  kill_attempted=1、actual_processlist_id=39、blocking_relation_hash 64 位、
+  execution_result=executed、无 audit_write_failed 事件、FIX_EXECUTED 恰一轮;
+  证据:`reports/v21d_kill_audit_live.txt`、`reports/v21d_scn002_e2e.log`。
+- 全量回归 **726 passed / 1 skipped / 0 失败**(717 基础上 +9)。
+
+### 遗留
+
+- 真实记忆链路(embedding/Qdrant/检索复用)验收待用户更新 key 后显式开启;
+- dispatcher 并发容量=1:启动时若有遗留 investigating Run 被恢复,新 Run 会等待
+  (E2E 前需清场重启 ai-service,本次实测确认)——多实例/容量配置属后续演进。

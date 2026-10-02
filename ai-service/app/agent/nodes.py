@@ -697,21 +697,42 @@ def execute_fix(state: IncidentState) -> dict:
 
 def _record_fix_execution(state: IncidentState, proposal: dict, approval: dict,
                           fix_status: str, result: dict) -> None:
-    """fix_execution 审计落库(表在 Task 9;此处 try/except 保证不阻塞处置闭环)。"""
+    """fix_execution 审计落库(KILL 审计,V2.1-D 修复)。
+
+    - 幂等键经 repo.build_idempotency_key 绑定 approval 维度(裸 parameters_hash
+      会跨 Incident 冲突,曾导致审计静默丢失);
+    - 写失败不再静默:落 audit_write_failed 事件(坐席时间线可见)+ 日志;
+      审计失败绝不阻塞/重试处置动作本身(KILL 只执行一次,见 session_terminator);
+    - duplicate(同幂等键重复审计)为正常幂等拦截,记日志即可。"""
+    from app.repositories import fix_execution_repo
     try:
-        from app.repositories import fix_execution_repo
-        fix_execution_repo.create_execution(
+        out = fix_execution_repo.create_execution(
             incident_id=state["incident_id"],
             fix_proposal_id=proposal.get("fix_proposal_id"),
             approval_id=approval.get("approval_id"),
-            idempotency_key=proposal.get("parameters_hash"),
+            idempotency_key=fix_execution_repo.build_idempotency_key(
+                incident_id=state["incident_id"],
+                fix_proposal_id=proposal.get("fix_proposal_id"),
+                approval_id=approval.get("approval_id"),
+                parameters_hash=proposal.get("parameters_hash")),
             blocking_relation_hash=proposal.get("blocking_relation_hash") or "",
             status=fix_status,
             execution_result=result.get("execution_result"),
             kill_attempted=bool(result.get("kill_attempted")),
             actual_processlist_id=result.get("actual_processlist_id"))
-    except Exception:  # noqa: BLE001  审计失败不阻塞处置
-        pass
+        if out.get("status") == "duplicate":
+            logger.info("fix_execution 重复审计被幂等拦截(incident %s)",
+                        state.get("incident_id"))
+    except Exception as exc:  # noqa: BLE001  审计失败不阻塞处置,但必须可见
+        logger.warning("fix_execution 审计写入失败(incident %s): %s",
+                       state.get("incident_id"), exc)
+        try:
+            event_repo.append_event(state["incident_id"], "audit_write_failed",
+                                    {"audit": "fix_execution",
+                                     "error": str(exc)[:200]})
+        except Exception:  # noqa: BLE001
+            logger.exception("audit_write_failed 事件写入失败(incident %s)",
+                             state.get("incident_id"))
 
 
 @_replay_node("REFLECTION_EVALUATED")

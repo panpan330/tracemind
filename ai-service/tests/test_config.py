@@ -24,7 +24,8 @@ def test_eval_chat_model_required_flag():
 
 
 def test_embedding_defaults():
-    s = Settings()
+    # _env_file=None:断言代码默认值,与本地 .env.local(用户可自选模型/key)解耦
+    s = Settings(_env_file=None)
     assert s.embedding_model == "text-embedding-v4"
     assert s.embedding_dimensions == 1024
 

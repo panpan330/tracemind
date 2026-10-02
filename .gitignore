@@ -44,3 +44,4 @@ ai-service/data/checkpoints.sqlite
 
 # CI 生成报告(版本化基线保留:evaluation/thresholds, evaluation/contracts)
 reports/generated/
+backups/

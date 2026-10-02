@@ -209,13 +209,21 @@ class Approval(Base):
 
 
 class FixExecution(Base):
+    """V2.1-D:列结构对齐 migration 006 设计(013 补齐;004 旧结构曾遮蔽 006)。"""
     __tablename__ = "fix_execution"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     incident_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    fix_proposal_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    approval_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    fix_proposal_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    approval_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True)
-    status: Mapped[str] = mapped_column(String(16), default="pending")
+    blocking_relation_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    execution_result: Mapped[Optional[str]] = mapped_column(String(32))
+    kill_attempted: Mapped[bool] = mapped_column(Boolean, default=False)
+    actual_processlist_id: Mapped[Optional[int]] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # result JSON / created_at 为 004 旧列:保留(历史数据兼容),新代码不写入
     result: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

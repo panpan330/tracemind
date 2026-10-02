@@ -88,4 +88,8 @@ def test_fix_execution_repo_insert(monkeypatch):
                                         status="succeeded", execution_result="executed",
                                         kill_attempted=True, actual_processlist_id=88)
     assert "INSERT INTO fix_execution" in captured["sql"]
-    assert captured["params"][3] == "k1"
+    # V2.1-D:text() 命名参数绑定(dict);旧 "?" 占位 + 元组从未正确绑定
+    assert ":idempotency_key" in captured["sql"]
+    assert captured["params"]["idempotency_key"] == "k1"
+    assert captured["params"]["kill_attempted"] == 1
+    assert captured["params"]["actual_processlist_id"] == 88
