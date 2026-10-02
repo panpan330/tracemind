@@ -381,7 +381,7 @@ cd web && npm run dev
 | trace 服务读 Incident 行取观测窗口 | `trace_service.py` | 运行中 Incident 更新影响 trace 查询窗口 | 未覆盖(V2.0-A 冻结的是 Agent 侧 Run 上下文) | V2.2 统一证据/窗口数据平面时收敛 |
 | Jaeger search_traces 忽略 operation_ref | `jaeger_client.py:34-52` | trace 搜索只按 service(真实验收下工作,但 operation 过滤是装饰) | 未覆盖 | V2.2 改造代表 trace 选择时一并处理(需真实后端确认 span operation 名) |
 | `OPERATION_TO_URI/ROUTE` 此前为死代码且 ORDER_CREATE 映射错误 | 真实端点 `/api/orders/{orderId}/check-stock` | 真实 Prometheus 查询会空结果(fixture 掩盖) | **已修复(V2.0-A)**:映射修正 + `uri=~".+"` 通配删除 + 契约测试(`test_observability_contract.py`,含可选 live 冒烟) | 关闭(live 后端契约仍需在拉起观测栈后跑一次冒烟确认) |
-| `fix_execution_repo.create_execution` INSERT 引用不存在的列 | 004 与 006 均为 `CREATE TABLE IF NOT EXISTS`,004 旧结构先建遮蔽 006 新列;且 repo 用 `?` 占位+元组传参(text() 不支持,参数从未正确绑定) | **KILL 路径审计落库一直静默失败**(`_record_fix_execution` try/except 吞掉,V2.1-C 锁恢复联测时暴露) | **已修复(V2.1-D)**:migration 013 补列(备份先行+官方迁移器,checksum 在案);repo 改命名参数绑定;幂等键改 `appr:{approval_id}`(旧裸 parameters_hash 跨 Incident 撞 uq_fix_idem);duplicate 显式语义;写失败落 `audit_write_failed` 事件(坐席可见,不阻塞/不重试 KILL);live 验收 incident 5820 审计行字段全对(`reports/v21d_kill_audit_live.txt`) | 关闭 |
+| `fix_execution_repo.create_execution` INSERT 引用不存在的列 | 004 与 006 均为 `CREATE TABLE IF NOT EXISTS`,004 旧结构先建遮蔽 006 新列;且 repo 用 `?` 占位+元组传参(text() 不支持,参数从未正确绑定) | **KILL 路径审计落库一直静默失败**(`_record_fix_execution` try/except 吞掉,V2.1-C 锁恢复联测时暴露) | **已修复(V2.1-D)**:migration 013 补列(备份先行+官方迁移器,checksum 在案);repo 改命名参数绑定;幂等键改 `appr:{approval_id}`(旧裸 parameters_hash 跨 Incident 撞 uq_fix_idem);duplicate 显式语义;写失败落 `audit_write_failed` 事件(仅当 control 库仍可写事件;库整体不可用时依赖错误日志,不保证坐席时间线一定可见;不阻塞/不重试 KILL);live 验收 incident 5820 审计行字段全对(`reports/v21d_kill_audit_live.txt`) | 关闭 |
 
 ## 12A. V2.0-A 基线可信化(2026-09-02)变更摘要
 
@@ -719,8 +719,9 @@ V2.1-C 不标记"完整收官";本切片关闭该缺口。
   官方迁移器执行(checksum 在案,211ms);`test_migration_013` 内容门禁 3 项;
 - **repo**:`build_idempotency_key`(appr:{approval_id},回退 inc:{incident}:prop:*),
   命名参数绑定,同键重复 → 显式 `duplicate` 语义(不抛、不落第二行);
-- **nodes `_record_fix_execution`**:写失败落 `audit_write_failed` 事件(坐席时间线
-  可见)+ 日志;绝不阻塞/重试处置动作(KILL 幂等仍在 session_terminator);
+- **nodes `_record_fix_execution`**:写失败不再静默——control 库仍可写事件时落
+  `audit_write_failed`(坐席时间线可见);若数据库整体不可用则仅错误日志,
+  不能保证坐席时间线一定可见。绝不阻塞/重试处置动作(KILL 幂等仍在 session_terminator);
 - **测试解耦**:`test_memory` 沉淀用例与 `test_config::test_embedding_defaults` 改
   模拟 embedding / `_env_file=None`,全量测试不再依赖付费 API 与本地 .env.local。
 
@@ -739,3 +740,10 @@ V2.1-C 不标记"完整收官";本切片关闭该缺口。
 - 真实记忆链路(embedding/Qdrant/检索复用)验收待用户更新 key 后显式开启;
 - dispatcher 并发容量=1:启动时若有遗留 investigating Run 被恢复,新 Run 会等待
   (E2E 前需清场重启 ai-service,本次实测确认)——多实例/容量配置属后续演进。
+
+### 收官(2026-10-02)
+
+ae98b02 推送成功,`git ls-remote origin refs/heads/main` 核对远端 HEAD 与本地一致;
+**V2.1-C/V2.1-D 标记收官**(KILL 审计闭环已确认,无需重跑 KILL 验收)。
+真实 embedding → Qdrant 写入与检索验收单独进行(普通测试保持不依赖付费 API);
+下一版 V2.2(证据/窗口数据平面统一)待用户确认后启动。

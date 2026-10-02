@@ -701,7 +701,8 @@ def _record_fix_execution(state: IncidentState, proposal: dict, approval: dict,
 
     - 幂等键经 repo.build_idempotency_key 绑定 approval 维度(裸 parameters_hash
       会跨 Incident 冲突,曾导致审计静默丢失);
-    - 写失败不再静默:落 audit_write_failed 事件(坐席时间线可见)+ 日志;
+    - 写失败不再静默:control 库仍可写事件时落 audit_write_failed(坐席时间线
+      可见);若数据库整体不可用则仅错误日志,不保证坐席时间线一定可见;
       审计失败绝不阻塞/重试处置动作本身(KILL 只执行一次,见 session_terminator);
     - duplicate(同幂等键重复审计)为正常幂等拦截,记日志即可。"""
     from app.repositories import fix_execution_repo
